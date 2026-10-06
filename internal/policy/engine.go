@@ -29,6 +29,13 @@ func NewEngine(ctx context.Context, regoCode string) (*Engine, error) {
 
 // Evaluate runs the precompiled query against typed policy input in memory.
 func (e *Engine) Evaluate(ctx context.Context, input PolicyInput) (Decision, error) {
+	if err := ctx.Err(); err != nil {
+		return Decision{
+			Allow:           false,
+			ReasonCode:      "EVALUATION_ERROR",
+			SnapshotVersion: input.SnapshotVersion,
+		}, err
+	}
 	rs, err := e.preparedQuery.Eval(ctx, rego.EvalInput(input))
 	if err != nil {
 		return Decision{

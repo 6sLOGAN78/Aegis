@@ -131,7 +131,7 @@ Plans:
 - [x] 03-02: Monotonic Ed25519 snapshot signer, gRPC snapshot streaming, 10s freshness lease, and 60s fail-closed timeout
 - [x] 03-03: Redis atomic token-bucket rate limiting and <5s JTI revocation / principal quarantine with fail-closed semantics
 - [x] 03-04: Local append-only disk WAL spool with pre-forward fsync, 90% saturation gate, and async audit worker
-- [ ] 03-05: Fault injection and restart tests for dependency failure modes
+- [x] 03-05: Fault injection and restart tests for dependency failure modes
 
 ---
 
@@ -209,7 +209,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 | 0. Architecture Contracts, Schemas & Threat Model | 3/3 | Complete   | 2026-10-06 |
 | 1. MVP Secure Vertical Slice | 4/4 | Complete    | 2026-10-06 |
 | 2. Workload Identity & Enforced Bypass Prevention | 4/4 | Complete   | 2026-10-06 |
-| 3. Control Plane, Snapshot Streaming & Durable State | 0/5 | Not started | - |
+| 3. Control Plane, Snapshot Streaming & Durable State | 5/5 | Complete   | 2026-10-07 |
 | 4. Operator Experience & Telemetry | 0/3 | Not started | - |
 | 5. Distributed Resilience, Chaos & Benchmark Evidence | 0/3 | Not started | - |
 | 6. Production Hardening & Operational Runbooks | 0/3 | Not started | - |

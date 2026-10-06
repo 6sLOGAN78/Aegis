@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Roadmap created, ready to plan Phase 0.
-last_updated: "2026-10-06T22:35:12.681Z"
-last_activity: 2026-10-06 -- Phase 03 execution started
+status: ready_to_plan
+stopped_at: Phase 3 complete — ready to plan Phase 4.
+last_updated: "2026-10-06T23:55:00.000Z"
+last_activity: 2026-10-06 -- Phase 03 complete: Control plane, snapshot streaming & durable state verified
 progress:
   total_phases: 7
-  completed_phases: 3
-  total_plans: 16
-  completed_plans: 11
-  percent: 43
+  completed_phases: 4
+  total_plans: 25
+  completed_plans: 16
+  percent: 64
 ---
 
 # Project State
@@ -21,43 +21,40 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-06)
 
 **Core value:** Default-deny, fail-closed authorization and workload authentication where invalid credentials, stale security state, or dependency failures never produce implicit authorization.
-**Current focus:** Phase 03 — control-plane-snapshot-streaming-durable-state
+**Current focus:** Phase 04 — operator-experience-telemetry
 
 ## Current Position
 
-Phase: 03 (control-plane-snapshot-streaming-durable-state) — EXECUTING
-Plan: 1 of 5
-Status: Executing Phase 03
-Last activity: 2026-10-06 -- Phase 03 execution started
+Phase: 04 (operator-experience-telemetry) — READY TO PLAN
+Plan: 0 of 3
+Status: Ready to plan Phase 04
+Last activity: 2026-10-06 -- Phase 03 complete: Control plane, snapshot streaming & durable state verified
 
-Progress: [██████░░░░] 68%
+Progress: [██████░░░░] 64%
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 11
-- Average duration: 0 min
-- Total execution time: 0.0 hours
+- Total plans completed: 16
+- Average duration: 15 min
+- Total execution time: 4.0 hours
 
 **By Phase:**
 
 | Phase | Plans | Total | Avg/Plan |
 |-------|-------|-------|----------|
-| Phase 0: Contracts & Threat Model | 0/3 | - | - |
-| Phase 1: MVP Vertical Slice | 0/4 | - | - |
-| Phase 2: Workload Identity & Bypass | 0/4 | - | - |
-| Phase 3: Control Plane & Durable State | 0/5 | - | - |
-| Phase 4: Operator Dashboard & Telemetry | 0/3 | - | - |
-| Phase 5: Distributed Resilience & Chaos | 0/3 | - | - |
-| Phase 6: Production Hardening & Runbooks | 0/3 | - | - |
-| 00 | 3 | - | - |
-| 1 | 4 | - | - |
-| 02 | 4 | - | - |
+| Phase 0: Contracts & Threat Model | 3/3 | Complete | 2026-10-06 |
+| Phase 1: MVP Vertical Slice | 4/4 | Complete | 2026-10-06 |
+| Phase 2: Workload Identity & Bypass | 4/4 | Complete | 2026-10-06 |
+| Phase 3: Control Plane & Durable State | 5/5 | Complete | 2026-10-07 |
+| Phase 4: Operator Dashboard & Telemetry | 0/3 | Not started | - |
+| Phase 5: Distributed Resilience & Chaos | 0/3 | Not started | - |
+| Phase 6: Production Hardening & Runbooks | 0/3 | Not started | - |
 
 **Recent Trend:**
 
-- Last 5 plans: None
+- Last 5 plans: 03-01, 03-02, 03-03, 03-04, 03-05
 - Trend: Stable
 
 *Updated after each plan completion*
@@ -71,14 +68,17 @@ Recent decisions affecting current work:
 
 - [Roadmap]: 7-phase structural sequence (0 to 6) derived from spec.md delivery profiles and ARCHITECTURE.md.
 - [Phase 0]: Establish strict contracts (OpenAPI, Protobuf, Rego schemas, ADRs) before application code.
+- [Phase 1]: In-memory OPA embedding, strict path traversal rejection without rewriting, hop-by-hop header scrubbing via ReverseProxy Rewrite.
+- [Phase 2]: Pure Go PKI generation, dedicated workload listener (:9443), SPIFFE URI SAN identity extraction, short-lived signed assertions (<=15s), backend middleware defense-in-depth, zero published ports in Docker Compose.
+- [Phase 3]: Embedded Goose migrations (FS), PostgreSQL schema migrations, monotonic Ed25519 snapshot signing ($N+1$), lock-free sync/atomic.Pointer swapping, 10s freshness leases with 60s fail-closed boundary, Redis GCRA token bucket rate limiting (100 rps, burst 200), sub-5s JTI revocation and principal quarantine with rigid 200ms fail-closed timeout, pre-forward disk WAL spool with synchronous fsync before upstream forwarding, 90% spool saturation circuit breaker (HTTP 503), async batch audit worker draining to PostgreSQL, and hardened multi-service Docker Compose profile.
 
 ### Pending Todos
 
-None yet.
+None. Phase 3 complete.
 
 ### Blockers/Concerns
 
-None yet.
+None.
 
 ## Deferred Items
 
@@ -94,6 +94,6 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-06 11:51
-Stopped at: Roadmap created, ready to plan Phase 0.
+Last session: 2026-10-07 05:20
+Stopped at: Phase 3 complete — ready to plan Phase 4.
 Resume file: None
