@@ -12,6 +12,7 @@ import (
 	"syscall"
 	"time"
 
+	"aegis/internal/audit"
 	"aegis/internal/config"
 	"aegis/internal/identity"
 	"aegis/internal/policy"
@@ -66,14 +67,21 @@ func main() {
 	}
 
 	tokenValidator := identity.NewTokenValidator(issuer, audience, pubKey)
+	auditLogger := audit.NewLogger(nil)
+	snapshotVersion := int64(1)
 
 	// Build Gateway Core Request Pipeline
 	gatewayHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := r.Header.Get("X-Request-ID")
+		ac := audit.FromContext(r.Context())
 
 		// 1. Strict Zero-Repair Path Validation (GW-02)
 		canonicalPath, err := proxy.ValidatePathZeroRepair(r)
 		if err != nil {
+			if ac != nil {
+				ac.SetDecision("deny", "BAD_REQUEST_INVALID_PATH")
+				ac.SetErrorCode("INVALID_PATH")
+			}
 			proxy.WriteProblemDetails(
 				w,
 				http.StatusBadRequest,
@@ -89,6 +97,11 @@ func main() {
 		authHeader := r.Header.Get("Authorization")
 		claims, err := tokenValidator.ValidateBearerToken(authHeader)
 		if err != nil {
+			if ac != nil {
+				ac.SetCanonicalPath(canonicalPath)
+				ac.SetDecision("deny", "UNAUTHORIZED")
+				ac.SetErrorCode("UNAUTHORIZED")
+			}
 			proxy.WriteProblemDetails(
 				w,
 				http.StatusUnauthorized,
@@ -100,9 +113,18 @@ func main() {
 			return
 		}
 
+		if ac != nil {
+			ac.SetPrincipal(claims.Subject, "user", claims.Roles)
+			ac.SetCanonicalPath(canonicalPath)
+		}
+
 		// 3. Deterministic Route Resolution (GW-03)
 		route, err := router.Match(r.Method, canonicalPath)
 		if err != nil {
+			if ac != nil {
+				ac.SetDecision("deny", "ROUTE_NOT_FOUND")
+				ac.SetErrorCode("NOT_FOUND")
+			}
 			proxy.WriteProblemDetails(
 				w,
 				http.StatusNotFound,
@@ -112,6 +134,10 @@ func main() {
 				reqID,
 			)
 			return
+		}
+
+		if ac != nil {
+			ac.SetRoute(route.RouteID, route.ServiceID)
 		}
 
 		// 4. In-Memory OPA Policy Evaluation (POL-01, POL-02)
@@ -133,7 +159,7 @@ func main() {
 				RiskScore: 0,
 				RiskState: "available",
 			},
-			SnapshotVersion: 1,
+			SnapshotVersion: snapshotVersion,
 		}
 
 		decision, err := policyEngine.Evaluate(r.Context(), input)
@@ -141,6 +167,14 @@ func main() {
 			reason := "DENIED_DEFAULT"
 			if decision.ReasonCode != "" {
 				reason = decision.ReasonCode
+			}
+			if ac != nil {
+				ac.SetDecision("deny", reason)
+				if err != nil {
+					ac.SetErrorCode("POLICY_EVALUATION_ERROR")
+				} else {
+					ac.SetErrorCode("FORBIDDEN")
+				}
 			}
 			proxy.WriteProblemDetails(
 				w,
@@ -153,12 +187,21 @@ func main() {
 			return
 		}
 
+		if ac != nil {
+			allowReason := "ALLOWED"
+			if decision.ReasonCode != "" {
+				allowReason = decision.ReasonCode
+			}
+			ac.SetDecision("allow", allowReason)
+		}
+
 		// 5. Reverse Proxy Forwarding with Header Scrubbing (GW-04, BYP-01)
 		rp := proxy.NewReverseProxy(route.ParsedURL(), canonicalPath, reqID)
 		rp.ServeHTTP(w, r)
 	})
 
-	server := proxy.NewServer(cfg, gatewayHandler)
+	auditedHandler := audit.AuditMiddleware(auditLogger, snapshotVersion)(gatewayHandler)
+	server := proxy.NewServer(cfg, auditedHandler)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
