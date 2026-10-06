@@ -1,0 +1,134 @@
+syntax = "proto3";
+
+package aegis.snapshot.v1;
+
+option go_package = "aegis/pkg/api/snapshot/v1;snapshotv1";
+
+import "google/protobuf/timestamp.proto";
+
+// Service for streaming monotonic configuration snapshots and freshness leases
+// from the Control Plane to Gateway replicas.
+service SnapshotDistributionService {
+  // Bidirectional stream: Control Plane pushes snapshots and leases;
+  // Gateway streams acknowledgments and heartbeats.
+  rpc StreamSnapshots(stream GatewayMessage) returns (stream ControlPlaneMessage);
+
+  // Unary RPC for explicit snapshot fetch during gateway cold start
+  rpc GetActiveSnapshot(GetActiveSnapshotRequest) returns (SnapshotEnvelope);
+}
+
+// Top-level message sent from Control Plane to Gateway
+message ControlPlaneMessage {
+  string message_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+
+  oneof payload {
+    SnapshotEnvelope snapshot = 3;
+    FreshnessLease lease = 4;
+    HeartbeatPing ping = 5;
+  }
+}
+
+// Top-level message sent from Gateway to Control Plane
+message GatewayMessage {
+  string gateway_id = 1;
+  google.protobuf.Timestamp timestamp = 2;
+
+  oneof payload {
+    SnapshotAck ack = 3;
+    HeartbeatPong pong = 4;
+  }
+}
+
+// Monotonic signed configuration envelope
+message SnapshotEnvelope {
+  int64 version = 1;                          // Monotonic integer version
+  int32 schema_version = 2;                   // Schema version (e.g. 1)
+  google.protobuf.Timestamp created_at = 3;
+  google.protobuf.Timestamp expires_at = 4;
+  string payload_sha256 = 5;                  // Hex-encoded SHA-256 of payload bytes
+  bytes payload = 6;                          // Serialized SnapshotPayload bytes
+  string signing_key_id = 7;                  // Identifier of control plane signing key
+  bytes signature = 8;                        // Ed25519 signature of payload_sha256
+}
+
+// Unpacked configuration payload contained inside the envelope
+message SnapshotPayload {
+  int64 version = 1;
+  repeated RouteDefinition routes = 2;
+  repeated PolicyModule policy_modules = 3;
+  bytes policy_data_json = 4;                 // JSON-encoded seed role and permission data
+  repeated IdentityMapping identity_mappings = 5;
+}
+
+// Route definition mapping incoming HTTP requests to private upstream backends
+message RouteDefinition {
+  string route_id = 1;                        // Unique identifier, e.g. "orders.list"
+  string service_id = 2;                      // Destination service, e.g. "orders"
+  string http_method = 3;                     // GET, POST, PUT, DELETE, etc.
+  string path_template = 4;                   // Canonical template, e.g. "/api/orders"
+  string upstream_url = 5;                    // Target, e.g. "https://orders:8081"
+  string upstream_spiffe_id = 6;              // Expected server SAN: "spiffe://aegis.local/service/orders"
+  RateLimitPolicy rate_limit = 7;
+  TimeoutPolicy timeout = 8;
+  bool requires_workload_mtls = 9;
+}
+
+message RateLimitPolicy {
+  int32 requests_per_second = 1;
+  int32 burst = 2;
+}
+
+message TimeoutPolicy {
+  int32 request_timeout_ms = 1;               // Default 15000ms
+  int32 upstream_timeout_ms = 2;              // Default 5000ms
+}
+
+message PolicyModule {
+  string package_name = 1;                    // e.g. "aegis.authz"
+  string module_name = 2;                     // e.g. "rules.rego"
+  string source_rego = 3;                     // Raw Rego v1 source code
+}
+
+message IdentityMapping {
+  string role = 1;                            // e.g. "developer"
+  repeated string permissions = 2;            // e.g. ["orders.read", "payments.read"]
+}
+
+// 10-second freshness lease renewal issued by control plane
+message FreshnessLease {
+  string lease_id = 1;
+  int64 snapshot_version = 2;
+  google.protobuf.Timestamp issued_at = 3;
+  google.protobuf.Timestamp valid_until = 4;  // Issued + 10s (fail-closed at valid_until + 50s)
+  bytes lease_signature = 5;                  // Ed25519 signature of lease metadata
+}
+
+// Gateway activation acknowledgment
+message SnapshotAck {
+  string gateway_id = 1;
+  int64 active_version = 2;
+  AckStatus status = 3;
+  string error_message = 4;
+  google.protobuf.Timestamp acknowledged_at = 5;
+}
+
+enum AckStatus {
+  ACK_STATUS_UNSPECIFIED = 0;
+  ACK_STATUS_ACTIVATED = 1;
+  ACK_STATUS_REJECTED = 2;
+}
+
+message HeartbeatPing {
+  string sequence_id = 1;
+}
+
+message HeartbeatPong {
+  string sequence_id = 1;
+  int64 active_version = 2;
+}
+
+message GetActiveSnapshotRequest {
+  string gateway_id = 1;
+  int64 current_version = 2;
+}
