@@ -1,0 +1,996 @@
+openapi: 3.0.3
+info:
+  title: Aegis Control Plane Management API
+  version: 1.0.0
+  description: Authoritative management API for policy lifecycle, route configuration, dry-run simulation, and emergency quarantine.
+  license:
+    name: Apache-2.0
+    url: https://www.apache.org/licenses/LICENSE-2.0.html
+servers:
+  - url: /control/v1
+    description: Aegis Control Plane v1 API
+security:
+  - BearerAuth: []
+paths:
+  /control/v1/routes:
+    get:
+      summary: List configured routes
+      description: Returns paginated route definitions.
+      operationId: listRoutes
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Route catalog with pagination
+          headers:
+            ETag:
+              schema:
+                type: string
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RouteListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+    post:
+      summary: Create route draft
+      description: Registers a new route draft in PostgreSQL.
+      operationId: createRoute
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RouteCreateRequest'
+      responses:
+        '201':
+          description: Route draft created successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/Route'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/policies:
+    post:
+      summary: Create policy draft
+      description: Creates a new Rego policy draft for validation and review.
+      operationId: createPolicyDraft
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyCreateRequest'
+      responses:
+        '201':
+          description: Policy draft created
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyDraft'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/policies/{id}/versions:
+    get:
+      summary: Inspect policy history
+      description: Returns historical version log and approval metadata for a policy.
+      operationId: getPolicyVersions
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: List of policy versions
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyVersionListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/policies/{id}/validate:
+    post:
+      summary: Validate policy syntax and unit tests
+      description: Compiles the policy with OPA and runs embedded unit tests.
+      operationId: validatePolicy
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyValidationRequest'
+      responses:
+        '200':
+          description: Validation and test execution results
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyValidationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/policies/{id}/simulate:
+    post:
+      summary: Dry-run simulate policy evaluation against synthetic input
+      description: Executes an in-memory test evaluation against candidate or active Rego code.
+      operationId: simulatePolicy
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicySimulationRequest'
+      responses:
+        '200':
+          description: Simulation decision output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySimulationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/policies/{id}/publish:
+    post:
+      summary: Publish approved policy snapshot
+      description: Generates a new monotonic configuration snapshot, signs it with Ed25519, and broadcasts to gateway grid.
+      operationId: publishPolicy
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyPublishRequest'
+      responses:
+        '200':
+          description: Policy published and snapshot dispatched
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyPublishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/policies/{id}/rollback:
+    post:
+      summary: Roll back policy by publishing historical content as new monotonic version
+      description: Re-activates historical policy content by minting a strictly increasing snapshot version.
+      operationId: rollbackPolicy
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyRollbackRequest'
+      responses:
+        '200':
+          description: Rollback snapshot published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyPublishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/gateways:
+    get:
+      summary: List connected gateway replicas
+      description: Returns active gateway connections, snapshot versions, lease expirations, and health status.
+      operationId: listGateways
+      parameters:
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Connected gateway statuses
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/GatewayListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/principals/{id}/quarantine:
+    post:
+      summary: Quarantine a principal
+      description: Instantly blocks a user or workload cluster-wide in Redis in under 5 seconds.
+      operationId: quarantinePrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarantineRequest'
+      responses:
+        '200':
+          description: Principal quarantined successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    delete:
+      summary: Remove quarantine block for a principal
+      description: Removes active quarantine key in Redis.
+      operationId: unquarantinePrincipal
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: false
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/UnquarantineRequest'
+      responses:
+        '200':
+          description: Quarantine removed successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/UnquarantineResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /control/v1/audit-events:
+    get:
+      summary: Query audit events
+      description: Queries pre-forward decisions and completion audit events from PostgreSQL with filtering.
+      operationId: listAuditEvents
+      parameters:
+        - name: principal_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: service_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: decision
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [allow, deny]
+        - name: from_timestamp
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to_timestamp
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated audit event records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/audit-events/{id}:
+    get:
+      summary: Inspect single audit event
+      description: Returns complete details for a single decision or completion audit event.
+      operationId: getAuditEvent
+      parameters:
+        - name: id
+          in: path
+          required: true
+          schema:
+            type: string
+            format: uuid
+      responses:
+        '200':
+          description: Complete audit event record
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEvent'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+components:
+  securitySchemes:
+    BearerAuth:
+      type: http
+      scheme: bearer
+      bearerFormat: JWT
+      description: JWT bearer token containing administrative roles and permission scopes.
+
+  parameters:
+    IdempotencyKey:
+      name: Idempotency-Key
+      in: header
+      required: false
+      description: Client-provided UUID to ensure idempotent execution.
+      schema:
+        type: string
+        format: uuid
+    IfMatch:
+      name: If-Match
+      in: header
+      required: false
+      description: Optimistic concurrency control ETag.
+      schema:
+        type: string
+    Cursor:
+      name: cursor
+      in: query
+      required: false
+      description: Opaque pagination cursor.
+      schema:
+        type: string
+    Limit:
+      name: limit
+      in: query
+      required: false
+      description: Maximum number of records to return.
+      schema:
+        type: integer
+        default: 50
+        maximum: 200
+
+  schemas:
+    Route:
+      type: object
+      required:
+        - route_id
+        - service_id
+        - http_method
+        - path_template
+        - upstream_url
+      properties:
+        route_id:
+          type: string
+          example: route-orders-get
+        service_id:
+          type: string
+          example: orders
+        http_method:
+          type: string
+          enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+          example: GET
+        path_template:
+          type: string
+          example: /api/orders
+        upstream_url:
+          type: string
+          format: uri
+          example: https://orders.internal:8081
+        upstream_spiffe_id:
+          type: string
+          example: spiffe://aegis.local/ns/default/sa/orders
+        rate_limit_rps:
+          type: integer
+          example: 100
+        rate_limit_burst:
+          type: integer
+          example: 20
+        timeout_ms:
+          type: integer
+          example: 5000
+        requires_workload_mtls:
+          type: boolean
+          example: false
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    RouteCreateRequest:
+      type: object
+      required:
+        - route_id
+        - service_id
+        - http_method
+        - path_template
+        - upstream_url
+      properties:
+        route_id:
+          type: string
+        service_id:
+          type: string
+        http_method:
+          type: string
+          enum: [GET, POST, PUT, DELETE, PATCH, HEAD, OPTIONS]
+        path_template:
+          type: string
+        upstream_url:
+          type: string
+          format: uri
+        upstream_spiffe_id:
+          type: string
+        rate_limit_rps:
+          type: integer
+        rate_limit_burst:
+          type: integer
+        timeout_ms:
+          type: integer
+        requires_workload_mtls:
+          type: boolean
+
+    RouteListResponse:
+      type: object
+      required:
+        - routes
+      properties:
+        routes:
+          type: array
+          items:
+            $ref: '#/components/schemas/Route'
+        next_cursor:
+          type: string
+
+    PolicyDraft:
+      type: object
+      required:
+        - policy_id
+        - name
+        - source_rego
+      properties:
+        policy_id:
+          type: string
+          example: pol-authz-main
+        name:
+          type: string
+          example: Core Ingress Authorization Policy
+        source_rego:
+          type: string
+        created_at:
+          type: string
+          format: date-time
+        updated_at:
+          type: string
+          format: date-time
+
+    PolicyCreateRequest:
+      type: object
+      required:
+        - policy_id
+        - name
+        - source_rego
+      properties:
+        policy_id:
+          type: string
+        name:
+          type: string
+        source_rego:
+          type: string
+
+    PolicyVersion:
+      type: object
+      required:
+        - version_id
+        - policy_id
+        - snapshot_version
+        - source_rego
+        - published_at
+        - published_by
+      properties:
+        version_id:
+          type: string
+        policy_id:
+          type: string
+        snapshot_version:
+          type: integer
+          format: int64
+        source_rego:
+          type: string
+        published_at:
+          type: string
+          format: date-time
+        published_by:
+          type: string
+
+    PolicyVersionListResponse:
+      type: object
+      required:
+        - versions
+      properties:
+        versions:
+          type: array
+          items:
+            $ref: '#/components/schemas/PolicyVersion'
+        next_cursor:
+          type: string
+
+    PolicyValidationRequest:
+      type: object
+      properties:
+        candidate_rego:
+          type: string
+
+    PolicyValidationResponse:
+      type: object
+      required:
+        - valid
+        - test_count
+        - passed_count
+        - failed_count
+      properties:
+        valid:
+          type: boolean
+        errors:
+          type: array
+          items:
+            type: string
+        test_count:
+          type: integer
+        passed_count:
+          type: integer
+        failed_count:
+          type: integer
+
+    PolicySimulationRequest:
+      type: object
+      required:
+        - input_context
+      properties:
+        candidate_rego:
+          type: string
+        input_context:
+          type: object
+          additionalProperties: true
+
+    PolicySimulationResponse:
+      type: object
+      required:
+        - allow
+        - reason_code
+        - duration_us
+      properties:
+        allow:
+          type: boolean
+        reason_code:
+          type: string
+        duration_us:
+          type: integer
+        diagnostics:
+          type: object
+          additionalProperties: true
+
+    PolicyPublishRequest:
+      type: object
+      properties:
+        comment:
+          type: string
+
+    PolicyRollbackRequest:
+      type: object
+      required:
+        - target_version_id
+      properties:
+        target_version_id:
+          type: string
+        comment:
+          type: string
+
+    PolicyPublishResponse:
+      type: object
+      required:
+        - snapshot_version
+        - published_at
+        - signing_key_id
+      properties:
+        snapshot_version:
+          type: integer
+          format: int64
+        published_at:
+          type: string
+          format: date-time
+        signing_key_id:
+          type: string
+
+    GatewayStatus:
+      type: object
+      required:
+        - gateway_id
+        - active_version
+        - connected_at
+        - status
+      properties:
+        gateway_id:
+          type: string
+          example: gw-replica-01
+        active_version:
+          type: integer
+          format: int64
+          example: 42
+        lease_expires_at:
+          type: string
+          format: date-time
+        connected_at:
+          type: string
+          format: date-time
+        last_heartbeat_at:
+          type: string
+          format: date-time
+        status:
+          type: string
+          enum: [healthy, degraded, partitioned]
+
+    GatewayListResponse:
+      type: object
+      required:
+        - gateways
+      properties:
+        gateways:
+          type: array
+          items:
+            $ref: '#/components/schemas/GatewayStatus'
+
+    QuarantineRequest:
+      type: object
+      required:
+        - reason
+      properties:
+        reason:
+          type: string
+          example: Suspicious credential activity detected
+        expires_at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+          example: sec-ops-team
+
+    QuarantineRecord:
+      type: object
+      required:
+        - principal_id
+        - status
+        - reason
+        - quarantined_at
+      properties:
+        principal_id:
+          type: string
+          example: user_bad_actor_99
+        status:
+          type: string
+          enum: [active, expired, revoked]
+        reason:
+          type: string
+        quarantined_at:
+          type: string
+          format: date-time
+        expires_at:
+          type: string
+          format: date-time
+        actor:
+          type: string
+
+    UnquarantineRequest:
+      type: object
+      properties:
+        reason:
+          type: string
+
+    UnquarantineResponse:
+      type: object
+      required:
+        - principal_id
+        - unquarantined_at
+      properties:
+        principal_id:
+          type: string
+        unquarantined_at:
+          type: string
+          format: date-time
+
+    AuditEvent:
+      type: object
+      required:
+        - event_id
+        - event_type
+        - request_id
+        - timestamp
+        - principal_id
+        - service_id
+        - route_id
+        - decision
+        - reason_code
+        - snapshot_version
+      properties:
+        event_id:
+          type: string
+          format: uuid
+        event_type:
+          type: string
+          enum: [decision, completion]
+        request_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        principal_id:
+          type: string
+        principal_kind:
+          type: string
+          enum: [user, workload, anonymous]
+        roles:
+          type: array
+          items:
+            type: string
+        service_id:
+          type: string
+        route_id:
+          type: string
+        http_method:
+          type: string
+        request_path:
+          type: string
+        decision:
+          type: string
+          enum: [allow, deny]
+        reason_code:
+          type: string
+        snapshot_version:
+          type: integer
+          format: int64
+        status_code:
+          type: integer
+        duration_ms:
+          type: integer
+
+    AuditEventListResponse:
+      type: object
+      required:
+        - events
+      properties:
+        events:
+          type: array
+          items:
+            $ref: '#/components/schemas/AuditEvent'
+        next_cursor:
+          type: string
+
+    ErrorResponse:
+      type: object
+      required:
+        - code
+        - message
+        - request_id
+        - timestamp
+      properties:
+        code:
+          type: string
+          example: BAD_REQUEST
+        message:
+          type: string
+          example: The request payload is malformed or invalid.
+        request_id:
+          type: string
+          format: uuid
+        timestamp:
+          type: string
+          format: date-time
+        details:
+          type: object
+          additionalProperties: true
+
+  responses:
+    BadRequest:
+      description: Bad Request
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Unauthorized:
+      description: Unauthorized
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Forbidden:
+      description: Forbidden
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    NotFound:
+      description: Not Found
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    Conflict:
+      description: Conflict
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    PreconditionFailed:
+      description: Precondition Failed (ETag mismatch)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    UnprocessableEntity:
+      description: Unprocessable Entity (Semantic validation failed)
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    TooManyRequests:
+      description: Too Many Requests
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'
+    ServiceUnavailable:
+      description: Service Unavailable
+      content:
+        application/json:
+          schema:
+            $ref: '#/components/schemas/ErrorResponse'

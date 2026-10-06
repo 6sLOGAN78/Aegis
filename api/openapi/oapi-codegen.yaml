@@ -1,0 +1,4 @@
+package: controlv1
+generate:
+  models: true
+output: pkg/api/control/v1/types.gen.go
