@@ -147,10 +147,10 @@ Which phases cover which requirements. Populated during roadmap creation.
 | DIST-03 | Phase 5 | Pending |
 
 **Coverage:**
-- v1 requirements: 37 total
-- Mapped to phases: 37
+- v1 requirements: 38 total
+- Mapped to phases: 38
 - Unmapped: 0 ✓
 
 ---
 *Requirements defined: 2026-10-06*
-*Last updated: 2026-10-06 after initialization*
+*Last updated: 2026-10-06 after roadmap creation*
