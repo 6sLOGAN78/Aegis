@@ -127,6 +127,9 @@ func main() {
 		log.Printf("Notice: PostgreSQL unavailable (%s:%d): %v (running with in-memory state)", poolCfg.Host, poolCfg.Port, err)
 	} else {
 		log.Printf("Connected to PostgreSQL database %q at %s:%d", poolCfg.Database, poolCfg.Host, poolCfg.Port)
+		if err := storage.RunMigrationsWithPool(dbCtx, pool); err != nil {
+			log.Printf("Warning: failed to run migrations: %v", err)
+		}
 		snapshotRepo = storage.NewSnapshotRepo(pool)
 		routeRepo = storage.NewRouteRepo(pool)
 		_ = routeRepo

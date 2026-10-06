@@ -9,6 +9,8 @@ COPY . .
 
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/gateway ./cmd/gateway
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/demo-issuer ./cmd/demo-issuer
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/control-plane ./cmd/control-plane
+RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/audit-worker ./cmd/audit-worker
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/orders ./cmd/services/orders
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/payments ./cmd/services/payments
 RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/admin ./cmd/services/admin
@@ -52,3 +54,19 @@ WORKDIR /app
 COPY --from=builder /bin/admin /usr/local/bin/admin
 EXPOSE 8083
 ENTRYPOINT ["/usr/local/bin/admin"]
+
+# Target: control-plane
+FROM alpine:3.21 AS control-plane
+RUN apk add --no-cache curl
+WORKDIR /app
+COPY --from=builder /bin/control-plane /usr/local/bin/control-plane
+COPY policies ./policies
+EXPOSE 8084 9090
+ENTRYPOINT ["/usr/local/bin/control-plane"]
+
+# Target: audit-worker
+FROM alpine:3.21 AS audit-worker
+RUN apk add --no-cache curl
+WORKDIR /app
+COPY --from=builder /bin/audit-worker /usr/local/bin/audit-worker
+ENTRYPOINT ["/usr/local/bin/audit-worker"]

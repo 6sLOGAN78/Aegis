@@ -1,6 +1,7 @@
 COMPOSE_FILE := deployments/compose/docker-compose.mvp.yml
+COMPOSE_HARDENED_FILE := deployments/compose/docker-compose.hardened.yml
 
-.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e help
+.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e up-hardened down-hardened test-failure help
 
 certs:
 	go run ./scripts/certificates/main.go
@@ -38,6 +39,15 @@ test-e2e: compose-up
 	go test -v -race ./tests/integration/...
 	docker compose -f $(COMPOSE_FILE) down
 
+up-hardened: certs
+	docker compose -f $(COMPOSE_HARDENED_FILE) up -d --build --wait
+
+down-hardened:
+	docker compose -f $(COMPOSE_HARDENED_FILE) down -v
+
+test-failure:
+	go test -v -race -timeout 60s ./tests/failure/...
+
 help:
 	@echo "Aegis Zero-Trust Access Gateway Automation Targets:"
 	@echo "  make certs         - Generate local development PKI certificates and assertion keys"
@@ -52,3 +62,6 @@ help:
 	@echo "  make compose-up    - Ensure certs and start Docker Compose MVP cluster"
 	@echo "  make compose-down  - Stop and tear down Docker Compose MVP cluster"
 	@echo "  make test-e2e      - Start cluster, run end-to-end integration tests, and tear down"
+	@echo "  make up-hardened   - Build and start hardened multi-service Docker Compose cluster"
+	@echo "  make down-hardened - Stop and tear down hardened Docker Compose cluster with volumes"
+	@echo "  make test-failure  - Run automated dependency failure and chaos integration tests"
