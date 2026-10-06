@@ -1,20 +1,93 @@
 package main
 
 import (
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/tls"
 	"encoding/json"
+	"net"
 	"net/http"
 	"net/http/httptest"
 	"testing"
 
+	"aegis/internal/identity"
+	"aegis/internal/pki"
 	"github.com/stretchr/testify/require"
 )
 
 func TestPaymentsService(t *testing.T) {
-	ts := httptest.NewServer(Routes())
+	ca, err := pki.NewCA("Aegis Payments Test CA")
+	require.NoError(t, err)
+
+	serverCert, err := ca.IssueServerCert("localhost", []string{"localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
+	require.NoError(t, err)
+
+	gatewaySPIFFE := "spiffe://aegis.local/ns/gateway/sa/aegis-gateway"
+	gwCert, err := ca.IssueWorkloadCert(gatewaySPIFFE)
+	require.NoError(t, err)
+
+	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	minter := identity.NewAssertionMinter(privKey)
+
+	handler := Routes(pubKey)
+	ts := httptest.NewUnstartedServer(handler)
+	ts.TLS = &tls.Config{
+		Certificates: []tls.Certificate{serverCert},
+		ClientCAs:    ca.CertPool,
+		ClientAuth:   tls.RequestClientCert,
+	}
+	ts.StartTLS()
 	defer ts.Close()
 
-	t.Run("GET /api/payments returns HTTP 200 with JSON payment records", func(t *testing.T) {
-		resp, err := http.Get(ts.URL + "/api/payments")
+	authenticatedClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs:      ca.CertPool,
+				Certificates: []tls.Certificate{gwCert},
+			},
+		},
+	}
+
+	unauthenticatedClient := &http.Client{
+		Transport: &http.Transport{
+			TLSClientConfig: &tls.Config{
+				RootCAs: ca.CertPool,
+			},
+		},
+	}
+
+	t.Run("GET /health succeeds without credentials", func(t *testing.T) {
+		resp, err := unauthenticatedClient.Get(ts.URL + "/health")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+	})
+
+	t.Run("GET /api/payments without credentials returns HTTP 401", func(t *testing.T) {
+		resp, err := unauthenticatedClient.Get(ts.URL + "/api/payments")
+		require.NoError(t, err)
+		defer resp.Body.Close()
+
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
+	})
+
+	t.Run("GET /api/payments returns HTTP 200 with JSON payment records when authenticated", func(t *testing.T) {
+		token, err := minter.MintAssertion(
+			"usr_test", "user", []string{"user"},
+			"payments",
+			http.MethodGet, "/api/payments",
+			"req-pay-01", 1,
+		)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest(http.MethodGet, ts.URL+"/api/payments", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Aegis-Assertion", token)
+
+		resp, err := authenticatedClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
@@ -28,8 +101,20 @@ func TestPaymentsService(t *testing.T) {
 		require.Equal(t, "pay_201", payments[0].ID)
 	})
 
-	t.Run("POST /api/payments returns HTTP 200 with confirmation", func(t *testing.T) {
-		resp, err := http.Post(ts.URL+"/api/payments", "application/json", nil)
+	t.Run("POST /api/payments returns HTTP 200 with confirmation when authenticated", func(t *testing.T) {
+		token, err := minter.MintAssertion(
+			"usr_test", "user", []string{"user"},
+			"payments",
+			http.MethodPost, "/api/payments",
+			"req-pay-02", 1,
+		)
+		require.NoError(t, err)
+
+		req, err := http.NewRequest(http.MethodPost, ts.URL+"/api/payments", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Aegis-Assertion", token)
+
+		resp, err := authenticatedClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
@@ -43,11 +128,20 @@ func TestPaymentsService(t *testing.T) {
 		require.Equal(t, "pay_201", res["payment_id"])
 	})
 
-	t.Run("DELETE /api/payments returns 405 Method Not Allowed", func(t *testing.T) {
-		req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/payments", nil)
+	t.Run("DELETE /api/payments returns 405 Method Not Allowed when authenticated", func(t *testing.T) {
+		token, err := minter.MintAssertion(
+			"usr_test", "user", []string{"user"},
+			"payments",
+			http.MethodDelete, "/api/payments",
+			"req-pay-03", 1,
+		)
 		require.NoError(t, err)
 
-		resp, err := http.DefaultClient.Do(req)
+		req, err := http.NewRequest(http.MethodDelete, ts.URL+"/api/payments", nil)
+		require.NoError(t, err)
+		req.Header.Set("X-Aegis-Assertion", token)
+
+		resp, err := authenticatedClient.Do(req)
 		require.NoError(t, err)
 		defer resp.Body.Close()
 
