@@ -16,7 +16,7 @@ The journey enforces strict default-deny authorization, zero-repair path normali
 Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6.
 
 - [x] **Phase 0: Architecture Contracts, Schemas & Threat Model** - Authoritative ADRs, OpenAPI/Protobuf contracts, Rego input schemas, and zero-trust threat models (completed 2026-10-06)
-- [ ] **Phase 1: MVP Secure Vertical Slice** - Go gateway reverse proxy, local demo JWT issuer, embedded OPA engine, 3 private microservices, and Docker Compose MVP
+- [x] **Phase 1: MVP Secure Vertical Slice** - Go gateway reverse proxy, local demo JWT issuer, embedded OPA engine, 3 private microservices, and Docker Compose MVP (completed 2026-10-06)
 - [ ] **Phase 2: Workload Identity & Enforced Bypass Prevention** - Dedicated workload mTLS listener (:9443), SPIFFE URI SANs, backend mTLS, signed assertion JWTs, and direct bypass elimination
 - [ ] **Phase 3: Control Plane, Snapshot Streaming & Durable State** - PostgreSQL persistence, signed Ed25519 snapshots, gRPC streaming with 10s freshness leases, Redis rate limits/revocation, and local disk WAL spool with async worker
 - [ ] **Phase 4: Operator Experience & Telemetry** - React/TypeScript dashboard, Monaco Rego editor, dry-run policy simulator, replica convergence tracking, /control/v1 REST APIs, and Prometheus metrics
@@ -65,16 +65,16 @@ Plans:
 Plans:
 **Wave 1**
 
-- [ ] 01-01: Go gateway reverse proxy with strict path rejection, request limits, and header sanitization
-- [ ] 01-02: Embedded OPA engine, precompiled query evaluator, and static local snapshot loader
+- [x] 01-01: Go gateway reverse proxy with strict path rejection, request limits, and header sanitization
+- [x] 01-02: Embedded OPA engine, precompiled query evaluator, and static local snapshot loader
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
-- [ ] 01-03: Mock JWT issuer, private demo microservices (orders, payments, admin), and Docker Compose mvp profile
+- [x] 01-03: Mock JWT issuer, private demo microservices (orders, payments, admin), and Docker Compose mvp profile
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 01-04: Structured completion audit events and automated negative security test suite
+- [x] 01-04: Structured completion audit events and automated negative security test suite
 
 ---
 
@@ -196,7 +196,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
 | 0. Architecture Contracts, Schemas & Threat Model | 3/3 | Complete   | 2026-10-06 |
-| 1. MVP Secure Vertical Slice | 0/4 | Not started | - |
+| 1. MVP Secure Vertical Slice | 4/4 | Complete   | 2026-10-06 |
 | 2. Workload Identity & Enforced Bypass Prevention | 0/4 | Not started | - |
 | 3. Control Plane, Snapshot Streaming & Durable State | 0/5 | Not started | - |
 | 4. Operator Experience & Telemetry | 0/3 | Not started | - |
