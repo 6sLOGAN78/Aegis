@@ -23,6 +23,9 @@ import (
 	"aegis/internal/pki"
 	"aegis/internal/policy"
 	"aegis/internal/proxy"
+	"aegis/internal/snapshot"
+
+	"github.com/google/uuid"
 )
 
 var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
@@ -31,26 +34,6 @@ func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
 		log.Fatalf("Failed to load configuration: %v", err)
-	}
-
-	policyPath := os.Getenv("AEGIS_POLICY_PATH")
-	if policyPath == "" {
-		policyPath = "policies/rego/authz.rego"
-	}
-
-	policyBytes, err := os.ReadFile(policyPath)
-	if err != nil {
-		log.Fatalf("Failed to read policy from %q: %v", policyPath, err)
-	}
-
-	policyEngine, err := policy.NewEngine(context.Background(), string(policyBytes))
-	if err != nil {
-		log.Fatalf("Failed to initialize OPA policy engine: %v", err)
-	}
-
-	router, err := proxy.NewRouterFromJSON(cfg.RoutesFilePath)
-	if err != nil {
-		log.Fatalf("Failed to initialize router from %q: %v", cfg.RoutesFilePath, err)
 	}
 
 	issuer := os.Getenv("AEGIS_ISSUER")
@@ -63,7 +46,7 @@ func main() {
 		audience = "aegis-gateway"
 	}
 
-	pubKey := ed25519.NewKeyFromSeed(defaultDemoSeed).Public()
+	pubKey := ed25519.PublicKey(ed25519.NewKeyFromSeed(defaultDemoSeed).Public().(ed25519.PublicKey))
 	if pubKeyB64 := os.Getenv("AEGIS_ISSUER_PUBLIC_KEY"); pubKeyB64 != "" {
 		if b, err := base64.StdEncoding.DecodeString(pubKeyB64); err == nil && len(b) == ed25519.PublicKeySize {
 			pubKey = ed25519.PublicKey(b)
@@ -72,9 +55,37 @@ func main() {
 		}
 	}
 
+	// Pinned Control Plane Ed25519 Public Key (CTRL-02, Invariant 4)
+	controlPlanePubKey := pubKey
+	if cpKeyB64 := os.Getenv("AEGIS_CONTROL_PLANE_PUBLIC_KEY"); cpKeyB64 != "" {
+		if b, err := base64.StdEncoding.DecodeString(cpKeyB64); err == nil && len(b) == ed25519.PublicKeySize {
+			controlPlanePubKey = ed25519.PublicKey(b)
+		} else {
+			log.Printf("Warning: failed to decode AEGIS_CONTROL_PLANE_PUBLIC_KEY, using default demo key: %v", err)
+		}
+	}
+
+	snapVerifier := snapshot.NewVerifier(controlPlanePubKey)
+	snapManager := snapshot.NewManager(snapVerifier)
+
+	// Connect gRPC Snapshot Stream Client with randomized backoff and jitter
+	streamCtx, streamCancel := context.WithCancel(context.Background())
+	defer streamCancel()
+
+	gatewayID := os.Getenv("AEGIS_GATEWAY_ID")
+	if gatewayID == "" {
+		gatewayID = "gateway-" + uuid.NewString()[:8]
+	}
+
+	streamClient := snapshot.NewStreamClient(cfg.ControlPlaneGRPCAddr, gatewayID, snapManager, snapVerifier)
+	go func() {
+		if err := streamClient.Start(streamCtx); err != nil && !errors.Is(err, context.Canceled) {
+			log.Printf("Control plane stream client exited: %v", err)
+		}
+	}()
+
 	tokenValidator := identity.NewTokenValidator(issuer, audience, pubKey)
 	auditLogger := audit.NewLogger(nil)
-	snapshotVersion := int64(1)
 
 	// Initialize Assertion Signing Key
 	var assertionPrivKey ed25519.PrivateKey
@@ -173,7 +184,6 @@ func main() {
 		if err != nil {
 			log.Fatalf("Failed to generate fallback server TLS certificate: %v", err)
 		}
-		// Clear paths so DualServer.ListenAndServeTLS("", "") uses configured Certificates
 		cfg.TLSCertPath = ""
 		cfg.TLSKeyPath = ""
 	}
@@ -189,6 +199,45 @@ func main() {
 	gatewayHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := r.Header.Get("X-Request-ID")
 		ac := audit.FromContext(r.Context())
+
+		// Step 1: Bounded Freshness Lease Check (CTRL-04, Invariant 1, ADR-0004)
+		if snapManager.IsLeaseExpired(60 * time.Second) {
+			if ac != nil {
+				ac.SetDecision("deny", "POLICY_LEASE_EXPIRED")
+				ac.SetErrorCode("POLICY_LEASE_EXPIRED")
+			}
+			proxy.WriteProblemDetails(
+				w,
+				http.StatusServiceUnavailable,
+				"Service Unavailable",
+				"Policy freshness lease expired (>60s)",
+				"https://aegis.local/errors/policy-lease-expired",
+				reqID,
+			)
+			return
+		}
+
+		// Step 2: Active Snapshot Initialization Check (CTRL-02, Invariant 1)
+		state := snapManager.Active()
+		if state == nil {
+			if ac != nil {
+				ac.SetDecision("deny", "UNINITIALIZED")
+				ac.SetErrorCode("UNINITIALIZED")
+			}
+			proxy.WriteProblemDetails(
+				w,
+				http.StatusServiceUnavailable,
+				"Service Unavailable",
+				"Gateway configuration uninitialized",
+				"https://aegis.local/errors/uninitialized",
+				reqID,
+			)
+			return
+		}
+
+		if ac != nil {
+			ac.SetSnapshotVersion(state.Version)
+		}
 
 		// 1. Strict Zero-Repair Path Validation (GW-02)
 		canonicalPath, err := proxy.ValidatePathZeroRepair(r)
@@ -233,8 +282,8 @@ func main() {
 			ac.SetCanonicalPath(canonicalPath)
 		}
 
-		// 3. Deterministic Route Resolution (GW-03)
-		route, err := router.Match(r.Method, canonicalPath)
+		// 3. Deterministic Route Resolution against Active Snapshot (GW-03, Invariant 9)
+		route, err := state.Router.Match(r.Method, canonicalPath)
 		if err != nil {
 			if ac != nil {
 				ac.SetDecision("deny", "ROUTE_NOT_FOUND")
@@ -255,7 +304,7 @@ func main() {
 			ac.SetRoute(route.RouteID, route.ServiceID)
 		}
 
-		// 4. In-Memory OPA Policy Evaluation (POL-01, POL-02)
+		// 4. In-Memory OPA Policy Evaluation against Precompiled Query (POL-01, POL-02)
 		input := policy.PolicyInput{
 			Principal: policy.PrincipalInput{
 				ID:    claims.Subject,
@@ -274,10 +323,10 @@ func main() {
 				RiskScore: 0,
 				RiskState: "available",
 			},
-			SnapshotVersion: snapshotVersion,
+			SnapshotVersion: state.Version,
 		}
 
-		decision, err := policyEngine.Evaluate(r.Context(), input)
+		decision, err := state.PolicyEngine.Evaluate(r.Context(), input)
 		if err != nil || !decision.Allow {
 			reason := "DENIED_DEFAULT"
 			if decision.ReasonCode != "" {
@@ -319,7 +368,7 @@ func main() {
 			r.Method,
 			canonicalPath,
 			reqID,
-			snapshotVersion,
+			state.Version,
 		)
 		if err != nil {
 			log.Printf("Failed to mint backend assertion: %v", err)
@@ -346,6 +395,33 @@ func main() {
 	workloadHandler := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		reqID := r.Header.Get("X-Request-ID")
 		ac := audit.FromContext(r.Context())
+
+		// Step 1: Bounded Freshness Lease Check (CTRL-04, Invariant 1, ADR-0004)
+		if snapManager.IsLeaseExpired(60 * time.Second) {
+			if ac != nil {
+				ac.SetDecision("deny", "POLICY_LEASE_EXPIRED")
+				ac.SetErrorCode("POLICY_LEASE_EXPIRED")
+			}
+			proxy.WriteProblemDetails(w, http.StatusServiceUnavailable, "Service Unavailable",
+				"Policy freshness lease expired (>60s)", "https://aegis.local/errors/policy-lease-expired", reqID)
+			return
+		}
+
+		// Step 2: Active Snapshot Initialization Check (CTRL-02, Invariant 1)
+		state := snapManager.Active()
+		if state == nil {
+			if ac != nil {
+				ac.SetDecision("deny", "UNINITIALIZED")
+				ac.SetErrorCode("UNINITIALIZED")
+			}
+			proxy.WriteProblemDetails(w, http.StatusServiceUnavailable, "Service Unavailable",
+				"Gateway configuration uninitialized", "https://aegis.local/errors/uninitialized", reqID)
+			return
+		}
+
+		if ac != nil {
+			ac.SetSnapshotVersion(state.Version)
+		}
 
 		// 1. Strict Zero-Repair Path Validation (GW-02)
 		canonicalPath, err := proxy.ValidatePathZeroRepair(r)
@@ -385,8 +461,8 @@ func main() {
 			ac.SetCanonicalPath(canonicalPath)
 		}
 
-		// 3. Deterministic Route Resolution (GW-03)
-		route, err := router.Match(r.Method, canonicalPath)
+		// 3. Deterministic Route Resolution against Active Snapshot (GW-03, Invariant 9)
+		route, err := state.Router.Match(r.Method, canonicalPath)
 		if err != nil {
 			if ac != nil {
 				ac.SetDecision("deny", "ROUTE_NOT_FOUND")
@@ -401,7 +477,7 @@ func main() {
 			ac.SetRoute(route.RouteID, route.ServiceID)
 		}
 
-		// 4. In-Memory OPA Policy Evaluation (POL-01, Rule 5 in authz.rego)
+		// 4. In-Memory OPA Policy Evaluation against Precompiled Query
 		input := policy.PolicyInput{
 			Principal: policy.PrincipalInput{
 				ID:    spiffeID,
@@ -416,11 +492,14 @@ func main() {
 				Method: r.Method,
 				Path:   canonicalPath,
 			},
-			Context: policy.ContextInput{RiskScore: 0, RiskState: "available"},
-			SnapshotVersion: snapshotVersion,
+			Context: policy.ContextInput{
+				RiskScore: 0,
+				RiskState: "available",
+			},
+			SnapshotVersion: state.Version,
 		}
 
-		decision, err := policyEngine.Evaluate(r.Context(), input)
+		decision, err := state.PolicyEngine.Evaluate(r.Context(), input)
 		if err != nil || !decision.Allow {
 			reason := "DENIED_WORKLOAD_FORBIDDEN"
 			if decision.ReasonCode != "" {
@@ -456,7 +535,7 @@ func main() {
 			r.Method,
 			canonicalPath,
 			reqID,
-			snapshotVersion,
+			state.Version,
 		)
 		if err != nil {
 			log.Printf("Failed to mint backend assertion for workload: %v", err)
@@ -474,8 +553,8 @@ func main() {
 	})
 
 	// Wrap handlers with audit middleware
-	auditedUserHandler := audit.AuditMiddleware(auditLogger, snapshotVersion)(gatewayHandler)
-	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, snapshotVersion)(workloadHandler)
+	auditedUserHandler := audit.AuditMiddleware(auditLogger, 0)(gatewayHandler)
+	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, 0)(workloadHandler)
 
 	// Dual-Listener Server Manager (:8080 and :9443 mTLS)
 	dualServer := proxy.NewDualServer(cfg, auditedUserHandler, auditedWorkloadHandler, workloadTLSConfig)
@@ -492,6 +571,9 @@ func main() {
 
 	<-stop
 	log.Println("Shutting down Aegis Gateway gracefully...")
+	streamCancel()
+	streamClient.Stop()
+
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
 

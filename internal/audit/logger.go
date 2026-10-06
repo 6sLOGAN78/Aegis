@@ -29,6 +29,7 @@ type AuditContext struct {
 	Decision       string
 	ReasonCode     string
 	ErrorCode      string
+	SnapshotVersion int64
 }
 
 // WithAuditContext creates a new AuditContext and attaches it to ctx.
@@ -107,6 +108,16 @@ func (ac *AuditContext) SetErrorCode(errCode string) {
 	ac.mu.Lock()
 	defer ac.mu.Unlock()
 	ac.ErrorCode = errCode
+}
+
+// SetSnapshotVersion sets the configuration snapshot version on the audit context.
+func (ac *AuditContext) SetSnapshotVersion(v int64) {
+	if ac == nil {
+		return
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	ac.SnapshotVersion = v
 }
 
 // Logger wraps a structured log/slog.Logger writing JSON audit records.
@@ -255,6 +266,11 @@ func AuditMiddleware(logger *Logger, snapshotVersion int64) func(http.Handler) h
 					}
 				}
 
+				snapVer := snapshotVersion
+				if ac.SnapshotVersion > 0 {
+					snapVer = ac.SnapshotVersion
+				}
+
 				event := CompletionEvent{
 					EventID:         uuid.NewString(),
 					Timestamp:       time.Now().UTC(),
@@ -271,7 +287,7 @@ func AuditMiddleware(logger *Logger, snapshotVersion int64) func(http.Handler) h
 					ReasonCode:      reasonCode,
 					HTTPStatus:      captureWriter.StatusCode,
 					DurationMS:      duration,
-					SnapshotVersion: snapshotVersion,
+					SnapshotVersion: snapVer,
 					ErrorCode:       ac.ErrorCode,
 				}
 				ac.mu.Unlock()

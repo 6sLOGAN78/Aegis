@@ -24,6 +24,13 @@ type Config struct {
 	WorkloadCACertPath      string
 	AssertionPrivateKeyPath string
 	AssertionPublicKeyPath  string
+
+	// Control plane and infrastructure configuration
+	ControlPlaneGRPCAddr string
+	RedisAddr            string
+	RedisPassword        string
+	SpoolDir             string
+	SpoolMaxBytes        int64
 }
 
 // LoadConfig initializes Config with safe defaults and environment variable overrides.
@@ -37,6 +44,12 @@ func LoadConfig() (*Config, error) {
 		WriteTimeout:          15 * time.Second,
 		MaxConcurrentRequests: 1000,
 		RoutesFilePath:        "policies/data/routes.json",
+
+		ControlPlaneGRPCAddr: "localhost:9090",
+		RedisAddr:            "localhost:6379",
+		RedisPassword:        "",
+		SpoolDir:             "/var/log/aegis/wal",
+		SpoolMaxBytes:        1073741824, // 1 GiB
 	}
 
 	if portStr := os.Getenv("AEGIS_PORT"); portStr != "" {
@@ -93,6 +106,30 @@ func LoadConfig() (*Config, error) {
 
 	if pubKeyPath := os.Getenv("AEGIS_ASSERTION_PUBLIC_KEY_PATH"); pubKeyPath != "" {
 		cfg.AssertionPublicKeyPath = pubKeyPath
+	}
+
+	if cpAddr := os.Getenv("AEGIS_CONTROL_PLANE_GRPC_ADDR"); cpAddr != "" {
+		cfg.ControlPlaneGRPCAddr = cpAddr
+	}
+
+	if redisAddr := os.Getenv("AEGIS_REDIS_ADDR"); redisAddr != "" {
+		cfg.RedisAddr = redisAddr
+	}
+
+	if redisPassword := os.Getenv("AEGIS_REDIS_PASSWORD"); redisPassword != "" {
+		cfg.RedisPassword = redisPassword
+	}
+
+	if spoolDir := os.Getenv("AEGIS_SPOOL_DIR"); spoolDir != "" {
+		cfg.SpoolDir = spoolDir
+	}
+
+	if spoolMaxBytesStr := os.Getenv("AEGIS_SPOOL_MAX_BYTES"); spoolMaxBytesStr != "" {
+		maxBytes, err := strconv.ParseInt(spoolMaxBytesStr, 10, 64)
+		if err != nil {
+			return nil, fmt.Errorf("invalid AEGIS_SPOOL_MAX_BYTES %q: %w", spoolMaxBytesStr, err)
+		}
+		cfg.SpoolMaxBytes = maxBytes
 	}
 
 	return cfg, nil

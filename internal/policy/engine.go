@@ -4,6 +4,7 @@ import (
 	"context"
 	"fmt"
 
+	"github.com/open-policy-agent/opa/ast"
 	"github.com/open-policy-agent/opa/rego"
 )
 
@@ -15,6 +16,7 @@ type Engine struct {
 // NewEngine precompiles the Rego authorization module into a prepared query.
 func NewEngine(ctx context.Context, regoCode string) (*Engine, error) {
 	query, err := rego.New(
+		rego.SetRegoVersion(ast.RegoV1),
 		rego.Query("data.aegis.authz.decision"),
 		rego.Module("authz.rego", regoCode),
 	).PrepareForEval(ctx)
