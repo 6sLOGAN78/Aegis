@@ -1,0 +1,74 @@
+services:
+  gateway:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: gateway
+    ports:
+      - "8080:8080"
+    environment:
+      - AEGIS_PORT=8080
+      - AEGIS_UPSTREAM_SCHEME=http
+      - AEGIS_ROUTES_PATH=policies/data/routes.json
+      - AEGIS_POLICY_PATH=policies/rego/authz.rego
+      - AEGIS_ISSUER=aegis-issuer
+      - AEGIS_AUDIENCE=aegis-gateway
+    networks:
+      - aegis-internal
+    depends_on:
+      - orders
+      - payments
+      - admin
+      - demo-issuer
+
+  demo-issuer:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: demo-issuer
+    ports:
+      - "8085:8085"
+    environment:
+      - PORT=8085
+    networks:
+      - aegis-internal
+
+  orders:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: orders
+    environment:
+      - PORT=8081
+    expose:
+      - "8081"
+    networks:
+      - aegis-internal
+
+  payments:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: payments
+    environment:
+      - PORT=8082
+    expose:
+      - "8082"
+    networks:
+      - aegis-internal
+
+  admin:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: admin
+    environment:
+      - PORT=8083
+    expose:
+      - "8083"
+    networks:
+      - aegis-internal
+
+networks:
+  aegis-internal:
+    driver: bridge
