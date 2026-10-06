@@ -8,7 +8,9 @@ import (
 	"encoding/base64"
 	"encoding/pem"
 	"errors"
+	"fmt"
 	"log"
+	"math"
 	"net"
 	"net/http"
 	"os"
@@ -23,9 +25,12 @@ import (
 	"aegis/internal/pki"
 	"aegis/internal/policy"
 	"aegis/internal/proxy"
+	"aegis/internal/ratelimit"
+	"aegis/internal/revocation"
 	"aegis/internal/snapshot"
 
 	"github.com/google/uuid"
+	"github.com/redis/go-redis/v9"
 )
 
 var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
@@ -83,6 +88,19 @@ func main() {
 			log.Printf("Control plane stream client exited: %v", err)
 		}
 	}()
+
+	// Initialize Redis client, revocation store, and rate limiter (REV-01, REV-03, REV-04, ADR-0005)
+	var rdb *redis.Client
+	var revStore *revocation.Store
+	var rateLimiter *ratelimit.RateLimiter
+	if cfg.RedisAddr != "" {
+		rdb = redis.NewClient(&redis.Options{
+			Addr:     cfg.RedisAddr,
+			Password: cfg.RedisPassword,
+		})
+		revStore = revocation.NewStore(rdb)
+		rateLimiter = ratelimit.NewRateLimiter(rdb)
+	}
 
 	tokenValidator := identity.NewTokenValidator(issuer, audience, pubKey)
 	auditLogger := audit.NewLogger(nil)
@@ -282,6 +300,41 @@ func main() {
 			ac.SetCanonicalPath(canonicalPath)
 		}
 
+		// 2b. Ephemeral Redis Token Revocation and Principal Quarantine Check (REV-03, REV-04, Invariant 1)
+		if revStore != nil {
+			revoked, reason, err := revStore.CheckRevocation(r.Context(), claims.Subject, claims.ID)
+			if err != nil {
+				if ac != nil {
+					ac.SetDecision("deny", "DEPENDENCY_OUTAGE_REDIS")
+					ac.SetErrorCode("DEPENDENCY_OUTAGE_REDIS")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusServiceUnavailable,
+					"Service Unavailable",
+					"Authorization dependency check unavailable; failing closed.",
+					"https://aegis.local/errors/dependency-unavailable",
+					reqID,
+				)
+				return
+			}
+			if revoked {
+				if ac != nil {
+					ac.SetDecision("deny", reason)
+					ac.SetErrorCode(reason)
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusForbidden,
+					"Forbidden",
+					reason,
+					"https://aegis.local/errors/forbidden",
+					reqID,
+				)
+				return
+			}
+		}
+
 		// 3. Deterministic Route Resolution against Active Snapshot (GW-03, Invariant 9)
 		route, err := state.Router.Match(r.Method, canonicalPath)
 		if err != nil {
@@ -302,6 +355,51 @@ func main() {
 
 		if ac != nil {
 			ac.SetRoute(route.RouteID, route.ServiceID)
+		}
+
+		// 3b. Distributed GCRA Token Bucket Rate Limiting (REV-01, ADR-0005)
+		if rateLimiter != nil {
+			var rps, burst int
+			if route.RateLimit != nil {
+				rps = int(route.RateLimit.RequestsPerSecond)
+				burst = int(route.RateLimit.Burst)
+			}
+			res, err := rateLimiter.Allow(r.Context(), claims.Subject, route.RouteID, rps, burst)
+			if err != nil {
+				if ac != nil {
+					ac.SetDecision("deny", "DEPENDENCY_OUTAGE_REDIS")
+					ac.SetErrorCode("DEPENDENCY_OUTAGE_REDIS")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusServiceUnavailable,
+					"Service Unavailable",
+					"Authorization dependency check unavailable; failing closed.",
+					"https://aegis.local/errors/dependency-unavailable",
+					reqID,
+				)
+				return
+			}
+			if !res.Allowed {
+				retrySec := int(math.Ceil(res.RetryAfter.Seconds()))
+				if retrySec <= 0 {
+					retrySec = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySec))
+				if ac != nil {
+					ac.SetDecision("deny", "RATE_LIMIT_EXCEEDED")
+					ac.SetErrorCode("RATE_LIMIT_EXCEEDED")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusTooManyRequests,
+					"Too Many Requests",
+					"Rate limit exceeded",
+					"https://aegis.local/errors/rate-limit-exceeded",
+					reqID,
+				)
+				return
+			}
 		}
 
 		// 4. In-Memory OPA Policy Evaluation against Precompiled Query (POL-01, POL-02)
@@ -461,6 +559,41 @@ func main() {
 			ac.SetCanonicalPath(canonicalPath)
 		}
 
+		// 2b. Ephemeral Redis Principal Quarantine Check (REV-03, REV-04, Invariant 1)
+		if revStore != nil {
+			revoked, reason, err := revStore.CheckRevocation(r.Context(), spiffeID, "")
+			if err != nil {
+				if ac != nil {
+					ac.SetDecision("deny", "DEPENDENCY_OUTAGE_REDIS")
+					ac.SetErrorCode("DEPENDENCY_OUTAGE_REDIS")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusServiceUnavailable,
+					"Service Unavailable",
+					"Authorization dependency check unavailable; failing closed.",
+					"https://aegis.local/errors/dependency-unavailable",
+					reqID,
+				)
+				return
+			}
+			if revoked {
+				if ac != nil {
+					ac.SetDecision("deny", reason)
+					ac.SetErrorCode(reason)
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusForbidden,
+					"Forbidden",
+					reason,
+					"https://aegis.local/errors/forbidden",
+					reqID,
+				)
+				return
+			}
+		}
+
 		// 3. Deterministic Route Resolution against Active Snapshot (GW-03, Invariant 9)
 		route, err := state.Router.Match(r.Method, canonicalPath)
 		if err != nil {
@@ -475,6 +608,51 @@ func main() {
 
 		if ac != nil {
 			ac.SetRoute(route.RouteID, route.ServiceID)
+		}
+
+		// 3b. Distributed GCRA Token Bucket Rate Limiting (REV-01, ADR-0005)
+		if rateLimiter != nil {
+			var rps, burst int
+			if route.RateLimit != nil {
+				rps = int(route.RateLimit.RequestsPerSecond)
+				burst = int(route.RateLimit.Burst)
+			}
+			res, err := rateLimiter.Allow(r.Context(), spiffeID, route.RouteID, rps, burst)
+			if err != nil {
+				if ac != nil {
+					ac.SetDecision("deny", "DEPENDENCY_OUTAGE_REDIS")
+					ac.SetErrorCode("DEPENDENCY_OUTAGE_REDIS")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusServiceUnavailable,
+					"Service Unavailable",
+					"Authorization dependency check unavailable; failing closed.",
+					"https://aegis.local/errors/dependency-unavailable",
+					reqID,
+				)
+				return
+			}
+			if !res.Allowed {
+				retrySec := int(math.Ceil(res.RetryAfter.Seconds()))
+				if retrySec <= 0 {
+					retrySec = 1
+				}
+				w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySec))
+				if ac != nil {
+					ac.SetDecision("deny", "RATE_LIMIT_EXCEEDED")
+					ac.SetErrorCode("RATE_LIMIT_EXCEEDED")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusTooManyRequests,
+					"Too Many Requests",
+					"Rate limit exceeded",
+					"https://aegis.local/errors/rate-limit-exceeded",
+					reqID,
+				)
+				return
+			}
 		}
 
 		// 4. In-Memory OPA Policy Evaluation against Precompiled Query
@@ -579,6 +757,9 @@ func main() {
 
 	if err := dualServer.Shutdown(ctx); err != nil {
 		log.Printf("Error during dual server shutdown: %v", err)
+	}
+	if rdb != nil {
+		_ = rdb.Close()
 	}
 	log.Println("Aegis Gateway terminated")
 }

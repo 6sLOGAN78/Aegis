@@ -39,8 +39,12 @@ func NewReverseProxyWithMTLS(
 	assertionJWT string,
 	transport *http.Transport,
 ) *httputil.ReverseProxy {
+	var rt http.RoundTripper = transport
+	if transport == nil {
+		rt = http.DefaultTransport
+	}
 	return &httputil.ReverseProxy{
-		Transport: transport,
+		Transport: rt,
 		Rewrite: func(pr *httputil.ProxyRequest) {
 			pr.SetURL(targetURL)
 			pr.Out.URL.Path = canonicalPath
