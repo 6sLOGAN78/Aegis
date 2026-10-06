@@ -1,0 +1,47 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "title": "AegisPolicyInput",
+  "type": "object",
+  "required": ["principal", "resource", "request", "context", "snapshot_version"],
+  "additionalProperties": false,
+  "properties": {
+    "principal": {
+      "type": "object",
+      "required": ["id", "kind", "roles"],
+      "additionalProperties": false,
+      "properties": {
+        "id": { "type": "string", "minLength": 1 },
+        "kind": { "type": "string", "enum": ["user", "workload", "anonymous"] },
+        "roles": { "type": "array", "items": { "type": "string" } }
+      }
+    },
+    "resource": {
+      "type": "object",
+      "required": ["service", "route"],
+      "additionalProperties": false,
+      "properties": {
+        "service": { "type": "string", "enum": ["orders", "payments", "admin"] },
+        "route": { "type": "string", "minLength": 1 }
+      }
+    },
+    "request": {
+      "type": "object",
+      "required": ["method", "path"],
+      "additionalProperties": false,
+      "properties": {
+        "method": { "type": "string", "enum": ["GET", "POST", "PUT", "DELETE", "PATCH", "HEAD", "OPTIONS"] },
+        "path": { "type": "string", "pattern": "^/api/.*$" }
+      }
+    },
+    "context": {
+      "type": "object",
+      "required": ["risk_score", "risk_state"],
+      "additionalProperties": false,
+      "properties": {
+        "risk_score": { "type": "integer", "minimum": 0, "maximum": 100 },
+        "risk_state": { "type": "string", "enum": ["available", "degraded", "unavailable"] }
+      }
+    },
+    "snapshot_version": { "type": "integer", "minimum": 1 }
+  }
+}

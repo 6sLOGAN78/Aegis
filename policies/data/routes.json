@@ -1,0 +1,87 @@
+[
+  {
+    "route_id": "orders.list",
+    "service_id": "orders",
+    "http_method": "GET",
+    "path_template": "/api/orders",
+    "upstream_url": "https://orders:8081",
+    "upstream_spiffe_id": "spiffe://aegis.local/service/orders",
+    "rate_limit": {
+      "requests_per_second": 100,
+      "burst": 20
+    },
+    "timeout": {
+      "request_timeout_ms": 15000,
+      "upstream_timeout_ms": 5000
+    },
+    "requires_workload_mtls": false
+  },
+  {
+    "route_id": "payments.get",
+    "service_id": "payments",
+    "http_method": "GET",
+    "path_template": "/api/payments",
+    "upstream_url": "https://payments:8082",
+    "upstream_spiffe_id": "spiffe://aegis.local/service/payments",
+    "rate_limit": {
+      "requests_per_second": 50,
+      "burst": 10
+    },
+    "timeout": {
+      "request_timeout_ms": 15000,
+      "upstream_timeout_ms": 5000
+    },
+    "requires_workload_mtls": false
+  },
+  {
+    "route_id": "payments.create",
+    "service_id": "payments",
+    "http_method": "POST",
+    "path_template": "/api/payments",
+    "upstream_url": "https://payments:8082",
+    "upstream_spiffe_id": "spiffe://aegis.local/service/payments",
+    "rate_limit": {
+      "requests_per_second": 20,
+      "burst": 5
+    },
+    "timeout": {
+      "request_timeout_ms": 15000,
+      "upstream_timeout_ms": 5000
+    },
+    "requires_workload_mtls": false
+  },
+  {
+    "route_id": "admin.users.list",
+    "service_id": "admin",
+    "http_method": "GET",
+    "path_template": "/api/admin/users",
+    "upstream_url": "https://admin:8083",
+    "upstream_spiffe_id": "spiffe://aegis.local/service/admin",
+    "rate_limit": {
+      "requests_per_second": 10,
+      "burst": 2
+    },
+    "timeout": {
+      "request_timeout_ms": 15000,
+      "upstream_timeout_ms": 5000
+    },
+    "requires_workload_mtls": false
+  },
+  {
+    "route_id": "admin.users.manage",
+    "service_id": "admin",
+    "http_method": "POST",
+    "path_template": "/api/admin/users",
+    "upstream_url": "https://admin:8083",
+    "upstream_spiffe_id": "spiffe://aegis.local/service/admin",
+    "rate_limit": {
+      "requests_per_second": 5,
+      "burst": 1
+    },
+    "timeout": {
+      "request_timeout_ms": 15000,
+      "upstream_timeout_ms": 5000
+    },
+    "requires_workload_mtls": false
+  }
+]

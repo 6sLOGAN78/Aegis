@@ -1,0 +1,14 @@
+{
+  "developer": [
+    "orders.read",
+    "payments.read"
+  ],
+  "finance": [
+    "payments.read",
+    "payments.write"
+  ],
+  "application-admin": [
+    "admin.users.read",
+    "admin.users.write"
+  ]
+}
