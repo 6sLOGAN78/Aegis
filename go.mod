@@ -14,7 +14,6 @@ require (
 )
 
 require (
-	github.com/google/uuid v1.6.0 // indirect
 	go.opentelemetry.io/otel v1.46.0 // indirect
 	go.opentelemetry.io/otel/sdk/metric v1.46.0 // indirect
 	go.yaml.in/yaml/v3 v3.0.5 // indirect
