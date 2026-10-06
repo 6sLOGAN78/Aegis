@@ -6,8 +6,18 @@ import (
 	"net/url"
 	"time"
 
+	"github.com/jackc/pgx/v5"
+	"github.com/jackc/pgx/v5/pgconn"
 	"github.com/jackc/pgx/v5/pgxpool"
 )
+
+// DBPool is a common interface satisfied by both *pgxpool.Pool and pgxmock.PgxPoolIface.
+type DBPool interface {
+	Exec(ctx context.Context, sql string, arguments ...any) (commandTag pgconn.CommandTag, err error)
+	Query(ctx context.Context, sql string, args ...any) (pgx.Rows, error)
+	QueryRow(ctx context.Context, sql string, args ...any) pgx.Row
+	Close()
+}
 
 // PoolConfig contains connection pooling and authentication configuration
 // for PostgreSQL database connections.
