@@ -6,13 +6,23 @@ services:
       target: gateway
     ports:
       - "8080:8080"
+      - "9443:9443"
     environment:
       - AEGIS_PORT=8080
-      - AEGIS_UPSTREAM_SCHEME=http
+      - AEGIS_WORKLOAD_PORT=9443
+      - AEGIS_TLS_CERT_PATH=/certs/gateway-server.crt
+      - AEGIS_TLS_KEY_PATH=/certs/gateway-server.key
+      - AEGIS_CLIENT_CERT_PATH=/certs/gateway-client.crt
+      - AEGIS_CLIENT_KEY_PATH=/certs/gateway-client.key
+      - AEGIS_WORKLOAD_CA_PATH=/certs/root-ca.crt
+      - AEGIS_ASSERTION_PRIVATE_KEY_PATH=/certs/assertion-ed25519.key
+      - AEGIS_UPSTREAM_SCHEME=https
       - AEGIS_ROUTES_PATH=policies/data/routes.json
       - AEGIS_POLICY_PATH=policies/rego/authz.rego
       - AEGIS_ISSUER=aegis-issuer
       - AEGIS_AUDIENCE=aegis-gateway
+    volumes:
+      - ../certs:/certs:ro
     networks:
       - aegis-internal
     depends_on:
@@ -40,8 +50,14 @@ services:
       target: orders
     environment:
       - PORT=8081
+      - TLS_CERT_PATH=/certs/orders.crt
+      - TLS_KEY_PATH=/certs/orders.key
+      - CA_CERT_PATH=/certs/root-ca.crt
+      - GATEWAY_ASSERTION_PUBKEY_PATH=/certs/assertion-ed25519.pub
     expose:
       - "8081"
+    volumes:
+      - ../certs:/certs:ro
     networks:
       - aegis-internal
 
@@ -52,8 +68,14 @@ services:
       target: payments
     environment:
       - PORT=8082
+      - TLS_CERT_PATH=/certs/payments.crt
+      - TLS_KEY_PATH=/certs/payments.key
+      - CA_CERT_PATH=/certs/root-ca.crt
+      - GATEWAY_ASSERTION_PUBKEY_PATH=/certs/assertion-ed25519.pub
     expose:
       - "8082"
+    volumes:
+      - ../certs:/certs:ro
     networks:
       - aegis-internal
 
@@ -64,8 +86,14 @@ services:
       target: admin
     environment:
       - PORT=8083
+      - TLS_CERT_PATH=/certs/admin.crt
+      - TLS_KEY_PATH=/certs/admin.key
+      - CA_CERT_PATH=/certs/root-ca.crt
+      - GATEWAY_ASSERTION_PUBKEY_PATH=/certs/assertion-ed25519.pub
     expose:
       - "8083"
+    volumes:
+      - ../certs:/certs:ro
     networks:
       - aegis-internal
 

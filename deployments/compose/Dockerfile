@@ -15,10 +15,11 @@ RUN CGO_ENABLED=0 GOOS=linux go build -ldflags="-s -w" -o /bin/admin ./cmd/servi
 
 # Target: gateway
 FROM alpine:3.21 AS gateway
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /bin/gateway /usr/local/bin/gateway
 COPY policies ./policies
-EXPOSE 8080
+EXPOSE 8080 9443
 ENTRYPOINT ["/usr/local/bin/gateway"]
 
 # Target: demo-issuer
@@ -30,6 +31,7 @@ ENTRYPOINT ["/usr/local/bin/demo-issuer"]
 
 # Target: orders
 FROM alpine:3.21 AS orders
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /bin/orders /usr/local/bin/orders
 EXPOSE 8081
@@ -37,6 +39,7 @@ ENTRYPOINT ["/usr/local/bin/orders"]
 
 # Target: payments
 FROM alpine:3.21 AS payments
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /bin/payments /usr/local/bin/payments
 EXPOSE 8082
@@ -44,6 +47,7 @@ ENTRYPOINT ["/usr/local/bin/payments"]
 
 # Target: admin
 FROM alpine:3.21 AS admin
+RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /bin/admin /usr/local/bin/admin
 EXPOSE 8083

@@ -86,6 +86,8 @@ func main() {
 			}
 			if len(keyBytes) == ed25519.PrivateKeySize {
 				assertionPrivKey = ed25519.PrivateKey(keyBytes)
+			} else if b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(keyBytes))); err == nil && len(b) == ed25519.PrivateKeySize {
+				assertionPrivKey = ed25519.PrivateKey(b)
 			} else if parsedKey, err := x509.ParsePKCS8PrivateKey(keyBytes); err == nil {
 				if edKey, ok := parsedKey.(ed25519.PrivateKey); ok {
 					assertionPrivKey = edKey
