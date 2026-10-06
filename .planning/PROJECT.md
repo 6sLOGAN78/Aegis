@@ -17,12 +17,12 @@ Default-deny, fail-closed authorization and workload authentication where invali
 - [x] User authentication with short-lived JWTs (demo issuer for dev) — *Validated in Phase 1 (AUTH-01, AUTH-04)*
 - [x] Enforced bypass prevention: backends have no exposed ports in isolated Docker network — *Validated in Phase 1 (BYP-01)*
 - [x] Automated security and negative test suite (path traversal, header spoofing, RBAC, JWT negative tests, race detection) — *Validated in Phase 1 (REV-02, AUD-04, E2E)*
+- [x] Workload authentication using dedicated mTLS listener with URI SAN identities (`spiffe://aegis.local/...`) — *Validated in Phase 2 (GW-05, AUTH-02, AUTH-03)*
+- [x] Signed short-lived backend assertions (`aegis-gateway` issuer) from gateway to backends over mutual TLS — *Validated in Phase 2 (AUTH-05, GW-05)*
+- [x] Enforced bypass prevention via backend mTLS and signed assertion verification — *Validated in Phase 2 (BYP-02, BYP-03)*
 
 ### Active
 
-- [ ] Workload authentication using dedicated mTLS listener with URI SAN identities (`spiffe://aegis.local/...`)
-- [ ] Signed short-lived backend assertions (`aegis-gateway` issuer) from gateway to backends over mutual TLS
-- [ ] Enforced bypass prevention via backend mTLS and signed assertion verification
 - [ ] Control plane for route/policy versioning, schema validation, policy simulation, and atomic snapshot distribution
 - [ ] Monotonic signed configuration snapshots distributed to replicas over gRPC with bounded freshness leases (10s renew, 60s timeout)
 - [ ] Redis-backed atomic rate limiting and sub-5-second principal quarantine / token revocation
@@ -58,11 +58,11 @@ Default-deny, fail-closed authorization and workload authentication where invali
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Embedded OPA engine over external OPA daemon | Guarantees hot-path in-memory sub-2ms evaluation without network hop or external daemon failure | Validated (~57µs eval) |
-| Separate control plane with signed snapshots over direct DB lookups | Gateway hot-path must not depend synchronously on PostgreSQL; immutable memory snapshots ensure atomic updates | — Pending |
-| Dedicated mTLS listener for workloads | Avoids ambiguous principal selection between user bearer tokens and client certificates | — Pending |
-| Signed backend assertions over raw bearer forwarding | Backends verify caller context originates from gateway without exposing user tokens downstream | — Pending |
-| Durable local disk spool before forwarding | Prevents loss of audit records during database outages while admitting requests within spool capacity | — Pending |
-| Redis for rate limiting and revocation only (not policy truth) | Retains high-speed shared counters while keeping authoritative policy versioning in PostgreSQL snapshots | — Pending |
+| Separate control plane with signed snapshots over direct DB lookups | Gateway hot-path must not depend synchronously on PostgreSQL; immutable memory snapshots ensure atomic updates | — Pending (Phase 3) |
+| Dedicated mTLS listener for workloads | Avoids ambiguous principal selection between user bearer tokens and client certificates | Validated in Phase 2 |
+| Signed backend assertions over raw bearer forwarding | Backends verify caller context originates from gateway without exposing user tokens downstream | Validated in Phase 2 |
+| Durable local disk spool before forwarding | Prevents loss of audit records during database outages while admitting requests within spool capacity | — Pending (Phase 3) |
+| Redis for rate limiting and revocation only (not policy truth) | Retains high-speed shared counters while keeping authoritative policy versioning in PostgreSQL snapshots | — Pending (Phase 3) |
 
 ## Evolution
 
@@ -82,4 +82,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-06 after Phase 1 completion*
+*Last updated: 2026-10-06 after Phase 2 completion*
