@@ -93,9 +93,20 @@ Plans:
 
 Plans:
 
+**Wave 1**
+
 - [ ] 02-01: Local PKI generation scripts and dedicated workload mTLS listener (:9443) with SPIFFE URI SAN parsing
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 02-02: Short-lived signed backend assertion JWT generator (aegis-gateway) and gateway client mTLS transport
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 02-03: Reusable backend authentication middleware and Docker network isolation (zero published host ports)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
 - [ ] 02-04: End-to-end workload authentication and bypass prevention validation tests
 
 ---
