@@ -120,6 +120,61 @@ func (ac *AuditContext) SetSnapshotVersion(v int64) {
 	ac.SnapshotVersion = v
 }
 
+// ToCompletionEvent thread-safely extracts context fields into a CompletionEvent
+// prior to upstream dispatch for pre-forward WAL spooling (AUD-01, Invariant 10).
+func (ac *AuditContext) ToCompletionEvent(method, clientIP string, snapshotVersion int64) *CompletionEvent {
+	if ac == nil {
+		return nil
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+
+	decision := ac.Decision
+	if decision == "" {
+		decision = "deny"
+	}
+
+	reasonCode := ac.ReasonCode
+	if reasonCode == "" {
+		if decision == "allow" {
+			reasonCode = "ALLOWED"
+		} else {
+			reasonCode = "UNKNOWN_REASON"
+		}
+	}
+
+	snapVer := snapshotVersion
+	if snapVer <= 0 && ac.SnapshotVersion > 0 {
+		snapVer = ac.SnapshotVersion
+	}
+
+	var roles []string
+	if ac.PrincipalRoles != nil {
+		roles = make([]string, len(ac.PrincipalRoles))
+		copy(roles, ac.PrincipalRoles)
+	} else {
+		roles = []string{}
+	}
+
+	return &CompletionEvent{
+		EventID:         uuid.NewString(),
+		Timestamp:       time.Now().UTC(),
+		RequestID:       ac.RequestID,
+		PrincipalID:     ac.PrincipalID,
+		PrincipalKind:   ac.PrincipalKind,
+		PrincipalRoles:  roles,
+		ClientIP:        clientIP,
+		HTTPMethod:      method,
+		CanonicalPath:   ac.CanonicalPath,
+		RouteID:         ac.RouteID,
+		ServiceID:       ac.ServiceID,
+		Decision:        decision,
+		ReasonCode:      reasonCode,
+		SnapshotVersion: snapVer,
+		ErrorCode:       ac.ErrorCode,
+	}
+}
+
 // Logger wraps a structured log/slog.Logger writing JSON audit records.
 type Logger struct {
 	logger *slog.Logger

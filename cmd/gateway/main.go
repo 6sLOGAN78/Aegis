@@ -105,6 +105,17 @@ func main() {
 	tokenValidator := identity.NewTokenValidator(issuer, audience, pubKey)
 	auditLogger := audit.NewLogger(nil)
 
+	spoolCfg := audit.DiskSpoolConfig{
+		SpoolDir: cfg.SpoolDir,
+	}
+	if cfg.SpoolMaxBytes > 0 {
+		spoolCfg.VolumeQuotaBytes = cfg.SpoolMaxBytes
+	}
+	diskSpool, err := audit.NewDiskSpool(spoolCfg)
+	if err != nil {
+		log.Fatalf("Failed to initialize audit disk spool: %v", err)
+	}
+
 	// Initialize Assertion Signing Key
 	var assertionPrivKey ed25519.PrivateKey
 	if cfg.AssertionPrivateKeyPath != "" {
@@ -457,6 +468,67 @@ func main() {
 			ac.SetDecision("allow", allowReason)
 		}
 
+		// 4b. Pre-Forward Append-Only WAL with Synchronous fsync (AUD-01, AUD-02, Invariant 10)
+		var clientIP string
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+			clientIP = host
+		} else {
+			clientIP = r.RemoteAddr
+		}
+		var preForwardEvent *audit.CompletionEvent
+		if ac != nil {
+			preForwardEvent = ac.ToCompletionEvent(r.Method, clientIP, state.Version)
+		} else {
+			preForwardEvent = &audit.CompletionEvent{
+				EventID:         uuid.NewString(),
+				Timestamp:       time.Now().UTC(),
+				RequestID:       reqID,
+				PrincipalID:     claims.Subject,
+				PrincipalKind:   "user",
+				PrincipalRoles:  claims.Roles,
+				ClientIP:        clientIP,
+				HTTPMethod:      r.Method,
+				CanonicalPath:   canonicalPath,
+				RouteID:         route.RouteID,
+				ServiceID:       route.ServiceID,
+				Decision:        "allow",
+				ReasonCode:      "ALLOWED",
+				SnapshotVersion: state.Version,
+			}
+		}
+
+		if err := diskSpool.AppendPreForward(preForwardEvent); err != nil {
+			if errors.Is(err, audit.ErrSpoolSaturated) {
+				if ac != nil {
+					ac.SetDecision("deny", "AUDIT_SPOOL_SATURATED")
+					ac.SetErrorCode("AUDIT_SPOOL_SATURATED")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusServiceUnavailable,
+					"Service Unavailable",
+					"Audit spool saturated; halting admission",
+					"https://aegis.local/errors/spool-saturated",
+					reqID,
+				)
+				return
+			}
+			log.Printf("Pre-forward audit WAL append failed: %v", err)
+			if ac != nil {
+				ac.SetDecision("deny", "AUDIT_SPOOL_WRITE_ERROR")
+				ac.SetErrorCode("INTERNAL_ERROR")
+			}
+			proxy.WriteProblemDetails(
+				w,
+				http.StatusInternalServerError,
+				"Internal Server Error",
+				"Durable audit logging failed",
+				"https://aegis.local/errors/internal-error",
+				reqID,
+			)
+			return
+		}
+
 		// 5. Mint Backend Assertion Token (AUTH-05)
 		assertionToken, err := assertionMinter.MintAssertion(
 			claims.Subject,
@@ -704,6 +776,67 @@ func main() {
 			ac.SetDecision("allow", allowReason)
 		}
 
+		// 4b. Pre-Forward Append-Only WAL with Synchronous fsync (AUD-01, AUD-02, Invariant 10)
+		var clientIP string
+		if host, _, err := net.SplitHostPort(r.RemoteAddr); err == nil && host != "" {
+			clientIP = host
+		} else {
+			clientIP = r.RemoteAddr
+		}
+		var preForwardEvent *audit.CompletionEvent
+		if ac != nil {
+			preForwardEvent = ac.ToCompletionEvent(r.Method, clientIP, state.Version)
+		} else {
+			preForwardEvent = &audit.CompletionEvent{
+				EventID:         uuid.NewString(),
+				Timestamp:       time.Now().UTC(),
+				RequestID:       reqID,
+				PrincipalID:     spiffeID,
+				PrincipalKind:   "workload",
+				PrincipalRoles:  []string{"workload"},
+				ClientIP:        clientIP,
+				HTTPMethod:      r.Method,
+				CanonicalPath:   canonicalPath,
+				RouteID:         route.RouteID,
+				ServiceID:       route.ServiceID,
+				Decision:        "allow",
+				ReasonCode:      "ALLOWED",
+				SnapshotVersion: state.Version,
+			}
+		}
+
+		if err := diskSpool.AppendPreForward(preForwardEvent); err != nil {
+			if errors.Is(err, audit.ErrSpoolSaturated) {
+				if ac != nil {
+					ac.SetDecision("deny", "AUDIT_SPOOL_SATURATED")
+					ac.SetErrorCode("AUDIT_SPOOL_SATURATED")
+				}
+				proxy.WriteProblemDetails(
+					w,
+					http.StatusServiceUnavailable,
+					"Service Unavailable",
+					"Audit spool saturated; halting admission",
+					"https://aegis.local/errors/spool-saturated",
+					reqID,
+				)
+				return
+			}
+			log.Printf("Pre-forward audit WAL append failed for workload: %v", err)
+			if ac != nil {
+				ac.SetDecision("deny", "AUDIT_SPOOL_WRITE_ERROR")
+				ac.SetErrorCode("INTERNAL_ERROR")
+			}
+			proxy.WriteProblemDetails(
+				w,
+				http.StatusInternalServerError,
+				"Internal Server Error",
+				"Durable audit logging failed",
+				"https://aegis.local/errors/internal-error",
+				reqID,
+			)
+			return
+		}
+
 		// 5. Mint Backend Assertion JWT (AUTH-05)
 		assertionJWT, err := assertionMinter.MintAssertion(
 			spiffeID,
@@ -760,6 +893,9 @@ func main() {
 	}
 	if rdb != nil {
 		_ = rdb.Close()
+	}
+	if err := diskSpool.Close(); err != nil {
+		log.Printf("Error closing disk spool: %v", err)
 	}
 	log.Println("Aegis Gateway terminated")
 }
