@@ -17,7 +17,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6.
 
 - [x] **Phase 0: Architecture Contracts, Schemas & Threat Model** - Authoritative ADRs, OpenAPI/Protobuf contracts, Rego input schemas, and zero-trust threat models (completed 2026-10-06)
 - [x] **Phase 1: MVP Secure Vertical Slice** - Go gateway reverse proxy, local demo JWT issuer, embedded OPA engine, 3 private microservices, and Docker Compose MVP (completed 2026-10-06)
-- [ ] **Phase 2: Workload Identity & Enforced Bypass Prevention** - Dedicated workload mTLS listener (:9443), SPIFFE URI SANs, backend mTLS, signed assertion JWTs, and direct bypass elimination
+- [x] **Phase 2: Workload Identity & Enforced Bypass Prevention** - Dedicated workload mTLS listener (:9443), SPIFFE URI SANs, backend mTLS, signed assertion JWTs, and direct bypass elimination (completed 2026-10-06)
 - [ ] **Phase 3: Control Plane, Snapshot Streaming & Durable State** - PostgreSQL persistence, signed Ed25519 snapshots, gRPC streaming with 10s freshness leases, Redis rate limits/revocation, and local disk WAL spool with async worker
 - [ ] **Phase 4: Operator Experience & Telemetry** - React/TypeScript dashboard, Monaco Rego editor, dry-run policy simulator, replica convergence tracking, /control/v1 REST APIs, and Prometheus metrics
 - [ ] **Phase 5: Distributed Resilience, Chaos & Benchmark Evidence** - 3 gateway replicas behind load balancer, 30s graceful drain, gRPC reconnect jitter, chaos fault injection tests, and reproducible k6 benchmarks
@@ -107,7 +107,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 02-04: End-to-end workload authentication and bypass prevention validation tests
+- [x] 02-04: End-to-end workload authentication and bypass prevention validation tests
 
 ---
 
@@ -208,7 +208,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 |-------|----------------|--------|-----------|
 | 0. Architecture Contracts, Schemas & Threat Model | 3/3 | Complete   | 2026-10-06 |
 | 1. MVP Secure Vertical Slice | 4/4 | Complete    | 2026-10-06 |
-| 2. Workload Identity & Enforced Bypass Prevention | 3/4 | In Progress|  |
+| 2. Workload Identity & Enforced Bypass Prevention | 4/4 | Complete   | 2026-10-06 |
 | 3. Control Plane, Snapshot Streaming & Durable State | 0/5 | Not started | - |
 | 4. Operator Experience & Telemetry | 0/3 | Not started | - |
 | 5. Distributed Resilience, Chaos & Benchmark Evidence | 0/3 | Not started | - |
