@@ -18,8 +18,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Authentication & Identity (AUTH)
 
 - [x] **AUTH-01**: User authentication validates short-lived signed JWT bearer tokens against pinned issuer, audience, and algorithm allowlist (rejecting `none` and symmetric keys)
-- [ ] **AUTH-02**: Dedicated mTLS listener (`:8443`) terminates workload connections and extracts authenticated SPIFFE URI SAN identities (`spiffe://aegis.local/workload/...`)
-- [ ] **AUTH-03**: Workload mTLS listener rejects user bearer credentials to prevent ambiguous principal selection
+- [x] **AUTH-02**: Dedicated mTLS listener (`:8443`) terminates workload connections and extracts authenticated SPIFFE URI SAN identities (`spiffe://aegis.local/workload/...`)
+- [x] **AUTH-03**: Workload mTLS listener rejects user bearer credentials to prevent ambiguous principal selection
 - [x] **AUTH-04**: Local development demo JWT issuer with seeded credentials (`developer`, `finance`, `application-admin`) and login throttling
 - [ ] **AUTH-05**: Gateway mints and signs short-lived (<=15s) backend assertion JWTs (`X-Aegis-Assertion`) bound to target service, method, canonical path, and request ID
 
@@ -113,8 +113,8 @@ Which phases cover which requirements. Populated during roadmap creation.
 | GW-04 | Phase 1 | Complete |
 | GW-05 | Phase 2 | Pending |
 | AUTH-01 | Phase 1 | Complete |
-| AUTH-02 | Phase 2 | Pending |
-| AUTH-03 | Phase 2 | Pending |
+| AUTH-02 | Phase 2 | Complete |
+| AUTH-03 | Phase 2 | Complete |
 | AUTH-04 | Phase 1 | Complete |
 | AUTH-05 | Phase 2 | Pending |
 | POL-01 | Phase 1 | Complete |
