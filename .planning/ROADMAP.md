@@ -127,7 +127,7 @@ Plans:
 
 Plans:
 
-- [ ] 03-01: PostgreSQL relational schemas, goose migrations, and control plane snapshot repository
+- [x] 03-01: PostgreSQL relational schemas, goose migrations, and control plane snapshot repository
 - [ ] 03-02: Monotonic Ed25519 snapshot signer, gRPC snapshot streaming, 10s freshness lease, and 60s fail-closed timeout
 - [ ] 03-03: Redis atomic token-bucket rate limiting and <5s JTI revocation / principal quarantine with fail-closed semantics
 - [ ] 03-04: Local append-only disk WAL spool with pre-forward fsync, 90% saturation gate, and async audit worker
