@@ -9,26 +9,26 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Core Gateway & Reverse Proxy (GW)
 
-- [ ] **GW-01**: Gateway enforces HTTP listener request limits (16 KiB headers, 1 MiB body) and assigns cryptographically random UUID request IDs
-- [ ] **GW-02**: Strict host and path validation rejects traversal (`..`), encoded slashes (`%2f`), NUL bytes, and duplicate slashes without auto-repair (400 Bad Request)
-- [ ] **GW-03**: Deterministic upstream route resolution binds incoming HTTP method and canonical path template to configured private backend services
-- [ ] **GW-04**: Ingress header sanitization strips untrusted `X-Aegis-*`, `Forwarded`, `X-Forwarded-*`, and RFC 7230 hop-by-hop headers
+- [x] **GW-01**: Gateway enforces HTTP listener request limits (16 KiB headers, 1 MiB body) and assigns cryptographically random UUID request IDs
+- [x] **GW-02**: Strict host and path validation rejects traversal (`..`), encoded slashes (`%2f`), NUL bytes, and duplicate slashes without auto-repair (400 Bad Request)
+- [x] **GW-03**: Deterministic upstream route resolution binds incoming HTTP method and canonical path template to configured private backend services
+- [x] **GW-04**: Ingress header sanitization strips untrusted `X-Aegis-*`, `Forwarded`, `X-Forwarded-*`, and RFC 7230 hop-by-hop headers
 - [ ] **GW-05**: Gateway reverse proxy forwards validated requests over verified mutual TLS to private backends using modern Go `Rewrite` hooks
 
 ### Authentication & Identity (AUTH)
 
-- [ ] **AUTH-01**: User authentication validates short-lived signed JWT bearer tokens against pinned issuer, audience, and algorithm allowlist (rejecting `none` and symmetric keys)
+- [x] **AUTH-01**: User authentication validates short-lived signed JWT bearer tokens against pinned issuer, audience, and algorithm allowlist (rejecting `none` and symmetric keys)
 - [ ] **AUTH-02**: Dedicated mTLS listener (`:8443`) terminates workload connections and extracts authenticated SPIFFE URI SAN identities (`spiffe://aegis.local/workload/...`)
 - [ ] **AUTH-03**: Workload mTLS listener rejects user bearer credentials to prevent ambiguous principal selection
-- [ ] **AUTH-04**: Local development demo JWT issuer with seeded credentials (`developer`, `finance`, `application-admin`) and login throttling
+- [x] **AUTH-04**: Local development demo JWT issuer with seeded credentials (`developer`, `finance`, `application-admin`) and login throttling
 - [ ] **AUTH-05**: Gateway mints and signs short-lived (<=15s) backend assertion JWTs (`X-Aegis-Assertion`) bound to target service, method, canonical path, and request ID
 
 ### Policy Engine & Authorization (POL)
 
-- [ ] **POL-01**: Embedded OPA/Rego policy engine evaluates typed request context in-memory with sub-2ms latency with zero network calls
-- [ ] **POL-02**: Strict default-deny authorization where unmapped routes or evaluation errors fail closed (explicit deny supersedes allow)
-- [ ] **POL-03**: Core RBAC and workload authorization matrix enforces developer, finance, admin, and workload role permissions
-- [ ] **POL-04**: Policies cannot grant access when authentication, revocation, freshness, audit admission, or transport requirements fail
+- [x] **POL-01**: Embedded OPA/Rego policy engine evaluates typed request context in-memory with sub-2ms latency with zero network calls
+- [x] **POL-02**: Strict default-deny authorization where unmapped routes or evaluation errors fail closed (explicit deny supersedes allow)
+- [x] **POL-03**: Core RBAC and workload authorization matrix enforces developer, finance, admin, and workload role permissions
+- [x] **POL-04**: Policies cannot grant access when authentication, revocation, freshness, audit admission, or transport requirements fail
 
 ### Control Plane & Snapshot Distribution (CTRL)
 
@@ -42,7 +42,7 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Rate Limiting, Revocation & Quarantine (REV)
 
 - [ ] **REV-01**: Redis-backed atomic token bucket rate limiting by principal and route (default 100 rps, burst 200)
-- [ ] **REV-02**: Global ingress connection and request concurrency bounds protect unauthenticated traffic before identity resolution
+- [x] **REV-02**: Global ingress connection and request concurrency bounds protect unauthenticated traffic before identity resolution
 - [ ] **REV-03**: Ephemeral Redis token `jti` revocation and principal quarantine takes effect across all replicas within 5 seconds
 - [ ] **REV-04**: Revocation check timeout (200ms) fails closed (503) on Redis unavailability with no permissive fallback
 
@@ -51,11 +51,11 @@ Requirements for initial release. Each maps to roadmap phases.
 - [ ] **AUD-01**: Gateway appends pre-forward authorization decision records to a local append-only disk WAL with `fsync` before forwarding permitted requests
 - [ ] **AUD-02**: Spool saturation safety gate stops admitting permitted requests at 90% disk capacity (503 response)
 - [ ] **AUD-03**: Asynchronous audit worker delivers spooled records to PostgreSQL with at-least-once batching and deduplication
-- [ ] **AUD-04**: Completion audit events record backend HTTP status, request duration, and error codes
+- [x] **AUD-04**: Completion audit events record backend HTTP status, request duration, and error codes
 
 ### Bypass Prevention & Backend Protection (BYP)
 
-- [ ] **BYP-01**: Demo microservices (`orders`, `payments`, `admin`) publish no external ports and run on private networks
+- [x] **BYP-01**: Demo microservices (`orders`, `payments`, `admin`) publish no external ports and run on private networks
 - [ ] **BYP-02**: Backend middleware enforces mTLS and validates gateway identity and signed `X-Aegis-Assertion` JWT
 - [ ] **BYP-03**: Direct calls from external clients or peer workloads to protected endpoints fail immediately (401/403)
 
@@ -107,20 +107,20 @@ Which phases cover which requirements. Populated during roadmap creation.
 
 | Requirement | Phase | Status |
 |-------------|-------|--------|
-| GW-01 | Phase 1 | Pending |
-| GW-02 | Phase 1 | Pending |
-| GW-03 | Phase 1 | Pending |
-| GW-04 | Phase 1 | Pending |
+| GW-01 | Phase 1 | Complete |
+| GW-02 | Phase 1 | Complete |
+| GW-03 | Phase 1 | Complete |
+| GW-04 | Phase 1 | Complete |
 | GW-05 | Phase 2 | Pending |
-| AUTH-01 | Phase 1 | Pending |
+| AUTH-01 | Phase 1 | Complete |
 | AUTH-02 | Phase 2 | Pending |
 | AUTH-03 | Phase 2 | Pending |
-| AUTH-04 | Phase 1 | Pending |
+| AUTH-04 | Phase 1 | Complete |
 | AUTH-05 | Phase 2 | Pending |
-| POL-01 | Phase 1 | Pending |
-| POL-02 | Phase 1 | Pending |
-| POL-03 | Phase 1 | Pending |
-| POL-04 | Phase 1 | Pending |
+| POL-01 | Phase 1 | Complete |
+| POL-02 | Phase 1 | Complete |
+| POL-03 | Phase 1 | Complete |
+| POL-04 | Phase 1 | Complete |
 | CTRL-01 | Phase 3 | Pending |
 | CTRL-02 | Phase 3 | Pending |
 | CTRL-03 | Phase 3 | Pending |
@@ -128,14 +128,14 @@ Which phases cover which requirements. Populated during roadmap creation.
 | CTRL-05 | Phase 3 | Pending |
 | CTRL-06 | Phase 3 | Pending |
 | REV-01 | Phase 3 | Pending |
-| REV-02 | Phase 1 | Pending |
+| REV-02 | Phase 1 | Complete |
 | REV-03 | Phase 3 | Pending |
 | REV-04 | Phase 3 | Pending |
 | AUD-01 | Phase 3 | Pending |
 | AUD-02 | Phase 3 | Pending |
 | AUD-03 | Phase 3 | Pending |
-| AUD-04 | Phase 1 | Pending |
-| BYP-01 | Phase 1 | Pending |
+| AUD-04 | Phase 1 | Complete |
+| BYP-01 | Phase 1 | Complete |
 | BYP-02 | Phase 2 | Pending |
 | BYP-03 | Phase 2 | Pending |
 | OPS-01 | Phase 4 | Pending |
