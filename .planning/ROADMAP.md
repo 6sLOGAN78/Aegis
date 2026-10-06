@@ -14,7 +14,7 @@ The journey enforces strict default-deny authorization, zero-repair path normali
 
 Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6.
 
-- [ ] **Phase 0: Architecture Contracts, Schemas & Threat Model** - Authoritative ADRs, OpenAPI/Protobuf contracts, Rego input schemas, and zero-trust threat models
+- [x] **Phase 0: Architecture Contracts, Schemas & Threat Model** - Authoritative ADRs, OpenAPI/Protobuf contracts, Rego input schemas, and zero-trust threat models (completed 2026-10-06)
 - [ ] **Phase 1: MVP Secure Vertical Slice** - Go gateway reverse proxy, local demo JWT issuer, embedded OPA engine, 3 private microservices, and Docker Compose MVP
 - [ ] **Phase 2: Workload Identity & Enforced Bypass Prevention** - Dedicated workload mTLS listener (:9443), SPIFFE URI SANs, backend mTLS, signed assertion JWTs, and direct bypass elimination
 - [ ] **Phase 3: Control Plane, Snapshot Streaming & Durable State** - PostgreSQL persistence, signed Ed25519 snapshots, gRPC streaming with 10s freshness leases, Redis rate limits/revocation, and local disk WAL spool with async worker
@@ -38,9 +38,9 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6.
   4. Threat model documents trust boundaries, attacker capabilities, and 12 non-negotiable security invariants with verifiable mitigation mappings.
 
 Plans:
-- [ ] 00-01: Architecture Decision Records (ADRs) and zero-trust threat model documentation
-- [ ] 00-02: OpenAPI 3.0 management specification and Protobuf snapshot distribution schemas
-- [ ] 00-03: Rego typed request input schemas, route definitions, and seed permission matrix
+- [x] 00-01: Architecture Decision Records (ADRs) and zero-trust threat model documentation
+- [x] 00-02: OpenAPI 3.0 management specification and Protobuf snapshot distribution schemas
+- [x] 00-03: Rego typed request input schemas, route definitions, and seed permission matrix
 
 ---
 
@@ -166,7 +166,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
-| 0. Architecture Contracts, Schemas & Threat Model | 0/3 | Not started | - |
+| 0. Architecture Contracts, Schemas & Threat Model | 3/3 | Complete   | 2026-10-06 |
 | 1. MVP Secure Vertical Slice | 0/4 | Not started | - |
 | 2. Workload Identity & Enforced Bypass Prevention | 0/4 | Not started | - |
 | 3. Control Plane, Snapshot Streaming & Durable State | 0/5 | Not started | - |
