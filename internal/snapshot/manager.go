@@ -65,6 +65,16 @@ func (m *Manager) IsLeaseExpired(timeout time.Duration) bool {
 	return time.Since(lastRenewed) > timeout
 }
 
+// LastLeaseRenewedAt returns the timestamp of the last verified lease renewal.
+func (m *Manager) LastLeaseRenewedAt() time.Time {
+	nano := m.lastLeaseRenewedAt.Load()
+	if nano == 0 {
+		return time.Time{}
+	}
+	return time.Unix(0, nano)
+}
+
+
 // ValidateAndActivate validates an incoming snapshot envelope out-of-band, precompiles Rego policies,
 // constructs the new router, and performs a lock-free atomic swap to activate the new configuration.
 func (m *Manager) ValidateAndActivate(ctx context.Context, env *snapshotv1.SnapshotEnvelope) error {

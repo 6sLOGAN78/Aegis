@@ -28,6 +28,7 @@ import (
 	"aegis/internal/ratelimit"
 	"aegis/internal/revocation"
 	"aegis/internal/snapshot"
+	"aegis/internal/telemetry"
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
@@ -115,6 +116,39 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize audit disk spool: %v", err)
 	}
+
+	// Initialize Prometheus Telemetry Registry and Private Metrics Server (DIST-02)
+	metricsPort := os.Getenv("AEGIS_METRICS_PORT")
+	if metricsPort == "" {
+		metricsPort = ":9091"
+	}
+	if !strings.HasPrefix(metricsPort, ":") {
+		metricsPort = ":" + metricsPort
+	}
+	metrics := telemetry.NewMetrics()
+	metricsServer := telemetry.NewServer(metricsPort, metrics)
+	metricsServer.Start()
+	log.Printf("Aegis Gateway private metrics exporter listening on %s", metricsPort)
+
+	// Background metrics gauge updater (active version, lease age, spool utilization)
+	go func() {
+		ticker := time.NewTicker(1 * time.Second)
+		defer ticker.Stop()
+		for {
+			select {
+			case <-streamCtx.Done():
+				return
+			case <-ticker.C:
+				if active := snapManager.Active(); active != nil {
+					metrics.SetActiveSnapshotVersion(active.Version)
+				}
+				if lastRenewed := snapManager.LastLeaseRenewedAt(); !lastRenewed.IsZero() {
+					metrics.SetLeaseAge(time.Since(lastRenewed).Seconds())
+				}
+				metrics.SetSpoolUtilization(diskSpool.UtilizationRatio())
+			}
+		}
+	}()
 
 	// Initialize Assertion Signing Key
 	var assertionPrivKey ed25519.PrivateKey
@@ -367,6 +401,7 @@ func main() {
 		if ac != nil {
 			ac.SetRoute(route.RouteID, route.ServiceID)
 		}
+		telemetry.SetRouteID(r.Context(), route.RouteID)
 
 		// 3b. Distributed GCRA Token Bucket Rate Limiting (REV-01, ADR-0005)
 		if rateLimiter != nil {
@@ -681,6 +716,7 @@ func main() {
 		if ac != nil {
 			ac.SetRoute(route.RouteID, route.ServiceID)
 		}
+		telemetry.SetRouteID(r.Context(), route.RouteID)
 
 		// 3b. Distributed GCRA Token Bucket Rate Limiting (REV-01, ADR-0005)
 		if rateLimiter != nil {
@@ -863,12 +899,15 @@ func main() {
 		rp.ServeHTTP(w, r)
 	})
 
-	// Wrap handlers with audit middleware
+	// Wrap handlers with audit middleware and telemetry metrics middleware
 	auditedUserHandler := audit.AuditMiddleware(auditLogger, 0)(gatewayHandler)
+	userMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedUserHandler)
+
 	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, 0)(workloadHandler)
+	workloadMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedWorkloadHandler)
 
 	// Dual-Listener Server Manager (:8080 and :9443 mTLS)
-	dualServer := proxy.NewDualServer(cfg, auditedUserHandler, auditedWorkloadHandler, workloadTLSConfig)
+	dualServer := proxy.NewDualServer(cfg, userMetricsHandler, workloadMetricsHandler, workloadTLSConfig)
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -887,6 +926,8 @@ func main() {
 
 	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
 	defer cancel()
+
+	_ = metricsServer.Shutdown(ctx)
 
 	if err := dualServer.Shutdown(ctx); err != nil {
 		log.Printf("Error during dual server shutdown: %v", err)

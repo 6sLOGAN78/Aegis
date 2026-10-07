@@ -9,6 +9,7 @@ import (
 	"flag"
 	"log"
 	"net"
+	"net/http"
 	"os"
 	"os/signal"
 	"strconv"
@@ -17,10 +18,13 @@ import (
 	"time"
 
 	"aegis/internal/control"
+	"aegis/internal/revocation"
 	"aegis/internal/snapshot"
 	"aegis/internal/storage"
+	"aegis/internal/telemetry"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
+	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
 )
 
@@ -28,8 +32,9 @@ var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
 
 func main() {
 	var (
-		flagGRPCPort = flag.String("grpc-port", "", "gRPC distribution port (default :9090)")
-		flagHTTPPort = flag.String("http-port", "", "Management HTTP port (default :8084)")
+		flagGRPCPort    = flag.String("grpc-port", "", "gRPC distribution port (default :9090)")
+		flagHTTPPort    = flag.String("http-port", "", "Management HTTP port (default :8084)")
+		flagMetricsPort = flag.String("metrics-port", "", "Prometheus telemetry port (default :9092)")
 	)
 	flag.Parse()
 
@@ -57,6 +62,17 @@ func main() {
 	}
 	if !strings.HasPrefix(httpPort, ":") {
 		httpPort = ":" + httpPort
+	}
+
+	metricsPort := os.Getenv("AEGIS_METRICS_PORT")
+	if *flagMetricsPort != "" {
+		metricsPort = *flagMetricsPort
+	}
+	if metricsPort == "" {
+		metricsPort = ":9092"
+	}
+	if !strings.HasPrefix(metricsPort, ":") {
+		metricsPort = ":" + metricsPort
 	}
 
 	// 2. Load or generate Ed25519 Signing Key (CTRL-02, Invariant 4)
@@ -94,7 +110,25 @@ func main() {
 	}
 	signer := snapshot.NewSigner(privKey, keyID)
 
-	// 3. Connect to PostgreSQL Connection Pool (CTRL-01, Invariant 11)
+	// 3. Connect to Redis Client for Revocation & Quarantine (REV-03, REV-04)
+	redisAddr := os.Getenv("AEGIS_REDIS_ADDR")
+	if redisAddr == "" {
+		redisAddr = "localhost:6379"
+	}
+	redisPassword := os.Getenv("AEGIS_REDIS_PASSWORD")
+	rdb := redis.NewClient(&redis.Options{
+		Addr:     redisAddr,
+		Password: redisPassword,
+	})
+	revStore := revocation.NewStore(rdb)
+
+	// 4. Initialize Prometheus Telemetry Registry and Private Exporter (DIST-02)
+	metrics := telemetry.NewMetrics()
+	metricsServer := telemetry.NewServer(metricsPort, metrics)
+	metricsServer.Start()
+	log.Printf("Aegis Control Plane private metrics exporter listening on %s", metricsPort)
+
+	// 5. Connect to PostgreSQL Connection Pool (CTRL-01, Invariant 11)
 	poolCfg := storage.DefaultPoolConfig()
 	if h := os.Getenv("AEGIS_DB_HOST"); h != "" {
 		poolCfg.Host = h
@@ -122,6 +156,9 @@ func main() {
 
 	var snapshotRepo *storage.SnapshotRepo
 	var routeRepo *storage.RouteRepo
+	var policyRepo *storage.PolicyRepo
+	var auditRepo *storage.AuditRepo
+
 	pool, err := storage.NewPool(dbCtx, poolCfg)
 	if err != nil {
 		log.Printf("Notice: PostgreSQL unavailable (%s:%d): %v (running with in-memory state)", poolCfg.Host, poolCfg.Port, err)
@@ -132,10 +169,11 @@ func main() {
 		}
 		snapshotRepo = storage.NewSnapshotRepo(pool)
 		routeRepo = storage.NewRouteRepo(pool)
-		_ = routeRepo
+		policyRepo = storage.NewPolicyRepo(pool)
+		auditRepo = storage.NewAuditRepo(pool)
 	}
 
-	// 4. Retrieve latest snapshot from database or synthesize bootstrap snapshot v1
+	// 6. Retrieve latest snapshot from database or synthesize bootstrap snapshot v1
 	var latestSnapshot *snapshotv1.SnapshotEnvelope
 	if snapshotRepo != nil {
 		snapCtx, snapCancel := context.WithTimeout(context.Background(), 5*time.Second)
@@ -186,17 +224,51 @@ decision := {
 		log.Printf("Initialized bootstrap snapshot version 1 (signing key: %s)", keyID)
 	}
 
-	// 5. Initialize Acknowledgment Tracker and Distribution Server
+	// 7. Initialize Acknowledgment Tracker and Distribution Server
 	ackTracker := control.NewAckTracker(snapshotRepo)
 	distServer := control.NewSnapshotDistributionServer(latestSnapshot, ackTracker)
 
-	// 6. Launch 10-Second Freshness Lease Generator Loop (CTRL-04, Invariant 1)
+	// 8. Launch 10-Second Freshness Lease Generator Loop (CTRL-04, Invariant 1)
 	leaseGen := control.NewLeaseGenerator(distServer, signer, 10*time.Second, 15*time.Second)
 	leaseCtx, leaseCancel := context.WithCancel(context.Background())
 	defer leaseCancel()
 	go leaseGen.Start(leaseCtx)
 
-	// 7. Start gRPC Distribution Server
+	// 9. Initialize Control Plane Management REST API & SPA Server (OPS-01, OPS-04)
+	sessionMgr := control.NewSessionManager()
+	idempStore := control.NewIdempotencyStore()
+	validator := control.NewValidator()
+	rollbackEng := control.NewRollbackEngine(snapshotRepo, signer)
+
+	apiServer := control.NewAPIServer(
+		sessionMgr,
+		idempStore,
+		distServer,
+		validator,
+		rollbackEng,
+		routeRepo,
+		policyRepo,
+		snapshotRepo,
+		auditRepo,
+		revStore,
+		signer,
+	)
+
+	apiSrv := &http.Server{
+		Addr:         httpPort,
+		Handler:      apiServer.Handler(),
+		ReadTimeout:  15 * time.Second,
+		WriteTimeout: 60 * time.Second,
+	}
+
+	go func() {
+		log.Printf("Aegis Control Plane Management REST API & SPA listening on %s", httpPort)
+		if err := apiSrv.ListenAndServe(); err != nil && !errors.Is(err, http.ErrServerClosed) {
+			log.Fatalf("Management API server error: %v", err)
+		}
+	}()
+
+	// 10. Start gRPC Distribution Server
 	lis, err := net.Listen("tcp", grpcPort)
 	if err != nil {
 		log.Fatalf("Failed to bind gRPC listener on %s: %v", grpcPort, err)
@@ -212,12 +284,18 @@ decision := {
 		}
 	}()
 
-	// 8. Graceful shutdown handler
+	// 11. Graceful shutdown handler for all synchronized listeners
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
 
 	<-stop
 	log.Println("Shutting down Aegis Control Plane daemon gracefully...")
+
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
+
+	_ = apiSrv.Shutdown(shutdownCtx)
+	_ = metricsServer.Shutdown(shutdownCtx)
 
 	leaseCancel()
 	leaseGen.Stop()
@@ -225,6 +303,9 @@ decision := {
 
 	if pool != nil {
 		pool.Close()
+	}
+	if rdb != nil {
+		_ = rdb.Close()
 	}
 
 	log.Println("Aegis Control Plane daemon stopped cleanly")
