@@ -1,0 +1,70 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aegis-gateway-networkpolicy
+  namespace: aegis-system
+spec:
+  podSelector:
+    matchLabels:
+      app: aegis-gateway
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # 1. Allow public user traffic on :8080
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8080
+    # 2. Allow internal workload mTLS on :8443 (from aegis-apps namespace)
+    - from:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aegis-apps
+      ports:
+        - protocol: TCP
+          port: 8443
+  egress:
+    # 1. Allow mTLS forwarding to backend services in aegis-apps on :8443 and microservice ports
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: aegis-apps
+      ports:
+        - protocol: TCP
+          port: 8443
+        - protocol: TCP
+          port: 8081
+        - protocol: TCP
+          port: 8082
+        - protocol: TCP
+          port: 8083
+    # 2. Allow Redis communication on :6379 in aegis-system
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # 3. Allow gRPC snapshot stream to Control Plane on :9090 in aegis-system
+    - to:
+        - podSelector:
+            matchLabels:
+              app: aegis-control-plane
+      ports:
+        - protocol: TCP
+          port: 9090
+    # 4. Mandatory CoreDNS egress on port 53 UDP/TCP in kube-system
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

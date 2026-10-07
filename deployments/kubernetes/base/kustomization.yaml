@@ -3,6 +3,7 @@ kind: Kustomization
 
 resources:
   - namespaces.yaml
+  - gateway
   - control-plane
   - audit-worker
   - redis

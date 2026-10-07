@@ -1,0 +1,18 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegis-control-plane
+  namespace: aegis-system
+spec:
+  replicas: 2
+  template:
+    spec:
+      containers:
+        - name: control-plane
+          resources:
+            requests:
+              cpu: 250m
+              memory: 256Mi
+            limits:
+              cpu: 1000m
+              memory: 512Mi

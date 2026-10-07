@@ -1,0 +1,49 @@
+apiVersion: v1
+kind: Service
+metadata:
+  name: aegis-gateway
+  namespace: aegis-system
+  labels:
+    app: aegis-gateway
+spec:
+  type: ClusterIP
+  selector:
+    app: aegis-gateway
+  ports:
+    - name: http-user
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: mtls-workload
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+      protocol: TCP
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: aegis-gateway-lb
+  namespace: aegis-system
+  labels:
+    app: aegis-gateway
+spec:
+  type: LoadBalancer
+  selector:
+    app: aegis-gateway
+  ports:
+    - name: http-user
+      port: 8080
+      targetPort: 8080
+      protocol: TCP
+    - name: mtls-workload
+      port: 8443
+      targetPort: 8443
+      protocol: TCP
+    - name: metrics
+      port: 9091
+      targetPort: 9091
+      protocol: TCP

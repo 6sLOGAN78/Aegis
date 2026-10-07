@@ -1,0 +1,12 @@
+apiVersion: policy/v1
+kind: PodDisruptionBudget
+metadata:
+  name: aegis-gateway-pdb
+  namespace: aegis-system
+  labels:
+    app: aegis-gateway
+spec:
+  minAvailable: 2
+  selector:
+    matchLabels:
+      app: aegis-gateway
