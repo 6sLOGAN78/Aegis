@@ -141,10 +141,14 @@ func (v *Validator) RunRegoTests(ctx context.Context, policyRego string, testReg
 		return nil, fmt.Errorf("%w: test module cannot be empty", ErrInvalidRegoSyntax)
 	}
 
-	compiler, err := ast.CompileModulesWithOpt(map[string]string{
+	modules := map[string]string{
 		"policy.rego": policyRego,
-		"test.rego":   testRego,
-	}, ast.CompileOpts{
+	}
+	if testRego != "" && testRego != policyRego {
+		modules["test.rego"] = testRego
+	}
+
+	compiler, err := ast.CompileModulesWithOpt(modules, ast.CompileOpts{
 		ParserOptions: ast.ParserOptions{
 			RegoVersion: ast.RegoV1,
 		},

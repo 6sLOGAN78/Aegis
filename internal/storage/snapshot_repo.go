@@ -212,3 +212,45 @@ func (r *SnapshotRepo) ListGatewayAcks(ctx context.Context) ([]GatewayStatus, er
 
 	return statuses, nil
 }
+
+const listSnapshotsQuery = `
+SELECT version, schema_version, payload_sha256, payload_bytes, signing_key_id, signature, created_at, expires_at
+FROM snapshots
+ORDER BY version DESC
+LIMIT 50;`
+
+// ListSnapshots returns historical snapshot envelopes ordered by version descending.
+func (r *SnapshotRepo) ListSnapshots(ctx context.Context) ([]*snapshotv1.SnapshotEnvelope, error) {
+	rows, err := r.db.Query(ctx, listSnapshotsQuery)
+	if err != nil {
+		return nil, fmt.Errorf("failed to query snapshots: %w", err)
+	}
+	defer rows.Close()
+
+	envelopes := make([]*snapshotv1.SnapshotEnvelope, 0)
+	for rows.Next() {
+		var env snapshotv1.SnapshotEnvelope
+		var createdAt, expiresAt time.Time
+		if err := rows.Scan(
+			&env.Version,
+			&env.SchemaVersion,
+			&env.PayloadSha256,
+			&env.Payload,
+			&env.SigningKeyId,
+			&env.Signature,
+			&createdAt,
+			&expiresAt,
+		); err != nil {
+			return nil, fmt.Errorf("failed to scan snapshot row: %w", err)
+		}
+		env.CreatedAt = timestamppb.New(createdAt)
+		env.ExpiresAt = timestamppb.New(expiresAt)
+		envelopes = append(envelopes, &env)
+	}
+	if err := rows.Err(); err != nil {
+		return nil, fmt.Errorf("rows iteration error: %w", err)
+	}
+
+	return envelopes, nil
+}
+
