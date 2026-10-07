@@ -2,13 +2,13 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: ready_to_verify
-stopped_at: Phase 4 complete — ready to verify Phase 4.
-last_updated: "2026-10-07T05:18:00.000Z"
-last_activity: 2026-10-07 -- Phase 04 complete: Operator experience, telemetry, and end-to-end integration verified
+status: ready_to_plan
+stopped_at: Phase 4 verified and complete — ready to plan Phase 5.
+last_updated: "2026-10-07T05:25:00.000Z"
+last_activity: 2026-10-07 -- Phase 04 verified: Operator Experience & Telemetry complete (5/5 requirements, 5/5 truths)
 progress:
   total_phases: 7
-  completed_phases: 4
+  completed_phases: 5
   total_plans: 25
   completed_plans: 19
   percent: 76
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-06)
 
 **Core value:** Default-deny, fail-closed authorization and workload authentication where invalid credentials, stale security state, or dependency failures never produce implicit authorization.
-**Current focus:** Phase 04 — operator-experience-telemetry
+**Current focus:** Phase 05 — distributed-resilience-chaos
 
 ## Current Position
 
-Phase: 04 (operator-experience-telemetry) — READY TO VERIFY
-Plan: 3 of 3 (04-01, 04-02, 04-03 complete)
-Status: Ready to verify Phase 04
-Last activity: 2026-10-07 -- Phase 04 complete: Operator experience, telemetry, and end-to-end integration verified
+Phase: 05 (distributed-resilience-chaos) — READY TO PLAN
+Plan: 0 of 3
+Status: Ready to plan Phase 05
+Last activity: 2026-10-07 -- Phase 04 verified: Operator Experience & Telemetry complete (5/5 requirements, 5/5 truths)
 
 Progress: [███████░░░] 76%
 
@@ -71,6 +71,7 @@ Recent decisions affecting current work:
 - [Phase 1]: In-memory OPA embedding, strict path traversal rejection without rewriting, hop-by-hop header scrubbing via ReverseProxy Rewrite.
 - [Phase 2]: Pure Go PKI generation, dedicated workload listener (:9443), SPIFFE URI SAN identity extraction, short-lived signed assertions (<=15s), backend middleware defense-in-depth, zero published ports in Docker Compose.
 - [Phase 3]: Embedded Goose migrations (FS), PostgreSQL schema migrations, monotonic Ed25519 snapshot signing ($N+1$), lock-free sync/atomic.Pointer swapping, 10s freshness leases with 60s fail-closed boundary, Redis GCRA token bucket rate limiting (100 rps, burst 200), sub-5s JTI revocation and principal quarantine with rigid 200ms fail-closed timeout, pre-forward disk WAL spool with synchronous fsync before upstream forwarding, 90% spool saturation circuit breaker (HTTP 503), async batch audit worker draining to PostgreSQL, and hardened multi-service Docker Compose profile.
+- [Phase 4]: Control plane Chi management APIs (:8084), HttpOnly session cookies with 256-bit CSRF double-submit token, ETag/If-Match optimistic concurrency (412 Precondition Failed), IdempotencyKey locking (409 Conflict) and 24h replay, RBAC middleware with Invariant 11 data-plane token rejection (403), React 19/Vite operator console in web/dashboard, Monaco editor with pure client-side Rego v1 Monarch tokenizer, AST dry-run simulator with sub-2ms latency badges, replica convergence aggregation (/control/v1/gateways) with 10s lease progress bars, emergency Redis quarantine modal with typed keyword confirmation, and low-cardinality Prometheus metrics (:9091, :9092) with negative PII leak assertions.
 
 ### Pending Todos
 
