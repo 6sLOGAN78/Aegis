@@ -172,9 +172,9 @@ Plans:
 
 Plans:
 
-- [ ] 05-01: Multi-replica gateway cluster (3 instances) behind load balancer with health checking and 30s graceful drain
-- [ ] 05-02: gRPC reconnect backoff with randomized jitter and fleet snapshot convergence tracking
-- [ ] 05-03: Chaos fault injection suite and reproducible k6 performance benchmark suite
+- [x] 05-01: Multi-replica gateway cluster (3 instances) behind load balancer with health checking and 30s graceful drain
+- [x] 05-02: gRPC reconnect backoff with randomized jitter and fleet snapshot convergence tracking
+- [x] 05-03: Chaos fault injection suite and reproducible k6 performance benchmark suite
 
 ---
 
@@ -211,5 +211,5 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 | 2. Workload Identity & Enforced Bypass Prevention | 4/4 | Complete   | 2026-10-06 |
 | 3. Control Plane, Snapshot Streaming & Durable State | 5/5 | Complete   | 2026-10-07 |
 | 4. Operator Experience & Telemetry | 3/3 | Complete | 2026-10-07 |
-| 5. Distributed Resilience, Chaos & Benchmark Evidence | 0/3 | Not started | - |
+| 5. Distributed Resilience, Chaos & Benchmark Evidence | 3/3 | Complete | 2026-10-07 |
 | 6. Production Hardening & Operational Runbooks | 0/3 | Not started | - |
