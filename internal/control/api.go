@@ -130,6 +130,8 @@ func (s *APIServer) routes() {
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/gateways", s.HandleListGateways)
 
 			// Emergency incident response (quarantine & token revocation)
+			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/principals/quarantine", s.HandleListQuarantines)
+			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/quarantine", s.HandleListQuarantines)
 			pr.With(RequireRole("sec-ops")).Post("/principals/{id}/quarantine", s.HandleQuarantinePrincipal)
 			pr.With(RequireRole("sec-ops")).Delete("/principals/{id}/quarantine", s.HandleUnquarantinePrincipal)
 			pr.With(RequireRole("sec-ops")).Post("/quarantine", s.HandleQuarantinePrincipal)

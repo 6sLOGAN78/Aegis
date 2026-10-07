@@ -4,6 +4,8 @@ import { LoginModal } from './components/LoginModal';
 import { PolicyStudio } from './components/PolicyStudio';
 import { PolicySimulator } from './components/PolicySimulator';
 import { AuditStream } from './components/AuditStream';
+import { ClusterTopology } from './components/ClusterTopology';
+import { EmergencyQuarantine } from './components/EmergencyQuarantine';
 import { apiClient } from './api/client';
 import type { SessionInfo } from './api/types';
 
@@ -80,22 +82,16 @@ export const App: React.FC = () => {
           <PolicySimulator candidateRego={candidateRego} />
         )}
 
+        {activeTab === 'topology' && (
+          <ClusterTopology />
+        )}
+
         {activeTab === 'audit' && (
           <AuditStream />
         )}
 
-        {(activeTab === 'topology' || activeTab === 'quarantine') && (
-          <div className="space-y-6">
-            <div className="bg-slate-900 border border-slate-800 rounded-xl p-6">
-              <h2 className="text-xl font-semibold text-slate-100 mb-2">
-                {activeTab === 'topology' && 'Cluster Topology & Convergence'}
-                {activeTab === 'quarantine' && 'Emergency Principal Quarantine'}
-              </h2>
-              <p className="text-sm text-slate-400">
-                Active management session role: <code className="text-cyan-400">{session?.role || 'unauthenticated'}</code>
-              </p>
-            </div>
-          </div>
+        {activeTab === 'quarantine' && (
+          <EmergencyQuarantine session={session} />
         )}
       </Shell>
 

@@ -4,6 +4,7 @@ import (
 	"context"
 	"errors"
 	"fmt"
+	"strings"
 	"time"
 
 	"github.com/redis/go-redis/v9"
@@ -97,4 +98,61 @@ func (s *Store) CheckRevocation(ctx context.Context, principalID string, jti str
 	}
 
 	return false, "", nil
+}
+
+// QuarantinedPrincipal represents an actively quarantined principal in Redis.
+type QuarantinedPrincipal struct {
+	PrincipalID string        `json:"principal_id"`
+	Reason      string        `json:"reason"`
+	TTL         time.Duration `json:"ttl"`
+}
+
+// ListQuarantined retrieves all actively quarantined principals from Redis.
+func (s *Store) ListQuarantined(ctx context.Context) ([]QuarantinedPrincipal, error) {
+	if s.client == nil {
+		return []QuarantinedPrincipal{}, nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 500*time.Millisecond)
+	defer cancel()
+
+	var cursor uint64
+	var keys []string
+	for {
+		var k []string
+		var err error
+		k, cursor, err = s.client.Scan(ctx, cursor, "quarantine:principal:*", 100).Result()
+		if err != nil {
+			return nil, err
+		}
+		keys = append(keys, k...)
+		if cursor == 0 {
+			break
+		}
+	}
+
+	if len(keys) == 0 {
+		return []QuarantinedPrincipal{}, nil
+	}
+
+	results := make([]QuarantinedPrincipal, 0, len(keys))
+	pipe := s.client.Pipeline()
+	getCmds := make([]*redis.StringCmd, len(keys))
+	ttlCmds := make([]*redis.DurationCmd, len(keys))
+	for i, key := range keys {
+		getCmds[i] = pipe.Get(ctx, key)
+		ttlCmds[i] = pipe.TTL(ctx, key)
+	}
+	_, _ = pipe.Exec(ctx)
+
+	for i, key := range keys {
+		principalID := strings.TrimPrefix(key, "quarantine:principal:")
+		reason := getCmds[i].Val()
+		ttl := ttlCmds[i].Val()
+		results = append(results, QuarantinedPrincipal{
+			PrincipalID: principalID,
+			Reason:      reason,
+			TTL:         ttl,
+		})
+	}
+	return results, nil
 }

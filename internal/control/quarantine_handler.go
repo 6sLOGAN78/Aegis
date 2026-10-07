@@ -122,3 +122,34 @@ func (s *APIServer) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		"revoked_at": time.Now().UTC(),
 	})
 }
+
+// HandleListQuarantines returns all currently active principal quarantines from Redis.
+func (s *APIServer) HandleListQuarantines(w http.ResponseWriter, r *http.Request) {
+	items := make([]controlv1.QuarantineRecord, 0)
+	if s.revStore != nil {
+		quarantines, err := s.revStore.ListQuarantined(r.Context())
+		if err != nil {
+			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to query quarantines from Redis: "+err.Error())
+			return
+		}
+		now := time.Now().UTC()
+		actor := "sec-ops"
+		for _, q := range quarantines {
+			exp := now.Add(q.TTL)
+			items = append(items, controlv1.QuarantineRecord{
+				PrincipalId:   q.PrincipalID,
+				Reason:        q.Reason,
+				Status:        controlv1.Active,
+				QuarantinedAt: now,
+				ExpiresAt:     &exp,
+				Actor:         &actor,
+			})
+		}
+	}
+
+	w.Header().Set("Content-Type", "application/json")
+	_ = json.NewEncoder(w).Encode(map[string]interface{}{
+		"quarantines": items,
+	})
+}
+

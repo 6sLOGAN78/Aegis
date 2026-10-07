@@ -188,3 +188,11 @@ func (s *SnapshotDistributionServer) ConnectedClientsCount() int {
 	defer s.mu.RUnlock()
 	return len(s.clients)
 }
+
+// AckTracker returns the AckTracker associated with this distribution server.
+func (s *SnapshotDistributionServer) AckTracker() *AckTracker {
+	s.mu.RLock()
+	defer s.mu.RUnlock()
+	return s.ackTracker
+}
+
