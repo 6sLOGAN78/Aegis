@@ -91,8 +91,10 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 	})
 }
 
-// routes registers all management endpoints under /control/v1.
+// routes registers all management endpoints under /control/v1 and dashboard SPA routes.
 func (s *APIServer) routes() {
+	RegisterSPARoutes(s.router)
+
 	s.router.Route("/control/v1", func(r chi.Router) {
 		// Public Authentication endpoint
 		r.Post("/auth/login", s.authHandler.HandleLogin)
