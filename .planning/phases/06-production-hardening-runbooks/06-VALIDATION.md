@@ -18,7 +18,7 @@ created: 2026-10-07
 | Property | Value |
 |----------|-------|
 | **Framework** | Go Test CLI (`go test -race`) + `bitnami/kubectl:latest` (`kustomize build`) + `yaml` validation |
-| **Config file** | `deployments/kubernetes/kustomization.yaml`, `deployments/kubernetes/overlays/production/kustomization.yaml` |
+| **Config file** | `deployments/kubernetes/base/kustomization.yaml`, `deployments/kubernetes/overlays/production/kustomization.yaml` |
 | **Quick run command** | `go test -v -race ./tests/rotation/... ./tests/dr/... ./tests/manifests/...` |
 | **Full suite command** | `go test -race ./... && docker run --rm -v $(pwd):/work -w /work bitnami/kubectl:latest kustomize build deployments/kubernetes/overlays/production > /dev/null` |
 | **Estimated runtime** | ~15 seconds |
