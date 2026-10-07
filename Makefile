@@ -2,7 +2,7 @@ COMPOSE_FILE := deployments/compose/docker-compose.mvp.yml
 COMPOSE_HARDENED_FILE := deployments/compose/docker-compose.hardened.yml
 COMPOSE_DISTRIBUTED_FILE := deployments/compose/docker-compose.distributed.yml
 
-.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status help
+.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 help
 
 certs:
 	go run ./scripts/certificates/main.go
@@ -64,6 +64,12 @@ distributed-status:
 	@echo "\n=== HAProxy Stats (CSV summary) ==="
 	@curl -s http://127.0.0.1:8404/stats\;csv | head -n 15 || echo "HAProxy stats endpoint not reachable (cluster may be down)"
 
+bench:
+	go test -v -bench=. -benchmem ./benchmarks/...
+
+bench-k6:
+	docker run --rm -i --network host -v $(PWD)/benchmarks/k6:/scripts grafana/k6:latest run /scripts/distributed_cluster.js
+
 help:
 	@echo "Aegis Zero-Trust Access Gateway Automation Targets:"
 	@echo "  make certs              - Generate local development PKI certificates and assertion keys"
@@ -84,3 +90,5 @@ help:
 	@echo "  make distributed-up     - Build and start 3-replica gateway cluster behind HAProxy"
 	@echo "  make distributed-down   - Stop and tear down distributed cluster with volumes"
 	@echo "  make distributed-status - Show container status and HAProxy health metrics"
+	@echo "  make bench              - Run Go in-memory OPA policy engine microbenchmarks"
+	@echo "  make bench-k6           - Run k6 distributed cluster load test benchmark (1,000 RPS)"
