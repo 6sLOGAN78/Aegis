@@ -152,6 +152,12 @@ func (s *DiskSpool) CheckSaturation() (bool, error) {
 	return false, nil
 }
 
+// IsSaturated reports whether the spool has reached or exceeded 90% capacity.
+func (s *DiskSpool) IsSaturated() bool {
+	saturated, err := s.CheckSaturation()
+	return err != nil || saturated
+}
+
 // UtilizationRatio returns the current capacity utilization ratio of the spool (0.0 to 1.0).
 func (s *DiskSpool) UtilizationRatio() float64 {
 	if s.cfg.VolumeQuotaBytes > 0 {
