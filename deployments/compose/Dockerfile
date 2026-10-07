@@ -70,3 +70,11 @@ RUN apk add --no-cache curl
 WORKDIR /app
 COPY --from=builder /bin/audit-worker /usr/local/bin/audit-worker
 ENTRYPOINT ["/usr/local/bin/audit-worker"]
+
+# Target: seed
+FROM alpine:3.21 AS seed
+RUN apk add --no-cache curl jq
+WORKDIR /app
+COPY deployments/compose/seed/seed.sh /usr/local/bin/seed.sh
+COPY policies ./policies
+ENTRYPOINT ["/bin/sh", "/usr/local/bin/seed.sh"]
