@@ -576,8 +576,14 @@ func CreateSignedTestSnapshot(signer *snapshot.Signer, version int64, regoPolicy
 	if regoPolicy == "" {
 		regoPolicy = `package aegis.authz
 
-default allow := true
-default reason_code := "ALLOWED"
+default allow := false
+default reason_code := "DENIED_DEFAULT"
+
+allow if {
+    "developer" in input.principal.roles
+}
+
+reason_code := "ALLOWED" if { allow }
 
 decision := {
     "allow": allow,
@@ -728,20 +734,6 @@ func (c *ChaosCluster) spawnNode(parentCtx context.Context, gatewayID string) *T
 			w.Header().Set("X-Request-ID", reqID)
 		}
 
-		// Hard lease boundary fail-closed check
-		if mgr.IsLeaseExpired(60 * time.Second) {
-			proxy.WriteProblemDetails(w, http.StatusServiceUnavailable, "Service Unavailable",
-				"Policy freshness lease expired (>60s)", "https://aegis.local/errors/policy-lease-expired", reqID)
-			return
-		}
-
-		state := mgr.Active()
-		if state == nil {
-			proxy.WriteProblemDetails(w, http.StatusServiceUnavailable, "Service Unavailable",
-				"Gateway configuration uninitialized", "https://aegis.local/errors/uninitialized", reqID)
-			return
-		}
-
 		canonicalPath, err := proxy.ValidatePathZeroRepair(r)
 		if err != nil {
 			proxy.WriteProblemDetails(w, http.StatusBadRequest, "Bad Request", err.Error(),
@@ -776,6 +768,20 @@ func (c *ChaosCluster) spawnNode(parentCtx context.Context, gatewayID string) *T
 				},
 				Roles: []string{"developer"},
 			}
+		}
+
+		// Hard lease boundary fail-closed check
+		if mgr.IsLeaseExpired(60 * time.Second) {
+			proxy.WriteProblemDetails(w, http.StatusServiceUnavailable, "Service Unavailable",
+				"Policy freshness lease expired (>60s)", "https://aegis.local/errors/policy-lease-expired", reqID)
+			return
+		}
+
+		state := mgr.Active()
+		if state == nil {
+			proxy.WriteProblemDetails(w, http.StatusServiceUnavailable, "Service Unavailable",
+				"Gateway configuration uninitialized", "https://aegis.local/errors/uninitialized", reqID)
+			return
 		}
 
 		// Ephemeral Redis Revocation Check
