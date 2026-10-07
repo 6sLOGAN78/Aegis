@@ -1,0 +1,56 @@
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: aegis-control-plane-networkpolicy
+  namespace: aegis-system
+spec:
+  podSelector:
+    matchLabels:
+      app: aegis-control-plane
+  policyTypes:
+    - Ingress
+    - Egress
+  ingress:
+    # Allow gRPC snapshot streaming on :9090 from Aegis gateway pods
+    - from:
+        - podSelector:
+            matchLabels:
+              app: aegis-gateway
+      ports:
+        - protocol: TCP
+          port: 9090
+    # Allow management API access on :8084 from operator ingress
+    - from: []
+      ports:
+        - protocol: TCP
+          port: 8084
+  egress:
+    # Allow Redis communication on :6379
+    - to:
+        - podSelector:
+            matchLabels:
+              app: redis
+      ports:
+        - protocol: TCP
+          port: 6379
+    # Allow PostgreSQL database connection on :5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # Mandatory CoreDNS egress on port 53 UDP/TCP
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+          podSelector:
+            matchLabels:
+              k8s-app: kube-dns
+      ports:
+        - protocol: UDP
+          port: 53
+        - protocol: TCP
+          port: 53

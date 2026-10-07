@@ -1,0 +1,51 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: aegis-audit-worker
+  namespace: aegis-system
+  labels:
+    app: aegis-audit-worker
+spec:
+  replicas: 1
+  selector:
+    matchLabels:
+      app: aegis-audit-worker
+  template:
+    metadata:
+      labels:
+        app: aegis-audit-worker
+    spec:
+      securityContext:
+        runAsNonRoot: true
+        runAsUser: 10001
+        runAsGroup: 10001
+        fsGroup: 10001
+        seccompProfile:
+          type: RuntimeDefault
+      containers:
+        - name: audit-worker
+          image: aegis/audit-worker:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: wal-volume
+              mountPath: /var/log/aegis/wal
+            - name: tmp
+              mountPath: /tmp
+      volumes:
+        - name: wal-volume
+          emptyDir: {}
+        - name: tmp
+          emptyDir: {}
