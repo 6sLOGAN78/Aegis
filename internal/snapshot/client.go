@@ -3,6 +3,7 @@ package snapshot
 import (
 	"context"
 	"fmt"
+	"math"
 	"math/rand/v2"
 	"sync"
 	"time"
@@ -51,12 +52,48 @@ func NewStreamClient(
 	}
 }
 
+// CalculateFullJitterBackoff computes exponential backoff with Full Jitter (CTRL-03).
+// Formula: temp = min(maxBackoff, baseBackoff * (1.5 ^ attempt))
+// Jitter is uniformly distributed in range [baseBackoff, temp].
+// Bounds: never returns less than baseBackoff or greater than maxBackoff.
+func CalculateFullJitterBackoff(attempt int, baseBackoff, maxBackoff time.Duration) time.Duration {
+	if attempt < 0 {
+		attempt = 0
+	}
+	if baseBackoff <= 0 {
+		baseBackoff = 100 * time.Millisecond
+	}
+	if maxBackoff < baseBackoff {
+		maxBackoff = baseBackoff
+	}
+
+	temp := float64(baseBackoff) * math.Pow(1.5, float64(attempt))
+	if temp > float64(maxBackoff) {
+		temp = float64(maxBackoff)
+	}
+
+	jitterRange := temp - float64(baseBackoff)
+	if jitterRange <= 0 {
+		return baseBackoff
+	}
+
+	sleep := float64(baseBackoff) + rand.Float64()*jitterRange
+	dur := time.Duration(sleep)
+	if dur < baseBackoff {
+		return baseBackoff
+	}
+	if dur > maxBackoff {
+		return maxBackoff
+	}
+	return dur
+}
+
 // Start initiates the streaming connection and reconnect loop. Blocks until ctx is canceled or Stop() is called.
 func (c *StreamClient) Start(ctx context.Context) error {
-	backoff := 100 * time.Millisecond
+	const baseBackoff = 100 * time.Millisecond
 	const maxBackoff = 5 * time.Second
-	const factor = 1.5
-	const jitter = 0.2
+
+	var attempt int
 
 	for {
 		select {
@@ -67,7 +104,9 @@ func (c *StreamClient) Start(ctx context.Context) error {
 		default:
 		}
 
-		err := c.runStream(ctx)
+		err := c.runStream(ctx, func() {
+			attempt = 0
+		})
 		if err != nil {
 			select {
 			case <-ctx.Done():
@@ -77,13 +116,8 @@ func (c *StreamClient) Start(ctx context.Context) error {
 			default:
 			}
 
-			// Apply randomized exponential backoff with jitter
-			// jitter multiplier within [0.8, 1.2]
-			multiplier := 1.0 + (rand.Float64()*2*jitter - jitter)
-			sleepDuration := time.Duration(float64(backoff) * multiplier)
-			if sleepDuration > maxBackoff {
-				sleepDuration = maxBackoff
-			}
+			sleepDuration := CalculateFullJitterBackoff(attempt, baseBackoff, maxBackoff)
+			attempt++
 
 			select {
 			case <-ctx.Done():
@@ -92,31 +126,37 @@ func (c *StreamClient) Start(ctx context.Context) error {
 				return nil
 			case <-time.After(sleepDuration):
 			}
-
-			backoff = time.Duration(float64(backoff) * factor)
-			if backoff > maxBackoff {
-				backoff = maxBackoff
-			}
 		} else {
-			backoff = 100 * time.Millisecond
+			attempt = 0
 		}
 	}
 }
 
-func (c *StreamClient) runStream(ctx context.Context) error {
+func (c *StreamClient) runStream(ctx context.Context, onFirstMessage func()) error {
 	opts := append([]grpc.DialOption{}, c.dialOpts...)
 	if len(opts) == 0 {
 		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
 	}
 
-	conn, err := grpc.DialContext(ctx, c.grpcAddr, opts...)
+	streamCtx, cancel := context.WithCancel(ctx)
+	defer cancel()
+
+	go func() {
+		select {
+		case <-streamCtx.Done():
+		case <-c.stopCh:
+			cancel()
+		}
+	}()
+
+	conn, err := grpc.DialContext(streamCtx, c.grpcAddr, opts...)
 	if err != nil {
 		return fmt.Errorf("failed to dial control plane at %s: %w", c.grpcAddr, err)
 	}
 	defer conn.Close()
 
 	client := snapshotv1.NewSnapshotDistributionServiceClient(conn)
-	stream, err := client.StreamSnapshots(ctx)
+	stream, err := client.StreamSnapshots(streamCtx)
 	if err != nil {
 		return fmt.Errorf("failed to open snapshot stream: %w", err)
 	}
@@ -139,10 +179,12 @@ func (c *StreamClient) runStream(ctx context.Context) error {
 		},
 	})
 
+	var receivedFirst bool
+
 	for {
 		select {
-		case <-ctx.Done():
-			return ctx.Err()
+		case <-streamCtx.Done():
+			return streamCtx.Err()
 		case <-c.stopCh:
 			return nil
 		default:
@@ -150,7 +192,19 @@ func (c *StreamClient) runStream(ctx context.Context) error {
 
 		msg, err := stream.Recv()
 		if err != nil {
-			return err
+			select {
+			case <-c.stopCh:
+				return nil
+			default:
+				return err
+			}
+		}
+
+		if !receivedFirst {
+			receivedFirst = true
+			if onFirstMessage != nil {
+				onFirstMessage()
+			}
 		}
 
 		if msg == nil {
