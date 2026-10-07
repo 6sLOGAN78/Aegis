@@ -2,7 +2,7 @@ COMPOSE_FILE := deployments/compose/docker-compose.mvp.yml
 COMPOSE_HARDENED_FILE := deployments/compose/docker-compose.hardened.yml
 COMPOSE_DISTRIBUTED_FILE := deployments/compose/docker-compose.distributed.yml
 
-.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 help
+.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 manifest-build manifest-test help
 
 certs:
 	go run ./scripts/certificates/main.go
@@ -70,6 +70,13 @@ bench:
 bench-k6:
 	docker run --rm -i --network host -v $(PWD)/benchmarks/k6:/scripts grafana/k6:latest run /scripts/distributed_cluster.js
 
+manifest-build:
+	docker run --rm -v $(PWD):/work -w /work bitnami/kubectl:latest kustomize build deployments/kubernetes/base > /dev/null
+	docker run --rm -v $(PWD):/work -w /work bitnami/kubectl:latest kustomize build deployments/kubernetes/overlays/production > /dev/null
+
+manifest-test:
+	go test -v ./tests/manifests/...
+
 help:
 	@echo "Aegis Zero-Trust Access Gateway Automation Targets:"
 	@echo "  make certs              - Generate local development PKI certificates and assertion keys"
@@ -92,3 +99,5 @@ help:
 	@echo "  make distributed-status - Show container status and HAProxy health metrics"
 	@echo "  make bench              - Run Go in-memory OPA policy engine microbenchmarks"
 	@echo "  make bench-k6           - Run k6 distributed cluster load test benchmark (1,000 RPS)"
+	@echo "  make manifest-build     - Build and validate Kubernetes base and production overlays"
+	@echo "  make manifest-test      - Run Kubernetes manifest validation Go test suite"
