@@ -156,3 +156,34 @@ func (s *Store) ListQuarantined(ctx context.Context) ([]QuarantinedPrincipal, er
 	}
 	return results, nil
 }
+
+// ReconstructQuarantines pipeline-inserts an entire slice of quarantined principals into Redis.
+// Used during Disaster Recovery to restore security state before marking gateway readiness healthy.
+func (s *Store) ReconstructQuarantines(ctx context.Context, principals []QuarantinedPrincipal) error {
+	if len(principals) == 0 {
+		return nil
+	}
+	ctx, cancel := context.WithTimeout(ctx, 2*time.Second)
+	defer cancel()
+
+	pipe := s.client.Pipeline()
+	for _, p := range principals {
+		ttl := p.TTL
+		if ttl <= 0 {
+			ttl = 24 * time.Hour
+		}
+		key := "quarantine:principal:" + p.PrincipalID
+		reason := p.Reason
+		if reason == "" {
+			reason = "DISASTER_RECOVERY_RECONSTRUCTED"
+		}
+		pipe.Set(ctx, key, reason, ttl)
+	}
+
+	_, err := pipe.Exec(ctx)
+	if err != nil {
+		return fmt.Errorf("failed to reconstruct quarantine state in Redis: %w", err)
+	}
+	return nil
+}
+

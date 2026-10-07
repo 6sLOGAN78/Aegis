@@ -140,3 +140,46 @@ func TestRevocationStore_DependencyFailureAndTimeout(t *testing.T) {
 	assert.Empty(t, reasonCancel)
 	assert.True(t, errors.Is(errCancel, ErrRevocationDependency))
 }
+
+func TestReconstructQuarantines(t *testing.T) {
+	store, _ := setupTestStore(t)
+	ctx := context.Background()
+
+	// Empty slice returns nil immediately
+	err := store.ReconstructQuarantines(ctx, nil)
+	require.NoError(t, err)
+
+	principals := []QuarantinedPrincipal{
+		{
+			PrincipalID: "bad-actor-1",
+			Reason:      "COMPROMISED_CREDENTIALS",
+			TTL:         10 * time.Minute,
+		},
+		{
+			PrincipalID: "bad-actor-2",
+			Reason:      "", // Should default to DISASTER_RECOVERY_RECONSTRUCTED
+			TTL:         0,  // Should default to 24h
+		},
+	}
+
+	err = store.ReconstructQuarantines(ctx, principals)
+	require.NoError(t, err)
+
+	// Verify bad-actor-1 is quarantined with expected reason
+	revoked1, reason1, err1 := store.CheckRevocation(ctx, "bad-actor-1", "")
+	require.NoError(t, err1)
+	assert.True(t, revoked1)
+	assert.Equal(t, "PRINCIPAL_QUARANTINED", reason1)
+
+	// Verify bad-actor-2 is quarantined
+	revoked2, reason2, err2 := store.CheckRevocation(ctx, "bad-actor-2", "")
+	require.NoError(t, err2)
+	assert.True(t, revoked2)
+	assert.Equal(t, "PRINCIPAL_QUARANTINED", reason2)
+
+	// Unlisted principal is not quarantined
+	revokedOther, _, errOther := store.CheckRevocation(ctx, "honest-user", "")
+	require.NoError(t, errOther)
+	assert.False(t, revokedOther)
+}
+
