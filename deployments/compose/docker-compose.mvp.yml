@@ -1,4 +1,88 @@
 services:
+  postgres:
+    image: postgres:16-alpine
+    environment:
+      - POSTGRES_DB=aegis
+      - POSTGRES_USER=aegis
+      - POSTGRES_PASSWORD=aegis-secret-pw
+    volumes:
+      - postgres_data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U aegis -d aegis"]
+      interval: 5s
+      timeout: 5s
+      retries: 5
+    networks:
+      - aegis-internal
+
+  redis:
+    image: redis:7.2-alpine
+    command: ["redis-server", "--maxmemory", "128mb", "--maxmemory-policy", "noeviction"]
+    healthcheck:
+      test: ["CMD", "redis-cli", "ping"]
+      interval: 5s
+      timeout: 3s
+      retries: 5
+    networks:
+      - aegis-internal
+
+  # The control plane is not published to the host in mvp; the gateway, seed
+  # and smoke checks reach it in-network.
+  control-plane:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: control-plane
+    expose:
+      - "8084"
+      - "9090"
+    environment:
+      - AEGIS_PORT=8084
+      - AEGIS_GRPC_PORT=9090
+      - AEGIS_REDIS_ADDR=redis:6379
+      - AEGIS_DB_HOST=postgres
+      - AEGIS_DB_PORT=5432
+      - AEGIS_DB_USER=aegis
+      - AEGIS_DB_PASSWORD=aegis-secret-pw
+      - AEGIS_DB_NAME=aegis
+      - AEGIS_DB_SSLMODE=disable
+    healthcheck:
+      # No -f: a 401 from the unauthenticated probe still proves the server is up.
+      test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8084/control/v1/auth/me"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 10s
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+    networks:
+      - aegis-internal
+
+  # One-shot: loads routes and the Rego policy and publishes the first snapshot.
+  seed:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: seed
+    restart: "no"
+    environment:
+      - AEGIS_CP_URL=http://control-plane:8084
+      - AEGIS_SEED_USER=admin
+      # demo credential, not for production
+      - AEGIS_SEED_PASSWORD=admin-secret
+    depends_on:
+      postgres:
+        condition: service_healthy
+      redis:
+        condition: service_healthy
+      control-plane:
+        condition: service_healthy
+    networks:
+      - aegis-internal
+
   gateway:
     build:
       context: ../../
@@ -10,6 +94,9 @@ services:
     environment:
       - AEGIS_PORT=8080
       - AEGIS_WORKLOAD_PORT=9443
+      - AEGIS_CONTROL_PLANE_GRPC_ADDR=control-plane:9090
+      - AEGIS_REDIS_ADDR=redis:6379
+      - AEGIS_SPOOL_DIR=/var/log/aegis/wal
       - AEGIS_TLS_CERT_PATH=/certs/gateway-server.crt
       - AEGIS_TLS_KEY_PATH=/certs/gateway-server.key
       - AEGIS_CLIENT_CERT_PATH=/certs/gateway-client.crt
@@ -17,19 +104,63 @@ services:
       - AEGIS_WORKLOAD_CA_PATH=/certs/root-ca.crt
       - AEGIS_ASSERTION_PRIVATE_KEY_PATH=/certs/assertion-ed25519.key
       - AEGIS_UPSTREAM_SCHEME=https
-      - AEGIS_ROUTES_PATH=policies/data/routes.json
-      - AEGIS_POLICY_PATH=policies/rego/authz.rego
       - AEGIS_ISSUER=aegis-issuer
       - AEGIS_AUDIENCE=aegis-gateway
     volumes:
       - ../certs:/certs:ro
+      - aegis_wal_spool:/var/log/aegis/wal
+    # Drain timeout 30s + 5s metrics shutdown + margin.
+    stop_grace_period: 45s
+    healthcheck:
+      # /readyz is 200 only with a snapshot, a fresh lease and an unsaturated spool.
+      test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+      start_period: 15s
+    depends_on:
+      control-plane:
+        condition: service_healthy
+      seed:
+        condition: service_completed_successfully
+      redis:
+        condition: service_healthy
+      orders:
+        condition: service_started
+      payments:
+        condition: service_started
+      admin:
+        condition: service_started
+      demo-issuer:
+        condition: service_started
     networks:
       - aegis-internal
+
+  audit-worker:
+    build:
+      context: ../../
+      dockerfile: deployments/compose/Dockerfile
+      target: audit-worker
+    environment:
+      - AEGIS_SPOOL_DIR=/var/log/aegis/wal
+      - AEGIS_DB_HOST=postgres
+      - AEGIS_DB_PORT=5432
+      - AEGIS_DB_USER=aegis
+      - AEGIS_DB_PASSWORD=aegis-secret-pw
+      - AEGIS_DB_NAME=aegis
+      - AEGIS_DB_SSLMODE=disable
+      - AEGIS_PRUNE_ARCHIVED=true
+    volumes:
+      # Read-write: the worker writes wal.cursor into the spool directory.
+      - aegis_wal_spool:/var/log/aegis/wal
     depends_on:
-      - orders
-      - payments
-      - admin
-      - demo-issuer
+      postgres:
+        condition: service_healthy
+      # The control plane's migration creates audit_events.
+      control-plane:
+        condition: service_healthy
+    networks:
+      - aegis-internal
 
   demo-issuer:
     build:
@@ -96,6 +227,10 @@ services:
       - ../certs:/certs:ro
     networks:
       - aegis-internal
+
+volumes:
+  postgres_data:
+  aegis_wal_spool:
 
 networks:
   aegis-internal:
