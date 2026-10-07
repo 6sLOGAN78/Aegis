@@ -195,7 +195,7 @@ Plans:
 
 - [x] 06-01: Kubernetes production reference manifests with default-deny NetworkPolicies and non-root security contexts
 - [x] 06-02: Security audit review, negative fuzzing verification, and credential rotation drill runbooks
-- [ ] 06-03: PostgreSQL/Redis disaster recovery drill, backup restore verification, and production SLO validation
+- [x] 06-03: PostgreSQL/Redis disaster recovery drill, backup restore verification, and production SLO validation
 
 ---
 
@@ -212,4 +212,4 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 | 3. Control Plane, Snapshot Streaming & Durable State | 5/5 | Complete   | 2026-10-07 |
 | 4. Operator Experience & Telemetry | 3/3 | Complete | 2026-10-07 |
 | 5. Distributed Resilience, Chaos & Benchmark Evidence | 3/3 | Complete | 2026-10-07 |
-| 6. Production Hardening & Operational Runbooks | 2/3 | In Progress|  |
+| 6. Production Hardening & Operational Runbooks | 3/3 | Complete | 2026-10-07 |

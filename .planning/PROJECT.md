@@ -20,15 +20,17 @@ Default-deny, fail-closed authorization and workload authentication where invali
 - [x] Workload authentication using dedicated mTLS listener with URI SAN identities (`spiffe://aegis.local/...`) — *Validated in Phase 2 (GW-05, AUTH-02, AUTH-03)*
 - [x] Signed short-lived backend assertions (`aegis-gateway` issuer) from gateway to backends over mutual TLS — *Validated in Phase 2 (AUTH-05, GW-05)*
 - [x] Enforced bypass prevention via backend mTLS and signed assertion verification — *Validated in Phase 2 (BYP-02, BYP-03)*
+- [x] Control plane for route/policy versioning, schema validation, policy simulation, and atomic snapshot distribution — *Validated in Phase 3 (CTRL-01..CTRL-06)*
+- [x] Monotonic signed configuration snapshots distributed to replicas over gRPC with bounded freshness leases (10s renew, 60s timeout) — *Validated in Phase 3 (CTRL-02, Invariant 9)*
+- [x] Redis-backed atomic rate limiting and sub-5-second principal quarantine / token revocation — *Validated in Phase 3 & 6 (REV-01, REV-03, REV-04)*
+- [x] Durable local audit spool with fsync before request forwarding and asynchronous worker delivery to PostgreSQL — *Validated in Phase 3 (AUD-01..AUD-03, Invariant 10)*
+- [x] Operator dashboard (React/TypeScript) and management REST APIs (`/control/v1`) with RBAC and CSRF protection — *Validated in Phase 4 (OPS-01..OPS-04)*
+- [x] Multi-replica distributed deployment behind a load balancer with convergence tracking and graceful drain — *Validated in Phase 5 (DIST-01, DIST-03)*
+- [x] Production hardening manifests (K8s PSS Restricted), zero-downtime key rotation drills, DR restore verification, and SRE runbooks — *Validated in Phase 6*
 
 ### Active
 
-- [ ] Control plane for route/policy versioning, schema validation, policy simulation, and atomic snapshot distribution
-- [ ] Monotonic signed configuration snapshots distributed to replicas over gRPC with bounded freshness leases (10s renew, 60s timeout)
-- [ ] Redis-backed atomic rate limiting and sub-5-second principal quarantine / token revocation
-- [ ] Durable local audit spool with fsync before request forwarding and asynchronous worker delivery to PostgreSQL
-- [ ] Operator dashboard (React/TypeScript) and management REST APIs (`/control/v1`) with RBAC and CSRF protection
-- [ ] Multi-replica distributed deployment behind a load balancer with convergence tracking and graceful drain
+*(All Milestone v1.0 core requirements validated; ready for milestone completion and v2 roadmap scoping)*
 
 ### Out of Scope
 
@@ -58,11 +60,13 @@ Default-deny, fail-closed authorization and workload authentication where invali
 | Decision | Rationale | Outcome |
 |----------|-----------|---------|
 | Embedded OPA engine over external OPA daemon | Guarantees hot-path in-memory sub-2ms evaluation without network hop or external daemon failure | Validated (~57µs eval) |
-| Separate control plane with signed snapshots over direct DB lookups | Gateway hot-path must not depend synchronously on PostgreSQL; immutable memory snapshots ensure atomic updates | — Pending (Phase 3) |
+| Separate control plane with signed snapshots over direct DB lookups | Gateway hot-path must not depend synchronously on PostgreSQL; immutable memory snapshots ensure atomic updates | Validated in Phase 3 |
 | Dedicated mTLS listener for workloads | Avoids ambiguous principal selection between user bearer tokens and client certificates | Validated in Phase 2 |
 | Signed backend assertions over raw bearer forwarding | Backends verify caller context originates from gateway without exposing user tokens downstream | Validated in Phase 2 |
-| Durable local disk spool before forwarding | Prevents loss of audit records during database outages while admitting requests within spool capacity | — Pending (Phase 3) |
-| Redis for rate limiting and revocation only (not policy truth) | Retains high-speed shared counters while keeping authoritative policy versioning in PostgreSQL snapshots | — Pending (Phase 3) |
+| Durable local disk spool before forwarding | Prevents loss of audit records during database outages while admitting requests within spool capacity | Validated in Phase 3 |
+| Redis for rate limiting and revocation only (not policy truth) | Retains high-speed shared counters while keeping authoritative policy versioning in PostgreSQL snapshots | Validated in Phase 3 & 6 |
+| Pod Security Standards Restricted for Gateway and Control Plane | Enforces least-privilege container execution in Kubernetes environments | Validated in Phase 6 |
+| Dynamic multi-key rotation with overlap window | Enables zero-downtime rotation for JWT, Ed25519, and mTLS CA keys under live traffic | Validated in Phase 6 |
 
 ## Evolution
 
@@ -82,4 +86,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-06 after Phase 2 completion*
+*Last updated: 2026-10-07 after Phase 6 completion*
