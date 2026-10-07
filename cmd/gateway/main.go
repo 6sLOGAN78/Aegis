@@ -899,15 +899,32 @@ func main() {
 		rp.ServeHTTP(w, r)
 	})
 
+	drainingState := proxy.NewDrainingState()
+
 	// Wrap handlers with audit middleware and telemetry metrics middleware
 	auditedUserHandler := audit.AuditMiddleware(auditLogger, 0)(gatewayHandler)
 	userMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedUserHandler)
+	userProbeHandler := proxy.CreateProbeHandler(
+		drainingState,
+		snapManager.IsLeaseExpired,
+		func() bool { return snapManager.Active() != nil },
+		diskSpool.IsSaturated,
+		userMetricsHandler,
+	)
 
 	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, 0)(workloadHandler)
 	workloadMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedWorkloadHandler)
 
 	// Dual-Listener Server Manager (:8080 and :9443 mTLS)
-	dualServer := proxy.NewDualServer(cfg, userMetricsHandler, workloadMetricsHandler, workloadTLSConfig)
+	dualServer := proxy.NewDualServer(cfg, userProbeHandler, workloadMetricsHandler, workloadTLSConfig)
+
+	// Configurable drain timeout (default 30s)
+	drainTimeout := 30 * time.Second
+	if val := os.Getenv("AEGIS_DRAIN_TIMEOUT"); val != "" {
+		if d, err := time.ParseDuration(val); err == nil && d > 0 {
+			drainTimeout = d
+		}
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -920,18 +937,24 @@ func main() {
 	}()
 
 	<-stop
-	log.Println("Shutting down Aegis Gateway gracefully...")
+	drainingState.SetDraining()
+	log.Printf("Aegis Gateway entering graceful drain (%v timeout)...", drainTimeout)
+
+	drainCtx, drainCancel := context.WithTimeout(context.Background(), drainTimeout)
+	defer drainCancel()
+
+	if err := dualServer.Shutdown(drainCtx); err != nil {
+		log.Printf("Error during dual server shutdown: %v", err)
+	}
+
 	streamCancel()
 	streamClient.Stop()
 
-	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
-	defer cancel()
+	shutdownCtx, shutdownCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer shutdownCancel()
 
-	_ = metricsServer.Shutdown(ctx)
+	_ = metricsServer.Shutdown(shutdownCtx)
 
-	if err := dualServer.Shutdown(ctx); err != nil {
-		log.Printf("Error during dual server shutdown: %v", err)
-	}
 	if rdb != nil {
 		_ = rdb.Close()
 	}
