@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: Awaiting next milestone
-stopped_at: Plan 06-02 complete — ready to execute Wave 3 (Plan 06-03)
-last_updated: "2026-10-07T18:29:26.692Z"
-last_activity: 2026-10-07 — Milestone v1.0 completed and archived
+status: executing
+stopped_at: v1.0 reopened; add closure phases starting at 7
+last_updated: "2026-10-07T23:53:23.734Z"
+last_activity: 2026-10-07
 progress:
-  total_phases: 7
+  total_phases: 8
   completed_phases: 7
-  total_plans: 25
-  completed_plans: 25
-  percent: 100
+  total_plans: 31
+  completed_plans: 26
+  percent: 84
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-06)
 
 **Core value:** Default-deny, fail-closed authorization and workload authentication where invalid credentials, stale security state, or dependency failures never produce implicit authorization.
-**Current focus:** Milestone complete
+**Current focus:** Phase 7 — Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)
 
 ## Current Position
 
-Phase: Milestone v1.0 complete
-Plan: —
-Status: Awaiting next milestone
-Last activity: 2026-10-07 — Milestone v1.0 completed and archived
+Phase: 7 (Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)) — EXECUTING
+Plan: 2 of 6
+Status: Ready to execute
+Last activity: 2026-10-07
 
 ## Performance Metrics
 
@@ -56,6 +56,7 @@ Last activity: 2026-10-07 — Milestone v1.0 completed and archived
 - Trend: Stable
 
 *Updated after each plan completion*
+| Phase 07 P01 | 10min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -71,10 +72,15 @@ Recent decisions affecting current work:
 - [Phase 3]: Embedded Goose migrations (FS), PostgreSQL schema migrations, monotonic Ed25519 snapshot signing ($N+1$), lock-free sync/atomic.Pointer swapping, 10s freshness leases with 60s fail-closed boundary, Redis GCRA token bucket rate limiting (100 rps, burst 200), sub-5s JTI revocation and principal quarantine with rigid 200ms fail-closed timeout, pre-forward disk WAL spool with synchronous fsync before upstream forwarding, 90% spool saturation circuit breaker (HTTP 503), async batch audit worker draining to PostgreSQL, and hardened multi-service Docker Compose profile.
 - [Phase 4]: Control plane Chi management APIs (:8084), HttpOnly session cookies with 256-bit CSRF double-submit token, ETag/If-Match optimistic concurrency (412 Precondition Failed), IdempotencyKey locking (409 Conflict) and 24h replay, RBAC middleware with Invariant 11 data-plane token rejection (403), React 19/Vite operator console in web/dashboard, Monaco editor with pure client-side Rego v1 Monarch tokenizer, AST dry-run simulator with sub-2ms latency badges, replica convergence aggregation (/control/v1/gateways) with 10s lease progress bars, emergency Redis quarantine modal with typed keyword confirmation, and low-cardinality Prometheus metrics (:9091, :9092) with negative PII leak assertions.
 - [Phase 6]: Kubernetes PSS Restricted StatefulSet with dedicated WAL PVCs, CoreDNS port 53 egress in default-deny NetworkPolicies, multi-key TokenValidator and Verifier engines with thread-safe RWMutex dynamic rotation, automated 3-phase zero-downtime rotation drill suite (JWT, Ed25519, mTLS CA), formal Security Audit Report certifying all 12 invariants, and standardized 6-part SRE credential rotation runbook.
+- [Phase 7]: Compose seed image (seed.sh + Dockerfile seed target) loads routes/policy via REST; burst clamped to max(burst,rps); POL-03 stays partial
+
+### Roadmap Evolution
+
+- Phase 7 added: Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)
 
 ### Pending Todos
 
-None. Phase 6 Wave 2 complete.
+See .planning/v1.0-MILESTONE-AUDIT.md — blockers B1–B8.
 
 ### Blockers/Concerns
 
@@ -94,10 +100,10 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-07 22:20
-Stopped at: Plan 06-02 complete — ready to execute Wave 3 (Plan 06-03)
+Last session: 2026-10-07T23:53:20.648Z
+Stopped at: v1.0 reopened; add closure phases starting at 7
 Resume file: None
 
 ## Operator Next Steps
 
-- Start the next milestone with /gsd-new-milestone
+- Add gap-closure phases (7+) from .planning/v1.0-MILESTONE-AUDIT.md, then re-run /gsd-audit-milestone v1
