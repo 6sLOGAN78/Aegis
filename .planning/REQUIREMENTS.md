@@ -68,9 +68,9 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Resilience, Telemetry & Distributed Operation (DIST)
 
-- [ ] **DIST-01**: Multi-replica deployment behind load balancer with health checking, graceful drain (30s), and reconnect jitter
+- [x] **DIST-01**: Multi-replica deployment behind load balancer with health checking, graceful drain (30s), and reconnect jitter
 - [x] **DIST-02**: Prometheus metrics tracking requests, latency, denials, snapshot age, spool capacity, and lease health without PII labels
-- [ ] **DIST-03**: Automated test suite proving negative authentication, header spoofing, path traversal, bypass prevention, and dependency outages
+- [x] **DIST-03**: Automated test suite proving negative authentication, header spoofing, path traversal, bypass prevention, and dependency outages
 
 ## v2 Requirements
 
@@ -142,9 +142,9 @@ Which phases cover which requirements. Populated during roadmap creation.
 | OPS-02 | Phase 4 | Complete |
 | OPS-03 | Phase 4 | Complete |
 | OPS-04 | Phase 4 | Complete |
-| DIST-01 | Phase 5 | Pending |
+| DIST-01 | Phase 5 | Complete |
 | DIST-02 | Phase 4 | Complete |
-| DIST-03 | Phase 5 | Pending |
+| DIST-03 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 38 total
