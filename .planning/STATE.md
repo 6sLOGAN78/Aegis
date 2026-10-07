@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 07-02-PLAN.md
-last_updated: "2026-10-07T23:56:55.909Z"
+stopped_at: Completed 07-03-PLAN.md
+last_updated: "2026-10-07T23:58:43.514Z"
 last_activity: 2026-10-07
 progress:
   total_phases: 8
   completed_phases: 7
   total_plans: 31
-  completed_plans: 27
-  percent: 87
+  completed_plans: 28
+  percent: 88
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-10-06)
 ## Current Position
 
 Phase: 7 (Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)) — EXECUTING
-Plan: 3 of 6
+Plan: 4 of 6
 Status: Ready to execute
 Last activity: 2026-10-07
 
@@ -58,6 +58,7 @@ Last activity: 2026-10-07
 *Updated after each plan completion*
 | Phase 07 P01 | 10min | 2 tasks | 2 files |
 | Phase 07 P02 | 8min | 3 tasks | 3 files |
+| Phase 07 P03 | 8min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -75,6 +76,7 @@ Recent decisions affecting current work:
 - [Phase 6]: Kubernetes PSS Restricted StatefulSet with dedicated WAL PVCs, CoreDNS port 53 egress in default-deny NetworkPolicies, multi-key TokenValidator and Verifier engines with thread-safe RWMutex dynamic rotation, automated 3-phase zero-downtime rotation drill suite (JWT, Ed25519, mTLS CA), formal Security Audit Report certifying all 12 invariants, and standardized 6-part SRE credential rotation runbook.
 - [Phase 7]: Compose seed image (seed.sh + Dockerfile seed target) loads routes/policy via REST; burst clamped to max(burst,rps); POL-03 stays partial
 - [Phase 07]: Compose lint test is red-first; assertions are never weakened, YAML changes turn it green. A4 quarantine denial is reported but non-fatal
+- [Phase 07]: mvp compose publishes only gateway and demo-issuer; control plane expose-only; hardened keeps existing 8084/9090 publication
 
 ### Roadmap Evolution
 
@@ -102,8 +104,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-07T23:56:55.895Z
-Stopped at: Completed 07-02-PLAN.md
+Last session: 2026-10-07T23:58:43.503Z
+Stopped at: Completed 07-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
