@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: milestone_complete
-stopped_at: Milestone complete (Phase 06 was final phase)
-last_updated: 2026-10-07T17:15:10.126Z
-last_activity: 2026-10-07 -- Phase 06 complete: Production hardening manifests, zero-downtime rotation drills, disaster recovery drills, and operational SRE runbooks
+status: Awaiting next milestone
+stopped_at: Plan 06-02 complete — ready to execute Wave 3 (Plan 06-03)
+last_updated: "2026-10-07T18:29:26.692Z"
+last_activity: 2026-10-07 — Milestone v1.0 completed and archived
 progress:
   total_phases: 7
   completed_phases: 7
@@ -25,12 +25,10 @@ See: .planning/PROJECT.md (updated 2026-10-06)
 
 ## Current Position
 
-Phase: 06 (production-hardening-runbooks) — COMPLETE
-Plan: 3 of 3 complete
-Status: Milestone complete
-Last activity: 2026-10-07 -- Phase 06 complete: Production hardening manifests, zero-downtime rotation drills, disaster recovery drills, and operational SRE runbooks
-
-Progress: [██████████] 100%
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-10-07 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -99,3 +97,7 @@ Items acknowledged and carried forward from previous milestone close:
 Last session: 2026-10-07 22:20
 Stopped at: Plan 06-02 complete — ready to execute Wave 3 (Plan 06-03)
 Resume file: None
+
+## Operator Next Steps
+
+- Start the next milestone with /gsd-new-milestone
