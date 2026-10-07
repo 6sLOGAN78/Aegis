@@ -153,7 +153,7 @@ Plans:
 
 - [x] 04-01: Control plane REST management APIs (/control/v1) with RBAC, CSRF protection, and optimistic concurrency
 - [x] 04-02: React/TypeScript operator dashboard with Monaco Rego editor, dry-run simulator, and audit log viewer
-- [ ] 04-03: Real-time replica convergence tracking, emergency quarantine UI, and Prometheus telemetry metrics
+- [x] 04-03: Real-time replica convergence tracking, emergency quarantine UI, and Prometheus telemetry metrics
 
 ---
 
