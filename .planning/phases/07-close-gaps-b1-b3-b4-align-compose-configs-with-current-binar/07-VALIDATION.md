@@ -38,20 +38,20 @@ created: 2026-10-08
 
 ## Per-Task Verification Map
 
-Task IDs are filled in once plans exist. Rows below are the per-requirement behaviors the plans must map tasks onto.
+Task IDs use the form `07-PP-TT` (plan, task). Owners were assigned at planning time; Status is updated by plan 07-06 Task 3 from recorded outcomes.
 
 | Task ID | Plan | Wave | Requirement | Threat Ref | Secure Behavior | Test Type | Automated Command | File Exists | Status |
 |---------|------|------|-------------|------------|-----------------|-----------|-------------------|-------------|--------|
-| TBD | TBD | TBD | REV-03 (B4) | — | control-plane sets `AEGIS_REDIS_ADDR` in mvp, hardened, distributed | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestControlPlaneHasRedis` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | REV-03 (B4) | — | quarantine returns 200, not 503, through the shipped stack | live smoke | login + `POST /control/v1/principals/smoke-user/quarantine` → 200 (smoke script) | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | REV-03 (B4) | — | gateway denies the quarantined principal (unverified in research, assumption A4) | live smoke | token for quarantined subject, request `/api/orders` → 403 | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | AUD-03 (B3) | — | one audit-worker per gateway spool; each volume mounted by exactly one gateway and one worker | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestAuditWorkerPerSpool` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | AUD-03 (B3) | — | events from all 3 gateways reach `audit_events` | live smoke | requests through HAProxy, then `select count(*) from audit_events` increases; `wal.cursor` present in all 3 volumes | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | B1 / BYP-01 / DIST-03 | — | mvp has control-plane, redis, postgres, audit-worker and gateway env wiring; no dead env vars | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run 'TestMVPTopology|TestNoDeadEnv'` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | B1 | — | MVP E2E and bypass tests pass on a rebuilt image | live integration | `make test-e2e` after `compose-up` becomes `up -d --build --wait` | ✅ (needs seed) | ⬜ pending |
-| TBD | TBD | TBD | DIST-01 (grace) | — | every gateway `stop_grace_period >= drain + 5s` | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestGatewayStopGracePeriod` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | port drift | — | compose ports equal binary defaults | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestPortsMatchBinaries` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | all | — | compose files parse | static | `docker compose -f ... config -q` | n/a | ⬜ pending |
+| 07-02-01 (test), 07-03-01, 07-03-02, 07-04-01 (fix) | 02, 03, 04 | 1, 2 | REV-03 (B4) | — | control-plane sets `AEGIS_REDIS_ADDR` in mvp, hardened, distributed | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestControlPlaneHasRedis` | ❌ W0 | ⬜ pending |
+| 07-02-02 (script), 07-05-03, 07-06-01, 07-06-02 (live) | 02, 05, 06 | 1, 3, 4 | REV-03 (B4) | — | quarantine returns 200, not 503, through the shipped stack | live smoke | login + `POST /control/v1/principals/smoke-b4-probe/quarantine` → 200 (smoke script) | ❌ W0 | ⬜ pending |
+| 07-02-02 (script), 07-05-03, 07-06-01, 07-06-02 (live; record, do not fix) | 02, 05, 06 | 1, 3, 4 | REV-03 (B4) | — | gateway denies the quarantined principal (unverified in research, assumption A4) | live smoke | token for quarantined subject, request `/api/orders` → 403 | ❌ W0 | ⬜ pending |
+| 07-02-01 (test), 07-04-02 (fix) | 02, 04 | 1, 2 | AUD-03 (B3) | — | one audit-worker per gateway spool; each volume mounted by exactly one gateway and one worker | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestAuditWorkerPerSpool` | ❌ W0 | ⬜ pending |
+| 07-02-02 (script), 07-06-02 (live) | 02, 06 | 1, 4 | AUD-03 (B3) | — | events from all 3 gateways reach `audit_events` | live smoke | requests through HAProxy, then `select count(*) from audit_events` increases; `wal.cursor` present in all 3 volumes | ❌ W0 | ⬜ pending |
+| 07-02-01 (test), 07-01-01, 07-01-02 (seed), 07-03-01 (fix) | 01, 02, 03 | 1, 2 | B1 / BYP-01 / DIST-03 | — | mvp has control-plane, redis, postgres, audit-worker and gateway env wiring; no dead env vars | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run 'TestMVPTopology|TestNoDeadEnv'` | ❌ W0 | ⬜ pending |
+| 07-01-01, 07-01-02 (seed), 07-02-03 (make compose-up), 07-05-03 (live) | 01, 02, 05 | 1, 3 | B1 | — | MVP E2E and bypass tests pass on a rebuilt image | live integration | `make test-e2e` after `compose-up` becomes `up -d --build --wait` | ✅ (needs seed) | ⬜ pending |
+| 07-02-01 (test), 07-03-01, 07-03-02, 07-04-01 (fix), 07-06-02 (live stop) | 02, 03, 04, 06 | 1, 2, 4 | DIST-01 (grace) | — | every gateway `stop_grace_period >= drain + 5s` | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestGatewayStopGracePeriod` | ❌ W0 | ⬜ pending |
+| 07-02-01 | 02 | 1 | port drift | — | compose ports equal binary defaults | hermetic YAML lint | `go test -count=1 ./tests/compose/ -run TestPortsMatchBinaries` | ❌ W0 | ⬜ pending |
+| 07-03-01, 07-03-02, 07-04-01, 07-04-02, 07-05-01 | 03, 04, 05 | 2, 3 | all | — | compose files parse | static | `docker compose -f ... config -q` | n/a | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
 

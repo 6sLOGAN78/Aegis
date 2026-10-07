@@ -347,17 +347,22 @@ If the planner/user declines a seed, the MVP profile can only be verified up to 
 | A4 | Quarantining a user principal through the CP makes the gateway deny that user once both share Redis | Summary/REV-03 | Not live-verified with a gateway in this research (control plane side only); verification step 3(b) should also re-request through the gateway and expect a deny |
 | A5 | `stop_grace_period: 45s` is enough for a gateway under real load | Pitfall 5 | Derived from code (30s drain + 5s metrics shutdown), not measured |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
 1. **Does the user want the seed (a new artifact) or only a "boots and denies" MVP profile?**
    - Known: config-only cannot serve allowed traffic; the seed works (proven live); tests expect 200s.
    - Unclear: whether adding `deployments/compose/seed/` plus a Dockerfile target is acceptable in a "config alignment" phase.
    - Recommendation: include the seed; call it out in the plan as the one non-pure-config artifact. Alternative: defer 200-path tests and mark them blocked on POL-03 closure.
+   - RESOLVED: seed included (plan 07-01 adds `deployments/compose/seed/seed.sh` and a Dockerfile `seed` target; called out as the one non-pure-config artifact). Orchestrator default; the user can overturn.
 2. **Rewrite mvp.yml or retarget `make compose-up`/`test-e2e` to hardened.yml?**
    - Both have identical service names. Recommendation: keep mvp.yml as the path (the test constant and Makefile do not change) and make it a superset-lite of hardened; avoid `include:` to keep each file standalone.
+   - RESOLVED: rewrite `docker-compose.mvp.yml` in place, keeping path and service names, standalone with no `include:` (plan 07-03). Orchestrator default; the user can overturn.
 3. **Scope of hardened.yml:** not named by the audit, has the same B4/dead-var/grace issues. Recommendation: fix it in this phase (cheap, same edits).
+   - RESOLVED: `docker-compose.hardened.yml` is fixed in this phase (plan 07-03 Task 2). Orchestrator default; the user can overturn.
 4. **Metrics ports:** keep unpublished (gateway 9091). `docker-compose.distributed.yml` publishes CP 9092; leave as is.
+   - RESOLVED: metrics ports stay unpublished; distributed control-plane 9092 publication is left as is (no port changes, S7). Orchestrator default; the user can overturn.
 5. **Orders/payments/admin Dockerfile EXPOSE cosmetics (M12):** optional.
+   - RESOLVED: deferred, not done in this phase (cosmetic only, no behavioral effect). Orchestrator default; the user can overturn.
 
 ## What remains open after this phase
 
