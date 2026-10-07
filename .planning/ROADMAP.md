@@ -210,6 +210,6 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 | 1. MVP Secure Vertical Slice | 4/4 | Complete    | 2026-10-06 |
 | 2. Workload Identity & Enforced Bypass Prevention | 4/4 | Complete   | 2026-10-06 |
 | 3. Control Plane, Snapshot Streaming & Durable State | 5/5 | Complete   | 2026-10-07 |
-| 4. Operator Experience & Telemetry | 0/3 | Not started | - |
+| 4. Operator Experience & Telemetry | 3/3 | Complete | 2026-10-07 |
 | 5. Distributed Resilience, Chaos & Benchmark Evidence | 0/3 | Not started | - |
 | 6. Production Hardening & Operational Runbooks | 0/3 | Not started | - |
