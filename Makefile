@@ -1,8 +1,9 @@
 COMPOSE_FILE := deployments/compose/docker-compose.mvp.yml
 COMPOSE_HARDENED_FILE := deployments/compose/docker-compose.hardened.yml
 COMPOSE_DISTRIBUTED_FILE := deployments/compose/docker-compose.distributed.yml
+PROFILE ?= mvp
 
-.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 manifest-build manifest-test help
+.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down compose-test compose-smoke test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 manifest-build manifest-test help
 
 certs:
 	go run ./scripts/certificates/main.go
@@ -31,10 +32,16 @@ compose-build:
 	docker compose -f $(COMPOSE_FILE) build
 
 compose-up: certs
-	docker compose -f $(COMPOSE_FILE) up -d
+	docker compose -f $(COMPOSE_FILE) up -d --build --wait
 
 compose-down:
 	docker compose -f $(COMPOSE_FILE) down
+
+compose-test:
+	go test -count=1 -v ./tests/compose/...
+
+compose-smoke:
+	bash scripts/compose-smoke.sh $(PROFILE)
 
 test-e2e: compose-up
 	go test -v -race ./tests/integration/...
@@ -88,8 +95,10 @@ help:
 	@echo "  make test-phase2        - Run all Phase 2 workload identity and bypass prevention tests"
 	@echo "  make test-full          - Run complete test suite and OPA policy tests"
 	@echo "  make compose-build      - Build Docker Compose MVP containers"
-	@echo "  make compose-up         - Ensure certs and start Docker Compose MVP cluster"
+	@echo "  make compose-up         - Ensure certs, build images and start Docker Compose MVP cluster, waiting for health"
 	@echo "  make compose-down       - Stop and tear down Docker Compose MVP cluster"
+	@echo "  make compose-test       - Run hermetic compose configuration lint tests (no Docker)"
+	@echo "  make compose-smoke      - Live smoke a running compose profile (PROFILE=mvp|hardened|distributed)"
 	@echo "  make test-e2e           - Start cluster, run end-to-end integration tests, and tear down"
 	@echo "  make up-hardened        - Build and start hardened multi-service Docker Compose cluster"
 	@echo "  make down-hardened      - Stop and tear down hardened Docker Compose cluster with volumes"
