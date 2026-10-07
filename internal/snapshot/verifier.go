@@ -6,6 +6,7 @@ import (
 	"encoding/hex"
 	"errors"
 	"fmt"
+	"sync"
 	"time"
 
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
@@ -27,20 +28,39 @@ var (
 	ErrLeaseExpired = errors.New("freshness lease expired")
 )
 
-// Verifier verifies snapshot envelopes and freshness leases using a trusted Ed25519 public key.
+// Verifier verifies snapshot envelopes and freshness leases using one or more trusted Ed25519 public keys.
 type Verifier struct {
-	pubKey ed25519.PublicKey
+	trustedKeys []ed25519.PublicKey
+	mu          sync.RWMutex
 }
 
-// NewVerifier creates a new Verifier initialized with a trusted Ed25519 public key.
-func NewVerifier(pubKey ed25519.PublicKey) *Verifier {
+// NewVerifier creates a new Verifier initialized with one or more trusted Ed25519 public keys.
+func NewVerifier(pubKeys ...ed25519.PublicKey) *Verifier {
+	keys := make([]ed25519.PublicKey, len(pubKeys))
+	copy(keys, pubKeys)
 	return &Verifier{
-		pubKey: pubKey,
+		trustedKeys: keys,
 	}
 }
 
+// AddTrustedKey appends an additional trusted public key during zero-downtime key rotation.
+func (v *Verifier) AddTrustedKey(pubKey ed25519.PublicKey) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	v.trustedKeys = append(v.trustedKeys, pubKey)
+}
+
+// SetTrustedKeys atomically replaces the trusted keyset (Phase 3 of rotation: retirement).
+func (v *Verifier) SetTrustedKeys(keys []ed25519.PublicKey) {
+	v.mu.Lock()
+	defer v.mu.Unlock()
+	copied := make([]ed25519.PublicKey, len(keys))
+	copy(copied, keys)
+	v.trustedKeys = copied
+}
+
 // VerifySnapshot validates the monotonic version, verifies the SHA-256 payload checksum,
-// checks the Ed25519 digital signature, and unmarshals the SnapshotPayload.
+// checks the Ed25519 digital signature against all trusted keys, and unmarshals the SnapshotPayload.
 func (v *Verifier) VerifySnapshot(env *snapshotv1.SnapshotEnvelope, currentVersion int64) (*snapshotv1.SnapshotPayload, error) {
 	if env == nil {
 		return nil, errors.New("cannot verify nil snapshot envelope")
@@ -58,8 +78,20 @@ func (v *Verifier) VerifySnapshot(env *snapshotv1.SnapshotEnvelope, currentVersi
 		return nil, fmt.Errorf("%w: expected %s, got %s", ErrChecksumMismatch, env.PayloadSha256, computedDigest)
 	}
 
-	// 3. Cryptographically verify signature over payload SHA-256
-	if !ed25519.Verify(v.pubKey, []byte(env.PayloadSha256), env.Signature) {
+	// 3. Cryptographically verify signature over payload SHA-256 against trusted keyset
+	v.mu.RLock()
+	keys := make([]ed25519.PublicKey, len(v.trustedKeys))
+	copy(keys, v.trustedKeys)
+	v.mu.RUnlock()
+
+	validSig := false
+	for _, key := range keys {
+		if ed25519.Verify(key, []byte(env.PayloadSha256), env.Signature) {
+			validSig = true
+			break
+		}
+	}
+	if !validSig {
 		return nil, ErrInvalidSignature
 	}
 
@@ -77,7 +109,7 @@ func (v *Verifier) VerifySnapshot(env *snapshotv1.SnapshotEnvelope, currentVersi
 	return &payload, nil
 }
 
-// VerifyLease validates the signature and expiration time of a FreshnessLease.
+// VerifyLease validates the signature and expiration time of a FreshnessLease against all trusted keys.
 func (v *Verifier) VerifyLease(lease *snapshotv1.FreshnessLease, expectedVersion int64) error {
 	if lease == nil {
 		return errors.New("cannot verify nil freshness lease")
@@ -97,9 +129,21 @@ func (v *Verifier) VerifyLease(lease *snapshotv1.FreshnessLease, expectedVersion
 		return ErrLeaseExpired
 	}
 
-	// Verify digital signature over deterministic lease digest
+	// Verify digital signature over deterministic lease digest against trusted keyset
 	digest := LeaseDigest(lease.LeaseId, lease.SnapshotVersion, validUntil.UnixNano())
-	if !ed25519.Verify(v.pubKey, digest, lease.LeaseSignature) {
+	v.mu.RLock()
+	keys := make([]ed25519.PublicKey, len(v.trustedKeys))
+	copy(keys, v.trustedKeys)
+	v.mu.RUnlock()
+
+	validSig := false
+	for _, key := range keys {
+		if ed25519.Verify(key, digest, lease.LeaseSignature) {
+			validSig = true
+			break
+		}
+	}
+	if !validSig {
 		return ErrInvalidSignature
 	}
 
