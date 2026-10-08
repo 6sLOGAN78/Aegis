@@ -10,10 +10,10 @@ The journey enforces strict default-deny authorization, zero-repair path normali
 
 **Phase Numbering:**
 
-- Integer phases (0, 1, 2, 3, 4, 5, 6): Planned milestone work
+- Integer phases (0, 1, 2, 3, 4, 5, 6, 7): Planned milestone work
 - Decimal phases (e.g. 2.1): Urgent insertions (marked with INSERTED)
 
-Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6.
+Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7.
 
 - [x] **Phase 0: Architecture Contracts, Schemas & Threat Model** - Authoritative ADRs, OpenAPI/Protobuf contracts, Rego input schemas, and zero-trust threat models (completed 2026-10-06)
 - [x] **Phase 1: MVP Secure Vertical Slice** - Go gateway reverse proxy, local demo JWT issuer, embedded OPA engine, 3 private microservices, and Docker Compose MVP (completed 2026-10-06)
@@ -22,6 +22,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6.
 - [x] **Phase 4: Operator Experience & Telemetry** - React/TypeScript dashboard, Monaco Rego editor, dry-run policy simulator, replica convergence tracking, /control/v1 REST APIs, and Prometheus metrics
 - [x] **Phase 5: Distributed Resilience, Chaos & Benchmark Evidence** - 3 gateway replicas behind load balancer, 30s graceful drain, gRPC reconnect jitter, chaos fault injection tests, and reproducible k6 benchmarks
 - [x] **Phase 6: Production Hardening & Operational Runbooks** - Kubernetes reference manifests, credential rotation drills, disaster recovery drills, security audit review, and SLO validation runbooks
+- [x] **Phase 7: Close gaps B1, B3, B4 (compose alignment)** - v1.0 gap closure: all three compose profiles run the current binaries; partial contribution to REV-03 and AUD-03, which remain unsatisfied (completed 2026-10-09)
 
 ---
 
@@ -237,7 +238,7 @@ Plans:
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
+Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -248,3 +249,4 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6
 | 4. Operator Experience & Telemetry | 3/3 | Complete | 2026-10-07 |
 | 5. Distributed Resilience, Chaos & Benchmark Evidence | 3/3 | Complete | 2026-10-07 |
 | 6. Production Hardening & Operational Runbooks | 3/3 | Complete | 2026-10-07 |
+| 7. Close gaps B1, B3, B4 (compose alignment) | 6/6 | Complete | 2026-10-09 |

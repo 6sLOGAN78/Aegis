@@ -1,8 +1,8 @@
 ---
 phase: 07-close-gaps-b1-b3-b4-align-compose-configs-with-current-binar
 verified: 2026-10-09T00:00:00Z
-status: human_needed
-score: 4/5 success criteria verified (SC4 verified statically, live 45s grace path not exercised)
+status: passed
+score: 5/5 success criteria verified (SC4 live grace path exercised on 2026-10-09, see Human verification results)
 overrides_applied: 0
 re_verification: false
 gaps: []
@@ -20,7 +20,7 @@ human_verification:
 
 **Phase Goal:** Make the three shipped compose profiles (mvp, hardened, distributed) run the current binaries, closing audit blockers B1 (MVP compose cannot run the current gateway), B3 (distributed audit worker drains 1 of 3 spools), B4 (control plane has no AEGIS_REDIS_ADDR), plus gateway stop_grace_period. Deployment wiring only; no Go source change. REV-03 and AUD-03 are partial contributions and REMAIN UNSATISFIED by design.
 **Verified:** 2026-10-09
-**Status:** human_needed
+**Status:** passed (human verification items resolved 2026-10-09)
 **Re-verification:** No, initial verification
 
 ## Evidence classes used
@@ -143,6 +143,28 @@ Not applicable beyond the seed to control plane to gateway snapshot path, which 
 **Test:** From `down -v`, `up -d --build --wait`, `bash scripts/compose-smoke.sh <profile> --stop-check` for mvp, hardened and distributed; on mvp also run TestMVPEndToEnd and TestBackendBypassPrevention.
 **Expected:** 0 hard failures; 9/9 and 7/7; per-worker wal.cursor advances in distributed.
 **Why human:** executor-recorded, not reproduced here; requires disk headroom to build images.
+
+## Human verification results (2026-10-09)
+
+After disk space was freed (root filesystem 85% used), the user asked for the outstanding items to be run. Both were run by the orchestrator on clean rebuilt stacks. `scripts/compose-smoke.sh` was first changed (commit 9daf588) so its GRACE check no longer passes `-t 60` and its exit trap always logs in again (review findings WR-02, WR-03).
+
+**Item 1 — gateway stop under the configured grace period, with requests in flight: passed.**
+Five concurrent request loops ran against `http://127.0.0.1:8080/api/orders` while each gateway was stopped with `docker compose stop <service>` (no `-t`). `Config.StopTimeout` was 45 on every gateway container.
+
+| Profile | Service | Exit code | Elapsed |
+|---|---|---|---|
+| mvp | gateway | 0 | 0.46s |
+| hardened | gateway | 0 | 0.59s |
+| distributed | gateway-1 | 0 | 0.28s |
+| distributed | gateway-2 | 0 | 0.32s |
+| distributed | gateway-3 | 0 | 0.32s |
+
+Each gateway returned to healthy afterwards. Limit of this evidence: the in-flight requests were short (unauthenticated requests answered in milliseconds), so the drain finished almost immediately. A drain that needs most of the 30s window was not produced; that margin still rests on the code arithmetic (30s drain + 5s metrics shutdown < 45s).
+
+**Item 2 — reproduce the live evidence: passed.**
+From `down -v --remove-orphans` and `up -d --build --wait` on each profile: seed exit 0 (`seed complete: 5 routes, policy mvp-authz, snapshot version 2`), smoke exit 0 with 0 hard failures on mvp, hardened and distributed, `A4 RESULT: PASS (HTTP 403)` on all three, `wal.cursor` advanced for audit-worker-1, -2 and -3 on distributed, and `go test -race ./tests/integration/ -run 'TestMVPEndToEnd|TestBackendBypassPrevention'` ok against the fresh mvp stack. No quarantine keys remained in Redis. All stacks were torn down; no non-Aegis container was touched.
+
+**Regression note.** `go test ./...` (excluding `tests/integration`) passes with disk space restored, except `benchmarks/TestPolicyEngine_LatencyBudget`, which exceeded its 2ms p99 budget twice when run inside the full parallel suite on a loaded machine (load average about 11) and passed three times out of three in isolation (p99 0.31 to 0.64 ms). No Go source changed in this phase; this is a timing-sensitive test, not a regression.
 
 ## Gaps Summary
 
