@@ -233,6 +233,16 @@ Plans:
 
 - [x] 07-06-PLAN.md — Live hardened and distributed verification, grace-period measurement, final regression and validation map (needs Docker, destructive)
 
+### Phase 8: Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
+
+**Goal:** [To be planned]
+**Requirements**: TBD
+**Depends on:** Phase 7
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 8 to break down)
+
 ---
 
 ## Progress

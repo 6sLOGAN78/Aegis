@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: gap_closure
-stopped_at: Phase 7 complete and verified; v1.0 gap closure continues (B2, B5, B6, B7, B8 open)
-last_updated: 2026-10-08T20:09:23.813Z
-last_activity: 2026-10-08
+status: verifying
+stopped_at: Phase 8 context gathered
+last_updated: "2026-10-08T21:06:11.628Z"
+last_activity: 2026-10-09 -- Phase 7 complete and verified
 progress:
-  total_phases: 8
+  total_phases: 9
   completed_phases: 8
   total_plans: 31
   completed_plans: 31
-  percent: 100
+  percent: 89
 ---
 
 # Project State
@@ -86,6 +86,7 @@ Recent decisions affecting current work:
 ### Roadmap Evolution
 
 - Phase 7 added: Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)
+- Phase 8 added: Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
 
 ### Pending Todos
 
@@ -109,9 +110,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-08T00:14:03.986Z
-Stopped at: Completed 07-06-PLAN.md
-Resume file: None
+Last session: 2026-10-08T21:06:11.614Z
+Stopped at: Phase 8 context gathered
+Resume file: .planning/phases/08-close-gap-b7-route-denials-and-completion-events-to-the-audi/08-CONTEXT.md
 
 ## Operator Next Steps
 
