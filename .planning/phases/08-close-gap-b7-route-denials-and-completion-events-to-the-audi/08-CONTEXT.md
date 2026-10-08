@@ -38,10 +38,17 @@ Out of scope (other closure phases): `jti` in the demo issuer, percent-encoded S
 - **D-12:** When a completion record cannot be written (queue full, hard limit reached, or write error), the gateway counts it, logs it, and treats itself as saturated: new allowed requests get 503 until writes succeed again. No traffic is admitted while audit is losing data.
 - **D-13:** Saturation 503s are recorded like rate-limit denials (first per principal and route per window, then a count), written into the reserved headroom.
 
+### Decisions added after research (2026-10-09)
+- **D-14:** Refines D-04. Fail-closed rejections whose caller is not yet identified or that repeat at request rate during an outage — stale-lease and no-snapshot 503s (these run before authentication), Redis-outage 503s and spool-write-error 500s — are suppressed and counted: the first per reason per window is recorded, then a count when the window closes.
+- **D-15:** Extends D-06 to all identified-principal denials. Any identical denial (same principal, route and reason) is recorded once per window and then counted. Every distinct denial is still recorded. This bounds "no route" 404 and revoked/quarantined rejections, which run before the rate limiter.
+- **D-16:** The three rejections that happen before the audit middleware (concurrency-limit 429, oversized-header 431, workload bearer-on-mTLS 401) get a low-cardinality metrics counter only. No audit rows, no reordering of the middleware chain.
+- **D-17:** AUD-03 is to be closed by this phase with two live checks on the real stack: a dedupe replay (delete the cursor, restart the worker, row count unchanged) and a multi-segment rotation run. A segment-size setting may be added for this.
+- **D-18:** Field values written to audit records are normalized (NUL bytes stripped, values truncated to column widths) at record construction and again in the worker, so one hostile request cannot make Postgres reject a batch and wedge the worker. Raised by research; treated as required.
+
 ### Claude's Discretion
 - Exact numbers: group-flush interval, completion queue size, the hard limit above 90%, the cap rate for unauthenticated rejections, and the suppression window length. Research should propose values and justify them; they should be configurable with safe defaults.
 - Names of the type values and of the new metrics.
-- How the suppressed-count record is represented (a field on the event versus a dedicated summary record).
+- How the suppressed-count record is represented. Research recommends a dedicated summary row with a `suppressed_count` column added by an additive migration; the planner may take that or the no-migration fallback.
 - Whether the cap in D-05 and the suppression in D-06/D-13 share one mechanism.
 
 </decisions>
