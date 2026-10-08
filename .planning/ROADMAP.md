@@ -211,7 +211,7 @@ Plans:
   4. No compose service sets `AEGIS_ROUTES_PATH` or `AEGIS_POLICY_PATH`; every gateway sets `stop_grace_period: 45s` and stops with exit code 0, not 137; no compose ports change; backends and the MVP control plane stay unpublished.
   5. A hermetic Go test (`tests/compose`, no Docker) guards all of the above, `make compose-up` rebuilds images and waits for health, and a smoke script (`scripts/compose-smoke.sh`) reports the unverified assumption that a quarantined principal is denied at the gateway as an explicit PASS/FAIL result (recorded, not fixed, if it fails for out-of-scope reasons).
 
-**Plans:** 4/6 plans executed
+**Plans:** 5/6 plans executed
 
 Plans:
 **Wave 1**
@@ -226,7 +226,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 07-05-PLAN.md — Hermetic gate, blocking teardown approval, live MVP verification on a clean rebuilt stack (needs Docker, destructive)
+- [x] 07-05-PLAN.md — Hermetic gate, blocking teardown approval, live MVP verification on a clean rebuilt stack (needs Docker, destructive)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
