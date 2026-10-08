@@ -24,7 +24,7 @@ created: 2026-10-09
 | **Live (real binary)** | `bash scripts/compose-smoke.sh mvp` against a stack brought up with `docker compose ... up -d --build --wait` |
 | **Estimated runtime** | ~2-4 seconds quick; full suite under a minute; live check several minutes (image builds) |
 
-Environment notes: if "audit spool saturated" appears because the host disk is over 90% full, run with `mkdir -p /dev/shm/aegis-gotmp && TMPDIR=/dev/shm/aegis-gotmp go test ...` and remove the directory afterwards. New tests must inject the quota/statfs rather than depend on real disk usage. `benchmarks/TestPolicyEngine_LatencyBudget` is timing-sensitive; run it in isolation if it fails under load.
+Environment notes: the repo has 17 unrelated unformatted Go files, so the gofmt gate is scoped to Go files changed in this phase: `{ git diff --name-only --diff-filter=d 94cbd2f -- '*.go'; git ls-files --others --exclude-standard -- '*.go'; } | sort -u | xargs -r gofmt -l` must print nothing (94cbd2f is the phase base commit). The live run requires the Docker filesystem to be at most 80 percent used; a live failure caused by host-disk saturation is an environment failure, not a Phase 8 defect. If "audit spool saturated" appears because the host disk is over 90% full, run with `mkdir -p /dev/shm/aegis-gotmp && TMPDIR=/dev/shm/aegis-gotmp go test ...` and remove the directory afterwards. New tests must inject the quota/statfs rather than depend on real disk usage. `benchmarks/TestPolicyEngine_LatencyBudget` is timing-sensitive; run it in isolation if it fails under load.
 
 ---
 
@@ -58,13 +58,14 @@ Task IDs, plan and wave are filled in once plans exist.
 | TBD | TBD | TBD | D-12 | — | Queue-full / hard-limit / write-error sets fault -> `CheckSaturation()` true -> `AppendPreForward` saturated; recovers without traffic | unit | `... -run TestWriteFaultGate` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | D-05 | — | Unauthenticated cap: rate/burst per reason, fake clock, over-cap `Drop` + counter | unit | `... -run TestGovernorUnauthCap` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | D-06 / D-13 | — | Suppression: first recorded, repeats counted, summary at window close with correct `suppressed_count`; map bound + overflow; fake clock `Sweep(now)` | unit | `... -run TestGovernorSuppression` | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | D-04 | — | Classification table: every reason literal in `cmd/gateway/main.go` (go/parser scan) is classified | unit (drift guard) | `... -run TestEveryMainReasonIsClassified` | ❌ W0 | ⬜ pending |
+| TBD | TBD | TBD | D-04 | — | Classification table: every reason literal in `cmd/gateway/main.go` (go/parser scan) and every reason in `internal/policy/engine.go` and `policies/rego/authz.rego` is classified | unit (drift guard) | `... -run 'TestEveryMainReasonIsClassified|TestEveryPolicyReasonIsClassified'` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | DIST-02 hygiene | — | New metrics exposed, closed label values, no forbidden label keys | unit | `go test -race -count=1 ./internal/telemetry/` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | Config | — | New env keys parse, defaults, invalid -> error | unit | `go test -race -count=1 ./internal/config/` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | AUD-03/AUD-04 live | — | On the real binary: allowed request -> `decision`(status 0) + `completion`(status 200, duration_ms > 0) rows sharing `request_id`; denied request -> one `denial` row (403, deny, duration_ms > 0); unauthenticated -> `denial` 401 anonymous | live smoke | `bash scripts/compose-smoke.sh mvp` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | AUD-03 live | — | Replay/dedupe: delete worker `wal.cursor`, restart worker, `count(*)` unchanged | live smoke | same script, new section | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | AUD-03 live | — | Rotation: gateway with small `AEGIS_SPOOL_SEGMENT_BYTES`, enough requests for >= 2 segments, all rows present, count equals expected | live smoke / compose profile | same script | ❌ W0 | ⬜ pending |
-| TBD | TBD | TBD | D-14 / D-15 | — | Outage 503s/500s and all identical identified denials are recorded once per window, then counted | unit | `go test -race -count=1 ./internal/audit/ -run TestGovernorSuppression` | ❌ W0 | ⬜ pending |
+| TBD | TBD | TBD | D-14 / D-15 | — | Outage 503s/500s are recorded once per reason per window regardless of principal (then counted); all identical identified denials once per window; a full suppression map routes new keys to a per-reason overflow bucket (no per-request fsync) | unit | `go test -race -count=1 ./internal/audit/ -run 'TestGovernorSuppression|TestGovernorOutageByReason|TestGovernorOverflowBucket|TestGovernorStashBounded'` | ❌ W0 | ⬜ pending |
+| TBD | TBD | TBD | D-12 | — | A recovery probe never clears a fault raised after the probe started (monotonic fault generation) | unit | `go test -race -count=1 ./internal/audit/ -run TestCommitterFaultGenerationRace` | ❌ W0 | ⬜ pending |
 | TBD | TBD | TBD | D-16 | — | Pre-middleware rejections (concurrency 429, 431, workload bearer 401) increment a low-cardinality counter | unit | `go test -race -count=1 ./internal/telemetry/ ./internal/proxy/` | ❌ W0 | ⬜ pending |
 
 *Status: ⬜ pending · ✅ green · ❌ red · ⚠️ flaky*
@@ -74,10 +75,11 @@ Task IDs, plan and wave are filled in once plans exist.
 ## Wave 0 Requirements
 
 - [ ] `internal/audit/governor_test.go` — unauthenticated cap, suppression, bounds, fake clock
-- [ ] `internal/audit/committer_test.go` / `spool_group_test.go` — group commit, rotation, hard-limit band, write fault, shutdown, `-race` stress (needs injectable statfs and a sync-count hook)
+- [ ] `internal/audit/committer_test.go` / `spool_group_test.go` — group commit, rotation, hard-limit band, write fault (monotonic fault generation), shutdown, `-race` stress (needs injectable statfs and a sync-count hook); `committer_test.go` owns the shared helpers `newTestSpool`, `newTestSpoolControlled`, `readAllEvents`, `fakeRecorder`
+- [ ] `internal/audit/pipeline_test.go`, `pipeline_e2e_test.go`, `pipeline_e2e_delivery_test.go` — pipeline, request-path end-to-end, worker delivery / degraded-disk / shutdown end-to-end (reuse the shared helpers)
 - [ ] `internal/audit/logger_test.go` additions — sink ordering, non-blocking completion, upstream error classes, decision-flip fix
-- [ ] `internal/audit/worker_test.go` additions and `event_test.go` — typed events, normalization
-- [ ] `internal/audit/main_reasons_test.go` — drift guard over `cmd/gateway/main.go`
+- [ ] `internal/audit/worker_test.go` additions (new tests write frames with a local `writeWorkerTestFrames` helper, not the statfs-gated spool), `tests/dr/dr_test.go` 20-argument helper, and `event_test.go` — typed events, normalization
+- [ ] `internal/audit/main_reasons_test.go` — drift guards over `cmd/gateway/main.go` and over `internal/policy/engine.go` / `policies/rego/authz.rego`
 - [ ] `internal/telemetry/metrics_test.go` and `internal/config/` test additions
 - [ ] `scripts/compose-smoke.sh` — new audit-type, dedupe-replay and rotation sections
 - [ ] No framework install needed

@@ -235,13 +235,54 @@ Plans:
 
 ### Phase 8: Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
 
-**Goal:** [To be planned]
-**Requirements**: TBD
+**Goal:** Make the gateway write denial records and completion records (backend HTTP status, duration, error code) into the durable disk spool so the existing audit worker delivers them to PostgreSQL with an explicit record type, closing v1.0 audit blocker B7 (`audit.NewLogger(nil)` sent completions and every denial to stdout only). Fail closed when audit is losing data, bound spool use by denial floods, harden the worker against hostile field values, and show the result on the real binary with a dedupe-replay and a multi-segment rotation run.
+**Mode:** standard (gap closure from `.planning/v1.0-MILESTONE-AUDIT.md`, closure group 2 "Audit completeness")
 **Depends on:** Phase 7
-**Plans:** 0 plans
+**Requirements:** AUD-03, AUD-04 (ticked only for what the live evidence recorded in plan 08-11 proves; verdicts in plan 08-12)
+**Success Criteria** (what must be TRUE):
+
+  1. An allowed request produces two linked rows in `audit_events`: the unchanged pre-forward `decision` row and a separate `completion` row (own `event_id`, same `request_id`) carrying backend status, `duration_ms > 0` and any error code; a denied request produces one `denial` row with `decision=deny`, reason, status and duration (D-01, D-02, D-03, AUD-04).
+  2. Every rejection of an identified principal is recorded once per window per (principal, route, reason) and then counted in a `suppressed_count` summary row; outage-class rejections (stale lease, no snapshot, Redis outage, spool write error) are recorded once per reason per window regardless of principal, and a full suppression map routes new keys to a per-reason overflow bucket instead of recording every request; unauthenticated 400/401 rejections are rate-capped per reason and counted when dropped; pre-middleware rejections get a metrics counter only (D-04, D-05, D-06, D-13, D-14, D-15, D-16).
+  3. Denial records are fsynced (with shared group flush) before the denial response is sent; completions are queued off the request path and never delay a response; the pre-forward allow record keeps its synchronous fsync (D-07, D-08, D-09); queued records are flushed on graceful shutdown before the spool closes (D-10).
+  4. Between the 90 percent gate and a 95 percent hard limit only denial and completion records are written; past the hard limit they are dropped and counted; any completion loss (queue full, hard limit, write error) trips the same gate so new allowed requests get 503 and `/readyz` reports unready, recovering without inbound traffic (D-11, D-12).
+  5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
+  6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
+
+**Plans:** 12 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 8 to break down)
+**Wave 1**
+
+- [ ] 08-01-PLAN.md — Event type and suppressed-count fields, `Normalize()`, worker typing + 20-argument insert (worker and tests/dr test helpers), migration 000003, `denial` in the event_type contract
+- [ ] 08-02-PLAN.md — Spool: `WriteFrames` batch writer, hard limit, injectable statfs, write-fault gate (AppendPreForward unchanged)
+- [ ] 08-03-PLAN.md — Config keys with safe defaults, audit and rejection metrics, pre-middleware rejection counter
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 08-04-PLAN.md — Governor: per-window suppression (outage reasons keyed by reason only, overflow bucket, bounded stash), unauthenticated token buckets, main.go and policy-engine reason drift guards
+- [ ] 08-05-PLAN.md — `AuditMiddleware` sink seam: denial hook before first WriteHeader, async completion, decision-flip fix, upstream error codes
+- [ ] 08-06-PLAN.md — Committer: group-commit writer, bounded queues, fail-closed fault handling (monotonic fault generation), shutdown drain, shared audit test helpers
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 08-07-PLAN.md — Pipeline (sink implementation, sweeper, ordered shutdown) and hermetic middleware-to-worker end-to-end tests (request-path scenarios; delivery, degraded-disk and shutdown scenarios)
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 08-08-PLAN.md — Gateway wiring in `cmd/gateway/main.go`, MVP compose knobs, compose lint updates, main() wiring guard
+- [ ] 08-09-PLAN.md — Smoke script: typed-row, suppression, dedupe-replay and rotation assertions plus hermetic script lint
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
+- [ ] 08-10-PLAN.md — Hermetic gate (phase-scoped gofmt), disk headroom and Docker inventory, blocking teardown approval
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
+- [ ] 08-11-PLAN.md — Live MVP verification: bring-up and smoke (typed rows, dedupe replay, rotation), graceful-stop check, teardown (needs Docker, destructive)
+
+**Wave 7** *(blocked on Wave 6 completion)*
+
+- [ ] 08-12-PLAN.md — Final regression, validation map, evidence-derived AUD-03 / AUD-04 verdicts and reconciliation notes
 
 ---
 
