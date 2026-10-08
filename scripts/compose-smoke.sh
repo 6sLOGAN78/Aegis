@@ -154,9 +154,14 @@ wait_count_above() {
 
 # Always release quarantines, even on interrupt or failure (T-07-08).
 cleanup() {
-  if [ -n "${SESSION}" ] || op_login; then
-    cp_call DELETE /control/v1/principals/usr_developer_01/quarantine >/dev/null || true
-    cp_call DELETE /control/v1/principals/smoke-b4-probe/quarantine >/dev/null || true
+  # Always log in again: a session from earlier in the run may have gone stale.
+  if op_login; then
+    cp_call DELETE /control/v1/principals/usr_developer_01/quarantine >/dev/null \
+      || echo "WARN: could not release quarantine for usr_developer_01" >&2
+    cp_call DELETE /control/v1/principals/smoke-b4-probe/quarantine >/dev/null \
+      || echo "WARN: could not release quarantine for smoke-b4-probe" >&2
+  else
+    echo "WARN: cleanup login failed; usr_developer_01 and smoke-b4-probe may still be quarantined" >&2
   fi
 }
 trap cleanup EXIT
@@ -306,14 +311,15 @@ fi
 if [ "${STOP_CHECK}" = "true" ]; then
   echo "=== GRACE: ${GW} stops with exit code 0 ==="
   cid="$(dc ps -aq "${GW}" 2>/dev/null | head -n1 || true)"
-  dc stop -t 60 "${GW}" >/dev/null 2>&1 || true
+  # No -t: the stop must succeed within the service's own stop_grace_period.
+  dc stop "${GW}" >/dev/null 2>&1 || true
   exit_code="$(docker inspect -f '{{.State.ExitCode}}' "${cid}" 2>/dev/null || true)"
   if [ "${exit_code}" = "0" ]; then
     pass "GRACE ${GW} exited 0 on stop"
   else
     fail "GRACE ${GW}" "exit code ${exit_code:-unknown}; 137 means SIGKILL so stop_grace_period was too short"
   fi
-  dc start "${GW}" >/dev/null 2>&1 || true
+  dc up -d --wait "${GW}" >/dev/null 2>&1 || fail "GRACE ${GW}" "did not become healthy again after restart"
 fi
 
 echo "=== Summary: ${FAILS} hard failure(s) ==="
