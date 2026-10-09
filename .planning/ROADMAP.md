@@ -248,7 +248,7 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 7/12 plans executed
+**Plans:** 8/12 plans executed
 
 Plans:
 **Wave 1**
@@ -269,7 +269,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 08-08-PLAN.md — Gateway wiring in `cmd/gateway/main.go`, MVP compose knobs, compose lint updates, main() wiring guard
+- [x] 08-08-PLAN.md — Gateway wiring in `cmd/gateway/main.go`, MVP compose knobs, compose lint updates, main() wiring guard
 - [ ] 08-09-PLAN.md — Smoke script: typed-row, suppression, dedupe-replay and rotation assertions plus hermetic script lint
 
 **Wave 5** *(blocked on Wave 4 completion)*
