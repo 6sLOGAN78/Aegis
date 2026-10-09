@@ -248,7 +248,7 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 9/12 plans executed
+**Plans:** 10/12 plans executed
 
 Plans:
 **Wave 1**
@@ -274,7 +274,7 @@ Plans:
 
 **Wave 5** *(blocked on Wave 4 completion)*
 
-- [ ] 08-10-PLAN.md — Hermetic gate (phase-scoped gofmt), disk headroom and Docker inventory, blocking teardown approval
+- [x] 08-10-PLAN.md — Hermetic gate (phase-scoped gofmt), disk headroom and Docker inventory, blocking teardown approval
 
 **Wave 6** *(blocked on Wave 5 completion)*
 

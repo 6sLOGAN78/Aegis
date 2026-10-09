@@ -1,6 +1,6 @@
-# Phase 8 Plan 10: Hermetic gate and Docker teardown gate (IN PROGRESS, awaiting user decision)
+# Phase 8 Plan 10: Hermetic gate and Docker teardown gate
 
-Status: Task 1 done. Task 2 (blocking checkpoint) is open. No mutating Docker command has been run. This plan is NOT complete.
+Status: complete. Task 1 gate green apart from the known latency-benchmark flake; Task 2 checkpoint answered "Approved" by the user. No mutating Docker command was run in this plan.
 
 ## Task 1: hermetic gate (phase base 94cbd2f)
 
@@ -62,4 +62,14 @@ Not ours, will not be touched:
 
 ## Teardown approval
 
-PENDING. No reply has been recorded. No mutating Docker command has been executed in this plan.
+Recorded 2026-10-09 by the orchestrator. The user was shown the gate results, the disk numbers (`df` 87% used, 23 GB available; spool gate ratio 82.5% against the amended 85% limit), the current Docker state (no Aegis containers, images, volumes or network; unrelated `devrag-stack` containers running and not to be touched) and the commands plan 08-11 will run, and was asked: "Approve the Docker rebuild, live MVP run and teardown described above for plan 08-11?"
+
+The user's reply, verbatim: "Approved" (approved).
+
+Scope of the approval: `docker compose -f deployments/compose/docker-compose.mvp.yml` `down -v --remove-orphans`, `up -d --build --wait`, per-service `stop` / `restart` / `up -d --wait` / `exec` / `logs` as the smoke script and plan 08-11 require, pulling the base images and building the Aegis images, and the final `down -v --remove-orphans`. Not covered: any prune, the hardened or distributed profiles, or any non-Aegis container, image, volume or network.
+
+No mutating Docker command was executed in this plan.
+
+## Changes between the gate and the live run
+
+The Phase 8 code review (08-REVIEW.md: 1 critical, 7 warnings, 6 info) finished after the Task 1 gate above. Before the live run, the critical and all seven warnings were fixed (08-REVIEW-FIX.md, commits 7dc9e65, 94da2bc, 677281a, 9a0ecac, eb91e6a, 05f1dcf), each with a regression test. After the fixes: `go build ./...` and `go vet ./...` pass; `go test -race -count=1` on everything except `tests/integration` passes apart from `benchmarks/TestPolicyEngine_LatencyBudget`, which passes in isolation; `go test -race -count=5 ./internal/audit/` passes; the `AppendPreForward` body is byte-identical to 94cbd2f. The live run in plan 08-11 therefore exercises the fixed code, not the code the Task 1 table measured.
