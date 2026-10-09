@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 08-02-PLAN.md
-last_updated: "2026-10-09T05:02:48.235Z"
+stopped_at: Completed 08-03-PLAN.md
+last_updated: "2026-10-09T05:06:24.840Z"
 last_activity: 2026-10-09
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 43
-  completed_plans: 33
-  percent: 77
+  completed_plans: 34
+  percent: 79
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-10-06)
 ## Current Position
 
 Phase: 8 (Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)) — EXECUTING
-Plan: 3 of 12
+Plan: 4 of 12
 Status: Ready to execute
 Last activity: 2026-10-09
 
@@ -64,6 +64,7 @@ Last activity: 2026-10-09
 | Phase 07 P05 | 20min | 3 tasks | 1 files |
 | Phase 08 P01 | 20min | 3 tasks | 10 files |
 | Phase 08 P02 | 25min | 2 tasks | 2 files |
+| Phase 08 P03 | 20min | 3 tasks | 8 files |
 
 ## Accumulated Context
 
@@ -86,6 +87,7 @@ Recent decisions affecting current work:
 - [Phase 07]: 07-05: MVP stack verified live unchanged; A4 PASS (HTTP 403); REV-03/AUD-03 remain open
 - [Phase 08]: 08-01: explicit event_type allowlist with status-based fallback; Normalize applied in worker per-event copy; non-UUID ids replaced with fresh UUIDs
 - [Phase 08]: 08-02: WriteFrames gated by hard limit (0.95) only, never CheckSaturation or fault flag; rotation after whole batch; truncate-or-rotate on write/fsync error
+- [Phase 08]: 08-03: RejectionRecorder held in atomic.Pointer so it can be attached after NewDualServer; nil is a no-op
 
 ### Roadmap Evolution
 
@@ -114,8 +116,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-09T05:02:48.224Z
-Stopped at: Completed 08-02-PLAN.md
+Last session: 2026-10-09T05:06:24.824Z
+Stopped at: Completed 08-03-PLAN.md
 Resume file: None
 
 ## Operator Next Steps
