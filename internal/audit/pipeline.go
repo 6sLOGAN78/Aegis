@@ -26,6 +26,12 @@ type Pipeline struct {
 	// through newPipelineClock before the sweeper starts.
 	now func() time.Time
 
+	// sumMu guards carry and maxCarry: closed-window summaries the committer's bounded
+	// queue had no room for (WR-02).
+	sumMu    sync.Mutex
+	carry    []*CompletionEvent
+	maxCarry int
+
 	sweepEvery   time.Duration
 	sweepQuit    chan struct{}
 	sweepDone    chan struct{}
@@ -56,12 +62,17 @@ func newPipelineClock(spool *DiskSpool, rec Recorder, cfg PipelineConfig, now fu
 	if every < time.Second {
 		every = time.Second
 	}
+	maxKeys := cfg.Governor.MaxKeys
+	if maxKeys <= 0 {
+		maxKeys = 4096 // NewGovernor's default
+	}
 	p := &Pipeline{
 		spool:      spool,
 		rec:        rec,
 		gov:        NewGovernor(cfg.Governor),
 		com:        NewCommitter(spool, rec, cfg.Committer),
 		now:        now,
+		maxCarry:   4 * maxKeys,
 		sweepEvery: every,
 		sweepQuit:  make(chan struct{}),
 		sweepDone:  make(chan struct{}),
@@ -84,10 +95,47 @@ func (p *Pipeline) sweepLoop() {
 	}
 }
 
-// sweepOnce enqueues a summary row for every suppression window closed by now.
+// sweepOnce enqueues a summary row for every suppression window closed by now. The
+// governor forgets a window once it is swept, so the summary is the only record of the
+// suppressed count: one that finds the queue full is carried to the next sweep instead
+// of being dropped (WR-02). The carry is bounded (maxCarry, 4x the key table); whatever
+// does not fit is counted as a dropped denial.
 func (p *Pipeline) sweepOnce(now time.Time) {
-	for _, s := range p.gov.Sweep(now) {
-		p.com.EnqueueSummary(s)
+	p.sumMu.Lock()
+	defer p.sumMu.Unlock()
+
+	p.carry = append(p.carry, p.gov.Sweep(now)...)
+	sent := 0
+	for sent < len(p.carry) && p.com.TryEnqueueSummary(p.carry[sent]) {
+		sent++
+	}
+	p.carry = p.carry[sent:]
+	if over := len(p.carry) - p.maxCarry; over > 0 {
+		p.rec.RecordAuditDropped(kindDenial, dropQueueFull, over)
+		p.carry = p.carry[over:] // the oldest go first
+	}
+	// Re-slice into a fresh array so delivered and dropped summaries can be collected.
+	if len(p.carry) == 0 {
+		p.carry = nil
+	} else {
+		p.carry = append([]*CompletionEvent(nil), p.carry...)
+	}
+}
+
+// flushSummaries enqueues the shutdown summaries, waiting for queue room while the
+// committer is still draining, until ctx ends. Whatever is still unsent then is counted.
+func (p *Pipeline) flushSummaries(ctx context.Context, pending []*CompletionEvent) {
+	for i, s := range pending {
+		for !p.com.TryEnqueueSummary(s) {
+			t := time.NewTimer(2 * time.Millisecond)
+			select {
+			case <-ctx.Done():
+				t.Stop()
+				p.rec.RecordAuditDropped(kindDenial, dropQueueFull, len(pending)-i)
+				return
+			case <-t.C:
+			}
+		}
 	}
 }
 
@@ -142,9 +190,11 @@ func (p *Pipeline) Shutdown(ctx context.Context) error {
 		p.closed.Store(true)
 		close(p.sweepQuit)
 		<-p.sweepDone
-		for _, s := range p.gov.Flush(p.now()) {
-			p.com.EnqueueSummary(s)
-		}
+		p.sumMu.Lock()
+		pending := append(p.carry, p.gov.Flush(p.now())...)
+		p.carry = nil
+		p.sumMu.Unlock()
+		p.flushSummaries(ctx, pending)
 		err = p.com.Shutdown(ctx)
 	})
 	return err

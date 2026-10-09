@@ -211,7 +211,7 @@ func (c *Committer) SubmitDenial(ev *CompletionEvent) error {
 // EnqueueCompletion queues a completion frame without ever blocking (D-08). When the
 // queue is full the loss is counted and the spool write fault is set (D-12).
 func (c *Committer) EnqueueCompletion(ev *CompletionEvent) {
-	if !c.enqueueAsync(ev, kindCompletion) {
+	if !c.enqueueAsync(ev, kindCompletion, true) {
 		c.setFault(dropQueueFull)
 	}
 }
@@ -219,11 +219,19 @@ func (c *Committer) EnqueueCompletion(ev *CompletionEvent) {
 // EnqueueSummary queues a suppression summary row (metric kind "denial"). It never
 // blocks and never sets the write fault.
 func (c *Committer) EnqueueSummary(ev *CompletionEvent) {
-	c.enqueueAsync(ev, kindDenial)
+	c.enqueueAsync(ev, kindDenial, true)
 }
 
-// enqueueAsync returns false only when the queue was full.
-func (c *Committer) enqueueAsync(ev *CompletionEvent, kind string) bool {
+// TryEnqueueSummary is EnqueueSummary for callers that keep the summary and retry: it
+// returns false, without counting a drop, when the queue is full. Any other outcome
+// (queued, committer closed, unframeable event) is final and already counted.
+func (c *Committer) TryEnqueueSummary(ev *CompletionEvent) bool {
+	return c.enqueueAsync(ev, kindDenial, false)
+}
+
+// enqueueAsync returns false only when the queue was full. A full queue is counted as a
+// drop only when countFull is set.
+func (c *Committer) enqueueAsync(ev *CompletionEvent, kind string, countFull bool) bool {
 	if c.closed.Load() {
 		c.rec.RecordAuditDropped(kind, dropClosed, 1)
 		return true
@@ -236,7 +244,9 @@ func (c *Committer) enqueueAsync(ev *CompletionEvent, kind string) bool {
 	select {
 	case c.completionCh <- commitItem{frame: frame, kind: kind}:
 	default:
-		c.rec.RecordAuditDropped(kind, dropQueueFull, 1)
+		if countFull {
+			c.rec.RecordAuditDropped(kind, dropQueueFull, 1)
+		}
 		return false
 	}
 	select {
