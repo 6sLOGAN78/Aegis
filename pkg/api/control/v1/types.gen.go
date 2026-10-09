@@ -23,6 +23,7 @@ const (
 const (
 	Completion AuditEventEventType = "completion"
 	Decision   AuditEventEventType = "decision"
+	Denial     AuditEventEventType = "denial"
 )
 
 // Defines values for AuditEventPrincipalKind.

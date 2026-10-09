@@ -1,5 +1,5 @@
 export type AuditEventDecision = 'allow' | 'deny';
-export type AuditEventEventType = 'completion' | 'decision';
+export type AuditEventEventType = 'completion' | 'decision' | 'denial';
 export type AuditEventPrincipalKind = 'anonymous' | 'user' | 'workload';
 
 export interface AuditEvent {

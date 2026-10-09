@@ -866,7 +866,7 @@ components:
           format: uuid
         event_type:
           type: string
-          enum: [decision, completion]
+          enum: [decision, completion, denial]
         request_id:
           type: string
           format: uuid
