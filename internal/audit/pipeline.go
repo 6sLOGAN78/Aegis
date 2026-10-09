@@ -93,7 +93,8 @@ func (p *Pipeline) sweepOnce(now time.Time) {
 
 // RecordDenial applies the governor and then records the denial durably, counts it
 // into a suppression window, or drops it. It never changes the HTTP response: a
-// failed or dropped append is counted by the committer and otherwise ignored.
+// failed or dropped append is counted by the committer and handed back to the
+// governor so the next identical denial is recorded again.
 func (p *Pipeline) RecordDenial(ev *CompletionEvent) {
 	if ev == nil {
 		return
@@ -108,7 +109,11 @@ func (p *Pipeline) RecordDenial(ev *CompletionEvent) {
 	}
 	switch adm.Disposition {
 	case Record:
-		_ = p.com.SubmitDenial(ev)
+		// A denial that did not reach the spool must not leave a suppression window
+		// (or a spent unauthenticated token) behind (WR-01).
+		if err := p.com.SubmitDenial(ev); err != nil {
+			p.gov.Forget(adm)
+		}
 	case Suppress:
 		p.rec.RecordAuditSuppressed(adm.Label, 1)
 	default:

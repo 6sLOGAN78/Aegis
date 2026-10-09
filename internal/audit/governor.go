@@ -113,6 +113,26 @@ type Admission struct {
 	// Overflow is true when the suppressor map was full and the event was routed to the
 	// per-label overflow bucket.
 	Overflow bool
+
+	// ref identifies what a Record admission created so Forget can undo it.
+	ref admRef
+}
+
+type refKind int
+
+const (
+	refNone refKind = iota
+	refEntry
+	refOverflow
+	refBucket
+)
+
+// admRef points at the state one admission touched. epoch ties it to one window so a
+// late Forget can never undo a newer window under the same key.
+type admRef struct {
+	kind  refKind
+	key   string
+	epoch uint64
 }
 
 // entry is one suppression window: the first event plus the count of repeats.
@@ -120,6 +140,11 @@ type entry struct {
 	windowStart time.Time
 	count       int
 	first       CompletionEvent
+	epoch       uint64
+	// unwritten is set by Forget when the first event's durable write failed while
+	// repeats had already been counted against it. The next occurrence is recorded in
+	// its place, and a summary never claims the missing row as its first event.
+	unwritten bool
 }
 
 // stashed is a closed window summary waiting for the next Sweep/Flush.
@@ -127,6 +152,8 @@ type stashed struct {
 	closedAt time.Time
 	count    int
 	first    CompletionEvent
+	// synthetic means first was never written, so the summary gets a fresh request id.
+	synthetic bool
 }
 
 type tokenBucket struct {
@@ -141,6 +168,7 @@ type Governor struct {
 	cfg GovernorConfig
 
 	mu       sync.Mutex
+	epochSeq uint64
 	entries  map[string]*entry
 	overflow map[string]*entry // per reason label, outside the MaxKeys bound
 	stash    map[string]*stashed
@@ -219,13 +247,14 @@ func (g *Governor) admitBucket(bucketKey, label string, now time.Time) Admission
 	}
 	if b.tokens >= 1 {
 		b.tokens--
-		return Admission{Disposition: Record, Label: label}
+		return Admission{Disposition: Record, Label: label, ref: admRef{kind: refBucket, key: bucketKey}}
 	}
 	return Admission{Disposition: Drop, Label: label}
 }
 
 func (g *Governor) newEntry(ev *CompletionEvent, now time.Time) *entry {
-	e := &entry{windowStart: now, first: *ev}
+	g.epochSeq++
+	e := &entry{windowStart: now, first: *ev, epoch: g.epochSeq}
 	if len(ev.PrincipalRoles) > 0 {
 		e.first.PrincipalRoles = append([]string(nil), ev.PrincipalRoles...)
 	}
@@ -235,19 +264,59 @@ func (g *Governor) newEntry(ev *CompletionEvent, now time.Time) *entry {
 
 func (g *Governor) admitSuppress(key, label string, ev *CompletionEvent, now time.Time) Admission {
 	if e, ok := g.entries[key]; ok {
-		return Admission{Disposition: g.touch(e, key, ev, now), Label: label}
+		d := g.touch(e, key, ev, now)
+		return Admission{Disposition: d, Label: label, ref: admRef{kind: refEntry, key: key, epoch: e.epoch}}
 	}
 	if len(g.entries) < g.cfg.MaxKeys {
-		g.entries[key] = g.newEntry(ev, now)
-		return Admission{Disposition: Record, Label: label}
+		e := g.newEntry(ev, now)
+		g.entries[key] = e
+		return Admission{Disposition: Record, Label: label, ref: admRef{kind: refEntry, key: key, epoch: e.epoch}}
 	}
 	// Map full: route to the per-label overflow bucket. Never record unconditionally,
 	// so a flood of distinct keys costs at most one fsynced row per label per window.
 	if e, ok := g.overflow[label]; ok {
-		return Admission{Disposition: g.touch(e, "overflow|"+label, ev, now), Label: label, Overflow: true}
+		d := g.touch(e, "overflow|"+label, ev, now)
+		return Admission{Disposition: d, Label: label, Overflow: true, ref: admRef{kind: refOverflow, key: label, epoch: e.epoch}}
 	}
-	g.overflow[label] = g.newEntry(ev, now)
-	return Admission{Disposition: Record, Label: label, Overflow: true}
+	e := g.newEntry(ev, now)
+	g.overflow[label] = e
+	return Admission{Disposition: Record, Label: label, Overflow: true, ref: admRef{kind: refOverflow, key: label, epoch: e.epoch}}
+}
+
+// Forget undoes a Record admission whose durable write failed (queue full, hard limit,
+// timeout, write error, closed). Without it the failed denial would still open a
+// suppression window, masking every identical denial until the window ends and leaving
+// a summary that points at a row that was never written (WR-01). A bucket token is
+// refunded; a window with no counted repeats is deleted; a window that already counted
+// repeats is marked unwritten so the next occurrence is recorded in its place. An
+// admission whose window has since been replaced is ignored.
+func (g *Governor) Forget(adm Admission) {
+	g.mu.Lock()
+	defer g.mu.Unlock()
+
+	switch adm.ref.kind {
+	case refBucket:
+		if b, ok := g.buckets[adm.ref.key]; ok {
+			b.tokens++
+			if burst := float64(g.cfg.UnauthBurst); b.tokens > burst {
+				b.tokens = burst
+			}
+		}
+	case refEntry, refOverflow:
+		m := g.entries
+		if adm.ref.kind == refOverflow {
+			m = g.overflow
+		}
+		e, ok := m[adm.ref.key]
+		if !ok || e.epoch != adm.ref.epoch {
+			return
+		}
+		if e.count == 0 {
+			delete(m, adm.ref.key)
+			return
+		}
+		e.unwritten = true
+	}
 }
 
 // touch applies one event to an existing entry. Caller holds g.mu.
@@ -255,6 +324,15 @@ func (g *Governor) touch(e *entry, key string, ev *CompletionEvent, now time.Tim
 	end := e.windowStart.Add(g.cfg.SuppressWindow)
 	if now.Before(end) {
 		e.count++
+		if e.unwritten {
+			// The first event of this window never reached the spool: record this one
+			// instead. The lost denial stays counted (the increment above).
+			e.first = g.newEntry(ev, now).first
+			e.unwritten = false
+			g.epochSeq++
+			e.epoch = g.epochSeq
+			return Record
+		}
 		return Suppress
 	}
 	if e.count > 0 {
@@ -267,20 +345,39 @@ func (g *Governor) touch(e *entry, key string, ev *CompletionEvent, now time.Tim
 // stashWindow remembers a closed window. A key that already has a stashed summary
 // gets the counts added so the stash stays bounded. Caller holds g.mu.
 func (g *Governor) stashWindow(key string, e *entry, closedAt time.Time) {
+	count := e.count
+	if e.unwritten {
+		count++ // the denial whose row was lost
+	}
 	if s, ok := g.stash[key]; ok {
-		s.count += e.count
+		s.count += count
 		if closedAt.After(s.closedAt) {
 			s.closedAt = closedAt
 		}
+		if s.synthetic && !e.unwritten {
+			s.first, s.synthetic = e.first, false
+		}
 		return
 	}
-	g.stash[key] = &stashed{closedAt: closedAt, count: e.count, first: e.first}
+	g.stash[key] = &stashed{closedAt: closedAt, count: count, first: e.first, synthetic: e.unwritten}
 }
 
-func (g *Governor) summary(first *CompletionEvent, count int, at time.Time) *CompletionEvent {
+// entrySummary builds the summary for an open or closed window.
+func (g *Governor) entrySummary(e *entry, at time.Time) *CompletionEvent {
+	if e.unwritten {
+		return g.summary(&e.first, e.count+1, at, true)
+	}
+	return g.summary(&e.first, e.count, at, false)
+}
+
+func (g *Governor) summary(first *CompletionEvent, count int, at time.Time, synthetic bool) *CompletionEvent {
 	s := *first
 	if len(first.PrincipalRoles) > 0 {
 		s.PrincipalRoles = append([]string(nil), first.PrincipalRoles...)
+	}
+	if synthetic {
+		// The first event was never written; do not point the summary at a missing row.
+		s.RequestID = uuid.NewString()
 	}
 	s.EventID = uuid.NewString()
 	s.EventType = EventTypeDenial
@@ -298,7 +395,7 @@ func (g *Governor) Sweep(now time.Time) []*CompletionEvent {
 
 	var out []*CompletionEvent
 	for k, s := range g.stash {
-		out = append(out, g.summary(&s.first, s.count, s.closedAt))
+		out = append(out, g.summary(&s.first, s.count, s.closedAt, s.synthetic))
 		delete(g.stash, k)
 	}
 	for _, m := range []map[string]*entry{g.entries, g.overflow} {
@@ -308,7 +405,7 @@ func (g *Governor) Sweep(now time.Time) []*CompletionEvent {
 				continue
 			}
 			if e.count > 0 {
-				out = append(out, g.summary(&e.first, e.count, end))
+				out = append(out, g.entrySummary(e, end))
 			}
 			delete(m, k)
 		}
@@ -324,7 +421,7 @@ func (g *Governor) Flush(now time.Time) []*CompletionEvent {
 
 	var out []*CompletionEvent
 	for _, s := range g.stash {
-		out = append(out, g.summary(&s.first, s.count, s.closedAt))
+		out = append(out, g.summary(&s.first, s.count, s.closedAt, s.synthetic))
 	}
 	for _, m := range []map[string]*entry{g.entries, g.overflow} {
 		for _, e := range m {
@@ -333,7 +430,7 @@ func (g *Governor) Flush(now time.Time) []*CompletionEvent {
 				if now.Before(at) {
 					at = now
 				}
-				out = append(out, g.summary(&e.first, e.count, at))
+				out = append(out, g.entrySummary(e, at))
 			}
 		}
 	}
