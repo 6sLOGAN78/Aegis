@@ -7,6 +7,7 @@ import (
 	"fmt"
 	"hash/crc32"
 	"io"
+	"log"
 	"os"
 	"path/filepath"
 	"sort"
@@ -71,9 +72,18 @@ type DiskSpool struct {
 	writeFault  atomic.Bool
 	faultReason atomic.Value // string
 
+	// needsRotate is set when the active segment may end in torn or possibly-ingested
+	// bytes and a rotation away from it failed. While set, CheckSaturation reports true
+	// (so the unchanged AppendPreForward refuses instead of appending behind the torn
+	// bytes) and WriteFrames rotates before it writes anything.
+	needsRotate atomic.Bool
+	lastWarnNS  atomic.Int64
+
 	// Test seams used only by WriteFrames. nil means the real f.Write / f.Sync.
 	writeFn func(*os.File, []byte) (int, error)
 	syncFn  func(*os.File) error
+	// openFn opens a rotated segment. nil means os.OpenFile (O_CREATE|O_WRONLY|O_APPEND, 0600).
+	openFn func(path string) (*os.File, error)
 }
 
 // NewDiskSpool initializes a DiskSpool in the specified directory with 0700 permissions.
@@ -182,7 +192,7 @@ func (s *DiskSpool) statfsRatio() (float64, bool) {
 // has reached or exceeded 90% capacity (AUD-02). It also reports saturation while
 // the write-fault flag is set, which fails allowed traffic closed (D-12).
 func (s *DiskSpool) CheckSaturation() (bool, error) {
-	if s.writeFault.Load() {
+	if s.writeFault.Load() || s.needsRotate.Load() {
 		return true, nil
 	}
 
@@ -370,8 +380,27 @@ func frameEvent(ev *CompletionEvent) ([]byte, error) {
 // limit (default 95%), never by the 90% admission gate or the write-fault flag, so
 // denial and completion records keep writing while allowed traffic is refused.
 // The segment is rotated only after the whole batch is written and synced, so no
-// frame straddles two segments. On a write or fsync error the segment is truncated
-// back to the last good size (or rotated if truncation fails).
+// frame straddles two segments.
+//
+// Recovery rule (one rule for every failure; the audit worker tails the active segment
+// concurrently, so bytes that reached the file may already have been ingested):
+//
+//   - Nothing is ever appended behind bytes this spool did not account for. Before a
+//     write the file's real size is compared with currentSize; any difference (a torn or
+//     unsynced tail left by AppendPreForward, whose size counter is not advanced on a
+//     failed write or fsync) triggers a rotation first, so currentSize is never trusted
+//     to decide where a segment ends.
+//   - After a failed write or fsync nothing is truncated, except a tail that is shorter
+//     than the first frame of the batch (no reader can decode it, so no cursor can have
+//     moved past it). Anything longer stays where it is and the spool rotates to a fresh
+//     segment, so acknowledged frames are never cut and a cursor can never end up beyond
+//     the rewritten end of a file. Frames are self-describing and the retry's duplicates
+//     are absorbed by ON CONFLICT.
+//   - If the rotation itself fails the segment is flagged (needsRotate): allowed traffic
+//     is refused through CheckSaturation and RepairSegment / the next WriteFrames retry
+//     the rotation before anything is written.
+//   - A rotation failure after a batch that was written and synced does not fail the
+//     batch; the next write retries the rotation.
 func (s *DiskSpool) WriteFrames(frames [][]byte) error {
 	if len(frames) == 0 {
 		return nil
@@ -389,6 +418,14 @@ func (s *DiskSpool) WriteFrames(frames [][]byte) error {
 		return ErrHardLimit
 	}
 
+	if s.needsRotate.Load() || s.hasUntrackedTailLocked() {
+		if rerr := s.rotateSegment(); rerr != nil {
+			s.needsRotate.Store(true)
+			return fmt.Errorf("failed to rotate away from an untrusted wal segment tail: %w", rerr)
+		}
+		s.needsRotate.Store(false)
+	}
+
 	size := 0
 	for _, f := range frames {
 		size += len(f)
@@ -398,6 +435,7 @@ func (s *DiskSpool) WriteFrames(frames [][]byte) error {
 		buf = append(buf, f...)
 	}
 
+	base := s.currentSize
 	var werr error
 	if s.writeFn != nil {
 		_, werr = s.writeFn(s.activeFile, buf)
@@ -412,39 +450,108 @@ func (s *DiskSpool) WriteFrames(frames [][]byte) error {
 		}
 	}
 	if werr != nil {
-		// Drop any torn bytes so a retry cannot append whole frames after them.
-		if terr := s.activeFile.Truncate(s.currentSize); terr != nil {
-			if rerr := s.rotateSegment(); rerr != nil {
-				return fmt.Errorf("failed to write wal batch: %w (truncate: %v, rotate: %v)", werr, terr, rerr)
-			}
-		}
-		return fmt.Errorf("failed to write wal batch: %w", werr)
+		return s.settleFailedBatchLocked(base, len(frames[0]), werr)
 	}
 
 	s.currentSize += int64(len(buf))
 
 	if s.currentSize >= s.cfg.MaxSegmentBytes {
-		if err := s.rotateSegment(); err != nil {
-			return fmt.Errorf("failed to rotate segment after batch: %w", err)
+		// The batch is durable: a failed rotation must not turn it into a failure.
+		// currentSize stays over the limit, so the next write retries the rotation.
+		if rerr := s.rotateSegment(); rerr != nil {
+			s.warnf("audit spool: segment rotation failed after a durable batch, continuing on the current segment: %v", rerr)
 		}
 	}
 	return nil
 }
 
-func (s *DiskSpool) rotateSegment() error {
-	if s.activeFile != nil {
-		_ = s.activeFile.Sync()
-		_ = s.activeFile.Close()
+// hasUntrackedTailLocked reports whether the active file holds bytes beyond (or fewer
+// than) currentSize, or cannot be inspected at all. Caller holds s.mu.
+func (s *DiskSpool) hasUntrackedTailLocked() bool {
+	if s.activeFile == nil {
+		return true
 	}
+	fi, err := s.activeFile.Stat()
+	if err != nil {
+		return true
+	}
+	return fi.Size() != s.currentSize
+}
 
-	s.seq++
-	filename := fmt.Sprintf("wal-%020d-%06d.log", time.Now().UTC().UnixNano(), s.seq)
+// settleFailedBatchLocked applies the recovery rule after a failed write or fsync of a
+// batch that started at offset base. Caller holds s.mu.
+func (s *DiskSpool) settleFailedBatchLocked(base int64, firstFrameLen int, werr error) error {
+	fi, serr := s.activeFile.Stat()
+	if serr == nil {
+		landed := fi.Size() - base
+		if landed <= 0 {
+			// Nothing reached the file, so there is nothing to repair.
+			return fmt.Errorf("failed to write wal batch: %w", werr)
+		}
+		if landed < int64(firstFrameLen) {
+			// Only part of the first frame: no reader can have decoded it.
+			if terr := s.activeFile.Truncate(base); terr == nil {
+				return fmt.Errorf("failed to write wal batch: %w", werr)
+			}
+		}
+	}
+	if rerr := s.rotateSegment(); rerr != nil {
+		s.needsRotate.Store(true)
+		return fmt.Errorf("failed to write wal batch: %w (rotate: %v)", werr, rerr)
+	}
+	return fmt.Errorf("failed to write wal batch: %w", werr)
+}
+
+// RepairSegment retries a rotation that failed after a write error left the active
+// segment untrustworthy. It is a no-op when no repair is pending. The committer calls
+// it from its recovery tick so allowed traffic does not stay refused until a denial
+// happens to arrive.
+func (s *DiskSpool) RepairSegment() {
+	if !s.needsRotate.Load() {
+		return
+	}
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	if s.closed || !s.needsRotate.Load() {
+		return
+	}
+	if err := s.rotateSegment(); err == nil {
+		s.needsRotate.Store(false)
+	}
+}
+
+// warnf logs at most one line per second.
+func (s *DiskSpool) warnf(format string, args ...any) {
+	now := time.Now().UnixNano()
+	last := s.lastWarnNS.Load()
+	if now-last < int64(time.Second) || !s.lastWarnNS.CompareAndSwap(last, now) {
+		return
+	}
+	log.Printf(format, args...)
+}
+
+// rotateSegment opens the next segment first and only then retires the old one, so a
+// failed open leaves the current segment untouched and usable.
+func (s *DiskSpool) rotateSegment() error {
+	seq := s.seq + 1
+	filename := fmt.Sprintf("wal-%020d-%06d.log", time.Now().UTC().UnixNano(), seq)
 	path := filepath.Join(s.cfg.SpoolDir, filename)
-	f, err := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+	open := s.openFn
+	if open == nil {
+		open = func(p string) (*os.File, error) {
+			return os.OpenFile(p, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
+		}
+	}
+	f, err := open(path)
 	if err != nil {
 		return fmt.Errorf("failed to open rotated wal segment: %w", err)
 	}
 
+	if s.activeFile != nil {
+		_ = s.activeFile.Sync()
+		_ = s.activeFile.Close()
+	}
+	s.seq = seq
 	s.activeFile = f
 	s.currentSegment = filename
 	s.currentSize = 0

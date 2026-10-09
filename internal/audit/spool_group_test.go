@@ -414,8 +414,10 @@ func TestWriteFramesFailureTruncates(t *testing.T) {
 		require.NoError(t, s.WriteFrames([][]byte{mustFrame(t, "first")}))
 		before := sizeOf(t, dir, s)
 
+		// Only part of the first frame lands: no reader can have decoded it, so it is
+		// safe (and tidy) to truncate it away and keep appending to the same segment.
 		s.writeFn = func(f *os.File, b []byte) (int, error) {
-			n, _ := f.Write(b[:len(b)/2])
+			n, _ := f.Write(b[:FrameHeaderSize-1])
 			return n, boom
 		}
 		err := s.WriteFrames([][]byte{mustFrame(t, "torn-a"), mustFrame(t, "torn-b")})
@@ -431,22 +433,57 @@ func TestWriteFramesFailureTruncates(t *testing.T) {
 		assert.Equal(t, "after", evs[1].RouteID)
 	})
 
+	t.Run("write error after whole frames landed rotates", func(t *testing.T) {
+		dir := t.TempDir()
+		s := newGroupSpool(t, dir, 1<<30, 0.10)
+		require.NoError(t, s.WriteFrames([][]byte{mustFrame(t, "first")}))
+		oldSeg := s.CurrentSegment()
+		before := sizeOf(t, dir, s)
+
+		// A complete frame plus a torn tail landed: the worker may have ingested the
+		// complete frame, so nothing is truncated and the retry goes to a new segment.
+		fa, fb := mustFrame(t, "torn-a"), mustFrame(t, "torn-b")
+		s.writeFn = func(f *os.File, b []byte) (int, error) {
+			n, _ := f.Write(b[:len(fa)+5])
+			return n, boom
+		}
+		err := s.WriteFrames([][]byte{fa, fb})
+		require.ErrorIs(t, err, boom)
+		info, statErr := os.Stat(filepath.Join(dir, oldSeg))
+		require.NoError(t, statErr)
+		assert.Greater(t, info.Size(), before, "bytes that may have been ingested must stay")
+		assert.NotEqual(t, oldSeg, s.CurrentSegment())
+
+		s.writeFn = nil
+		require.NoError(t, s.WriteFrames([][]byte{mustFrame(t, "after")}))
+		evs := readSegmentFrames(t, filepath.Join(dir, s.CurrentSegment()))
+		require.Len(t, evs, 1)
+		assert.Equal(t, "after", evs[0].RouteID)
+		assert.Equal(t, []string{"first", "torn-a"}, scanValidFrames(t, filepath.Join(dir, oldSeg)), "the old segment keeps its acknowledged frame and the whole frame that landed")
+	})
+
 	t.Run("sync error", func(t *testing.T) {
 		dir := t.TempDir()
 		s := newGroupSpool(t, dir, 1<<30, 0.10)
 		require.NoError(t, s.WriteFrames([][]byte{mustFrame(t, "first")}))
+		oldSeg := s.CurrentSegment()
 		before := sizeOf(t, dir, s)
 
+		// After a failed fsync the whole batch is readable (WR-06): it must not be
+		// truncated; the retry lands in a fresh segment instead.
 		s.syncFn = func(*os.File) error { return boom }
 		err := s.WriteFrames([][]byte{mustFrame(t, "unsynced")})
 		require.Error(t, err)
-		assert.Equal(t, before, sizeOf(t, dir, s))
+		info, statErr := os.Stat(filepath.Join(dir, oldSeg))
+		require.NoError(t, statErr)
+		assert.Greater(t, info.Size(), before)
+		assert.NotEqual(t, oldSeg, s.CurrentSegment())
 
 		s.syncFn = nil
 		require.NoError(t, s.WriteFrames([][]byte{mustFrame(t, "after")}))
 		evs := readSegmentFrames(t, filepath.Join(dir, s.CurrentSegment()))
-		require.Len(t, evs, 2)
-		assert.Equal(t, "after", evs[1].RouteID)
+		require.Len(t, evs, 1)
+		assert.Equal(t, "after", evs[0].RouteID)
 	})
 
 	t.Run("truncate failure rotates", func(t *testing.T) {

@@ -359,6 +359,7 @@ func (c *Committer) run() {
 		case first = <-c.completionCh:
 		case <-ticker.C:
 			c.rec.SetAuditQueueDepth(len(c.completionCh))
+			c.spool.RepairSegment()
 			c.recoveryProbe()
 			continue
 		case <-c.quit:
