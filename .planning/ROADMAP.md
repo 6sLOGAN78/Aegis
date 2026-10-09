@@ -248,7 +248,7 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 6/12 plans executed
+**Plans:** 7/12 plans executed
 
 Plans:
 **Wave 1**
@@ -265,7 +265,7 @@ Plans:
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
-- [ ] 08-07-PLAN.md — Pipeline (sink implementation, sweeper, ordered shutdown) and hermetic middleware-to-worker end-to-end tests (request-path scenarios; delivery, degraded-disk and shutdown scenarios)
+- [x] 08-07-PLAN.md — Pipeline (sink implementation, sweeper, ordered shutdown) and hermetic middleware-to-worker end-to-end tests (request-path scenarios; delivery, degraded-disk and shutdown scenarios)
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
