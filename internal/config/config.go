@@ -2,6 +2,7 @@ package config
 
 import (
 	"fmt"
+	"math"
 	"os"
 	"strconv"
 	"time"
@@ -31,6 +32,18 @@ type Config struct {
 	RedisPassword        string
 	SpoolDir             string
 	SpoolMaxBytes        int64
+
+	// Audit pipeline tuning (phase 08). All have safe defaults and are
+	// range-validated; invalid values are startup errors, never silent fallbacks.
+	AuditGroupFlushInterval      time.Duration // spool group-commit window
+	AuditCompletionFlushInterval time.Duration // completion batch flush window
+	AuditCompletionQueueSize     int           // bounded completion queue length
+	SpoolHardLimitRatio          float64       // statfs ratio above which appends are refused
+	AuditUnauthRate              float64       // unauthenticated denial rows per second
+	AuditUnauthBurst             int           // unauthenticated denial burst
+	AuditSuppressWindow          time.Duration // repeated-denial suppression window
+	AuditSuppressMaxKeys         int           // suppressor key-table cap
+	SpoolSegmentBytes            int64         // WAL segment rotation size
 }
 
 // LoadConfig initializes Config with safe defaults and environment variable overrides.
@@ -50,6 +63,16 @@ func LoadConfig() (*Config, error) {
 		RedisPassword:        "",
 		SpoolDir:             "/var/log/aegis/wal",
 		SpoolMaxBytes:        1073741824, // 1 GiB
+
+		AuditGroupFlushInterval:      2 * time.Millisecond,
+		AuditCompletionFlushInterval: 25 * time.Millisecond,
+		AuditCompletionQueueSize:     8192,
+		SpoolHardLimitRatio:          0.95,
+		AuditUnauthRate:              10,
+		AuditUnauthBurst:             50,
+		AuditSuppressWindow:          60 * time.Second,
+		AuditSuppressMaxKeys:         4096,
+		SpoolSegmentBytes:            16777216, // 16 MiB
 	}
 
 	if portStr := os.Getenv("AEGIS_PORT"); portStr != "" {
@@ -132,5 +155,95 @@ func LoadConfig() (*Config, error) {
 		cfg.SpoolMaxBytes = maxBytes
 	}
 
+	if err := loadAuditConfig(cfg); err != nil {
+		return nil, err
+	}
+
 	return cfg, nil
+}
+
+// loadAuditConfig applies the audit pipeline environment overrides. Every key is
+// parse-or-error with an explicit allowed range so a misconfiguration cannot
+// silently disable a protection (T-08-11).
+func loadAuditConfig(cfg *Config) error {
+	var err error
+	if cfg.AuditGroupFlushInterval, err = envDuration("AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", cfg.AuditGroupFlushInterval, time.Nanosecond, 50*time.Millisecond); err != nil {
+		return err
+	}
+	if cfg.AuditCompletionFlushInterval, err = envDuration("AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", cfg.AuditCompletionFlushInterval, time.Nanosecond, time.Second); err != nil {
+		return err
+	}
+	if cfg.AuditCompletionQueueSize, err = envInt("AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", cfg.AuditCompletionQueueSize, 64, 1000000); err != nil {
+		return err
+	}
+	if v := os.Getenv("AEGIS_SPOOL_HARD_LIMIT_RATIO"); v != "" {
+		r, perr := strconv.ParseFloat(v, 64)
+		if perr != nil {
+			return fmt.Errorf("invalid AEGIS_SPOOL_HARD_LIMIT_RATIO %q: %w", v, perr)
+		}
+		if !(r > 0.90 && r <= 0.99) {
+			return fmt.Errorf("invalid AEGIS_SPOOL_HARD_LIMIT_RATIO %q: must be > 0.90 and <= 0.99", v)
+		}
+		cfg.SpoolHardLimitRatio = r
+	}
+	if v := os.Getenv("AEGIS_AUDIT_UNAUTH_RATE"); v != "" {
+		r, perr := strconv.ParseFloat(v, 64)
+		if perr != nil {
+			return fmt.Errorf("invalid AEGIS_AUDIT_UNAUTH_RATE %q: %w", v, perr)
+		}
+		if !(r > 0) {
+			return fmt.Errorf("invalid AEGIS_AUDIT_UNAUTH_RATE %q: must be > 0", v)
+		}
+		cfg.AuditUnauthRate = r
+	}
+	if cfg.AuditUnauthBurst, err = envInt("AEGIS_AUDIT_UNAUTH_BURST", cfg.AuditUnauthBurst, 1, math.MaxInt32); err != nil {
+		return err
+	}
+	if cfg.AuditSuppressWindow, err = envDuration("AEGIS_AUDIT_SUPPRESS_WINDOW", cfg.AuditSuppressWindow, time.Second, time.Hour); err != nil {
+		return err
+	}
+	if cfg.AuditSuppressMaxKeys, err = envInt("AEGIS_AUDIT_SUPPRESS_MAX_KEYS", cfg.AuditSuppressMaxKeys, 16, math.MaxInt32); err != nil {
+		return err
+	}
+	if v := os.Getenv("AEGIS_SPOOL_SEGMENT_BYTES"); v != "" {
+		n, perr := strconv.ParseInt(v, 10, 64)
+		if perr != nil {
+			return fmt.Errorf("invalid AEGIS_SPOOL_SEGMENT_BYTES %q: %w", v, perr)
+		}
+		if n < 4096 {
+			return fmt.Errorf("invalid AEGIS_SPOOL_SEGMENT_BYTES %q: must be >= 4096", v)
+		}
+		cfg.SpoolSegmentBytes = n
+	}
+	return nil
+}
+
+func envDuration(key string, def, min, max time.Duration) (time.Duration, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", key, v, err)
+	}
+	if d < min || d > max {
+		return 0, fmt.Errorf("invalid %s %q: must be between %s and %s", key, v, min, max)
+	}
+	return d, nil
+}
+
+func envInt(key string, def, min, max int) (int, error) {
+	v := os.Getenv(key)
+	if v == "" {
+		return def, nil
+	}
+	n, err := strconv.Atoi(v)
+	if err != nil {
+		return 0, fmt.Errorf("invalid %s %q: %w", key, v, err)
+	}
+	if n < min || n > max {
+		return 0, fmt.Errorf("invalid %s %q: must be between %d and %d", key, v, min, max)
+	}
+	return n, nil
 }

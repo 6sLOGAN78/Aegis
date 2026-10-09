@@ -9,6 +9,114 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+var auditConfigKeys = []string{
+	"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL",
+	"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL",
+	"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE",
+	"AEGIS_SPOOL_HARD_LIMIT_RATIO",
+	"AEGIS_AUDIT_UNAUTH_RATE",
+	"AEGIS_AUDIT_UNAUTH_BURST",
+	"AEGIS_AUDIT_SUPPRESS_WINDOW",
+	"AEGIS_AUDIT_SUPPRESS_MAX_KEYS",
+	"AEGIS_SPOOL_SEGMENT_BYTES",
+}
+
+func TestAuditConfigOverrides(t *testing.T) {
+	t.Run("valid overrides", func(t *testing.T) {
+		t.Setenv("AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", "5ms")
+		t.Setenv("AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", "100ms")
+		t.Setenv("AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", "1024")
+		t.Setenv("AEGIS_SPOOL_HARD_LIMIT_RATIO", "0.97")
+		t.Setenv("AEGIS_AUDIT_UNAUTH_RATE", "2.5")
+		t.Setenv("AEGIS_AUDIT_UNAUTH_BURST", "7")
+		t.Setenv("AEGIS_AUDIT_SUPPRESS_WINDOW", "30s")
+		t.Setenv("AEGIS_AUDIT_SUPPRESS_MAX_KEYS", "128")
+		t.Setenv("AEGIS_SPOOL_SEGMENT_BYTES", "65536")
+
+		cfg, err := LoadConfig()
+		require.NoError(t, err)
+		assert.Equal(t, 5*time.Millisecond, cfg.AuditGroupFlushInterval)
+		assert.Equal(t, 100*time.Millisecond, cfg.AuditCompletionFlushInterval)
+		assert.Equal(t, 1024, cfg.AuditCompletionQueueSize)
+		assert.Equal(t, 0.97, cfg.SpoolHardLimitRatio)
+		assert.Equal(t, 2.5, cfg.AuditUnauthRate)
+		assert.Equal(t, 7, cfg.AuditUnauthBurst)
+		assert.Equal(t, 30*time.Second, cfg.AuditSuppressWindow)
+		assert.Equal(t, 128, cfg.AuditSuppressMaxKeys)
+		assert.Equal(t, int64(65536), cfg.SpoolSegmentBytes)
+	})
+
+	t.Run("identified denial allowance key is ignored", func(t *testing.T) {
+		t.Setenv("AEGIS_AUDIT_IDENTIFIED_"+"DENIAL_ALLOWANCE", "99") // split so greps for the removed key stay at zero
+		_, err := LoadConfig()
+		require.NoError(t, err)
+	})
+
+	invalid := []struct {
+		key, value string
+	}{
+		{"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", "abc"},
+		{"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", "0s"},
+		{"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", "-1ms"},
+		{"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", "51ms"},
+		{"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", "abc"},
+		{"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", "0s"},
+		{"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", "-5ms"},
+		{"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", "1001ms"},
+		{"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", "abc"},
+		{"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", "63"},
+		{"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", "1000001"},
+		{"AEGIS_SPOOL_HARD_LIMIT_RATIO", "abc"},
+		{"AEGIS_SPOOL_HARD_LIMIT_RATIO", "0.90"},
+		{"AEGIS_SPOOL_HARD_LIMIT_RATIO", "0.5"},
+		{"AEGIS_SPOOL_HARD_LIMIT_RATIO", "0.991"},
+		{"AEGIS_AUDIT_UNAUTH_RATE", "abc"},
+		{"AEGIS_AUDIT_UNAUTH_RATE", "0"},
+		{"AEGIS_AUDIT_UNAUTH_RATE", "-1"},
+		{"AEGIS_AUDIT_UNAUTH_BURST", "abc"},
+		{"AEGIS_AUDIT_UNAUTH_BURST", "0"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "abc"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "0s"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "-1s"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "999ms"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "2h"},
+		{"AEGIS_AUDIT_SUPPRESS_MAX_KEYS", "abc"},
+		{"AEGIS_AUDIT_SUPPRESS_MAX_KEYS", "15"},
+		{"AEGIS_SPOOL_SEGMENT_BYTES", "abc"},
+		{"AEGIS_SPOOL_SEGMENT_BYTES", "4095"},
+	}
+	for _, tc := range invalid {
+		t.Run("invalid "+tc.key+"="+tc.value, func(t *testing.T) {
+			t.Setenv(tc.key, tc.value)
+			_, err := LoadConfig()
+			require.Error(t, err)
+			assert.Contains(t, err.Error(), tc.key)
+		})
+	}
+
+	boundaries := []struct {
+		key, value string
+	}{
+		{"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL", "50ms"},
+		{"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", "1s"},
+		{"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", "64"},
+		{"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", "1000000"},
+		{"AEGIS_SPOOL_HARD_LIMIT_RATIO", "0.99"},
+		{"AEGIS_AUDIT_UNAUTH_BURST", "1"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "1s"},
+		{"AEGIS_AUDIT_SUPPRESS_WINDOW", "1h"},
+		{"AEGIS_AUDIT_SUPPRESS_MAX_KEYS", "16"},
+		{"AEGIS_SPOOL_SEGMENT_BYTES", "4096"},
+	}
+	for _, tc := range boundaries {
+		t.Run("boundary "+tc.key+"="+tc.value, func(t *testing.T) {
+			t.Setenv(tc.key, tc.value)
+			_, err := LoadConfig()
+			require.NoError(t, err)
+		})
+	}
+}
+
 func TestConfig(t *testing.T) {
 	t.Run("default configuration", func(t *testing.T) {
 		os.Unsetenv("AEGIS_PORT")
@@ -22,9 +130,21 @@ func TestConfig(t *testing.T) {
 		os.Unsetenv("AEGIS_WORKLOAD_CA_PATH")
 		os.Unsetenv("AEGIS_ASSERTION_PRIVATE_KEY_PATH")
 		os.Unsetenv("AEGIS_ASSERTION_PUBLIC_KEY_PATH")
+		for _, k := range auditConfigKeys {
+			os.Unsetenv(k)
+		}
 
 		cfg, err := LoadConfig()
 		require.NoError(t, err)
+		assert.Equal(t, 2*time.Millisecond, cfg.AuditGroupFlushInterval)
+		assert.Equal(t, 25*time.Millisecond, cfg.AuditCompletionFlushInterval)
+		assert.Equal(t, 8192, cfg.AuditCompletionQueueSize)
+		assert.Equal(t, 0.95, cfg.SpoolHardLimitRatio)
+		assert.Equal(t, 10.0, cfg.AuditUnauthRate)
+		assert.Equal(t, 50, cfg.AuditUnauthBurst)
+		assert.Equal(t, 60*time.Second, cfg.AuditSuppressWindow)
+		assert.Equal(t, 4096, cfg.AuditSuppressMaxKeys)
+		assert.Equal(t, int64(16777216), cfg.SpoolSegmentBytes)
 		assert.Equal(t, 8080, cfg.Port)
 		assert.Equal(t, 9443, cfg.WorkloadPort)
 		assert.Equal(t, 16384, cfg.MaxHeaderBytes)
