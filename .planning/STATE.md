@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Phase 8 context gathered
-last_updated: "2026-10-09T04:59:53.421Z"
+stopped_at: Completed 08-02-PLAN.md
+last_updated: "2026-10-09T05:02:48.235Z"
 last_activity: 2026-10-09
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 43
-  completed_plans: 32
-  percent: 74
+  completed_plans: 33
+  percent: 77
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-10-06)
 ## Current Position
 
 Phase: 8 (Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)) — EXECUTING
-Plan: 2 of 12
+Plan: 3 of 12
 Status: Ready to execute
 Last activity: 2026-10-09
 
@@ -63,6 +63,7 @@ Last activity: 2026-10-09
 | Phase 07 P04 | 6min | 2 tasks | 1 files |
 | Phase 07 P05 | 20min | 3 tasks | 1 files |
 | Phase 08 P01 | 20min | 3 tasks | 10 files |
+| Phase 08 P02 | 25min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -84,6 +85,7 @@ Recent decisions affecting current work:
 - [Phase 07]: Distributed compose uses three per-spool audit workers via x-audit-worker anchor (no Go change)
 - [Phase 07]: 07-05: MVP stack verified live unchanged; A4 PASS (HTTP 403); REV-03/AUD-03 remain open
 - [Phase 08]: 08-01: explicit event_type allowlist with status-based fallback; Normalize applied in worker per-event copy; non-UUID ids replaced with fresh UUIDs
+- [Phase 08]: 08-02: WriteFrames gated by hard limit (0.95) only, never CheckSaturation or fault flag; rotation after whole batch; truncate-or-rotate on write/fsync error
 
 ### Roadmap Evolution
 
@@ -112,9 +114,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-08T21:06:11.614Z
-Stopped at: Phase 8 context gathered
-Resume file: .planning/phases/08-close-gap-b7-route-denials-and-completion-events-to-the-audi/08-CONTEXT.md
+Last session: 2026-10-09T05:02:48.224Z
+Stopped at: Completed 08-02-PLAN.md
+Resume file: None
 
 ## Operator Next Steps
 
