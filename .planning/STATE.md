@@ -3,15 +3,15 @@ gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
 status: executing
-stopped_at: Completed 08-03-PLAN.md
-last_updated: "2026-10-09T05:12:24.228Z"
+stopped_at: Completed 08-06-PLAN.md
+last_updated: "2026-10-09T05:43:05.170Z"
 last_activity: 2026-10-09
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 43
-  completed_plans: 36
-  percent: 84
+  completed_plans: 37
+  percent: 86
 ---
 
 # Project State
@@ -26,7 +26,7 @@ See: .planning/PROJECT.md (updated 2026-10-06)
 ## Current Position
 
 Phase: 8 (Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)) — EXECUTING
-Plan: 6 of 12
+Plan: 7 of 12
 Status: Ready to execute
 Last activity: 2026-10-09
 
@@ -67,6 +67,7 @@ Last activity: 2026-10-09
 | Phase 08 P03 | 20min | 3 tasks | 8 files |
 | Phase 08 P04 | 25min | 2 tasks | 3 files |
 | Phase 08 P05 | 20min | 2 tasks | 2 files |
+| Phase 08 P06 | 45min | 2 tasks | 2 files |
 
 ## Accumulated Context
 
@@ -92,6 +93,7 @@ Recent decisions affecting current work:
 - [Phase 08]: 08-03: RejectionRecorder held in atomic.Pointer so it can be attached after NewDualServer; nil is a no-op
 - [Phase 08]: 08-04: outage reasons keyed by reason only; map-full overflow routed to per-label overflow bucket (first Record, rest Suppress); stash merged per key
 - [Phase 08]: 08-05: Sink gets normalized copies; denial hook fires on first final WriteHeader before the client sees it; explicit SetDecision is authoritative over status
+- [Phase 08]: 08-06: only completion loss sets the write fault; recovery clears only via generation-guarded clearFaultIfGen — denial flood must not flip gateway to 503; probe must not reopen the gate after a newer fault
 
 ### Roadmap Evolution
 
@@ -120,8 +122,8 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-09T05:06:24.824Z
-Stopped at: Completed 08-03-PLAN.md
+Last session: 2026-10-09T05:43:05.158Z
+Stopped at: Completed 08-06-PLAN.md
 Resume file: None
 
 ## Operator Next Steps

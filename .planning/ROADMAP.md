@@ -248,7 +248,7 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 5/12 plans executed
+**Plans:** 6/12 plans executed
 
 Plans:
 **Wave 1**
@@ -261,7 +261,7 @@ Plans:
 
 - [x] 08-04-PLAN.md — Governor: per-window suppression (outage reasons keyed by reason only, overflow bucket, bounded stash), unauthenticated token buckets, main.go and policy-engine reason drift guards
 - [x] 08-05-PLAN.md — `AuditMiddleware` sink seam: denial hook before first WriteHeader, async completion, decision-flip fix, upstream error codes
-- [ ] 08-06-PLAN.md — Committer: group-commit writer, bounded queues, fail-closed fault handling (monotonic fault generation), shutdown drain, shared audit test helpers
+- [x] 08-06-PLAN.md — Committer: group-commit writer, bounded queues, fail-closed fault handling (monotonic fault generation), shutdown drain, shared audit test helpers
 
 **Wave 3** *(blocked on Wave 2 completion)*
 
