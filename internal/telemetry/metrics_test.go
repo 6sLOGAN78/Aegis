@@ -164,3 +164,113 @@ func TestPrometheusMetrics(t *testing.T) {
 		assert.NoError(t, err)
 	})
 }
+
+// rejectionRecorder mirrors the consumer-side interface declared in the proxy package.
+type rejectionRecorder interface{ RecordRejection(reason string) }
+
+var _ rejectionRecorder = (*Metrics)(nil)
+
+func scrapeMetrics(t *testing.T, m *Metrics) string {
+	t.Helper()
+	ts := httptest.NewServer(NewServer(":0", m).Handler())
+	defer ts.Close()
+	resp, err := http.Get(ts.URL + "/metrics")
+	require.NoError(t, err)
+	defer resp.Body.Close()
+	body, err := io.ReadAll(resp.Body)
+	require.NoError(t, err)
+	return string(body)
+}
+
+func TestAuditMetrics(t *testing.T) {
+	t.Run("series are exposed and zero-initialized before any increment", func(t *testing.T) {
+		m := NewMetrics()
+		m.InitAuditSuppressedLabels([]string{"RATE_LIMIT_EXCEEDED", "POLICY_DENY_DEFAULT"})
+		content := scrapeMetrics(t, m)
+
+		for _, name := range []string{
+			"aegis_audit_records_written_total",
+			"aegis_audit_records_dropped_total",
+			"aegis_audit_records_suppressed_total",
+			"aegis_audit_suppressor_overflow_total",
+			"aegis_audit_completion_queue_depth",
+			"aegis_audit_degraded",
+			"aegis_audit_flush_duration_seconds_bucket",
+			"aegis_http_rejected_total",
+		} {
+			assert.Contains(t, content, name)
+		}
+
+		for _, kind := range []string{"completion", "denial"} {
+			assert.Contains(t, content, `aegis_audit_records_written_total{kind="`+kind+`"} 0`)
+			for _, reason := range []string{"queue_full", "hard_limit", "write_error", "closed", "timeout", "unauth_cap"} {
+				assert.Contains(t, content, `aegis_audit_records_dropped_total{kind="`+kind+`",reason="`+reason+`"} 0`)
+			}
+		}
+		for _, reason := range []string{"concurrency", "header_too_large", "ambiguous_credentials"} {
+			assert.Contains(t, content, `aegis_http_rejected_total{reason="`+reason+`"} 0`)
+		}
+		for _, code := range []string{"RATE_LIMIT_EXCEEDED", "POLICY_DENY_DEFAULT", "OTHER"} {
+			assert.Contains(t, content, `aegis_audit_records_suppressed_total{reason_code="`+code+`"} 0`)
+		}
+	})
+
+	t.Run("recorders update the series", func(t *testing.T) {
+		m := NewMetrics()
+		m.RecordAuditWritten("completion", 3)
+		m.RecordAuditWritten("completion", 0)
+		m.RecordAuditWritten("completion", -4)
+		m.RecordAuditDropped("denial", "unauth_cap", 2)
+		m.RecordAuditSuppressed("RATE_LIMIT_EXCEEDED", 5)
+		m.RecordAuditSuppressed("", 1)
+		m.RecordAuditSuppressorOverflow()
+		m.SetAuditDegraded(true)
+		m.SetAuditQueueDepth(17)
+		m.ObserveAuditFlush(3 * time.Millisecond)
+		m.RecordRejection("concurrency")
+		m.RecordRejection("header_too_large")
+		m.RecordRejection("ambiguous_credentials")
+		m.RecordRejection("something-attacker-chose")
+
+		content := scrapeMetrics(t, m)
+		assert.Contains(t, content, `aegis_audit_records_written_total{kind="completion"} 3`)
+		assert.Contains(t, content, `aegis_audit_records_dropped_total{kind="denial",reason="unauth_cap"} 2`)
+		assert.Contains(t, content, `aegis_audit_records_suppressed_total{reason_code="RATE_LIMIT_EXCEEDED"} 5`)
+		assert.Contains(t, content, `aegis_audit_records_suppressed_total{reason_code="OTHER"} 1`)
+		assert.Contains(t, content, "aegis_audit_suppressor_overflow_total 1")
+		assert.Contains(t, content, "aegis_audit_degraded 1")
+		assert.Contains(t, content, "aegis_audit_completion_queue_depth 17")
+		assert.Contains(t, content, "aegis_audit_flush_duration_seconds_count 1")
+		assert.Contains(t, content, `aegis_http_rejected_total{reason="concurrency"} 1`)
+		assert.Contains(t, content, `aegis_http_rejected_total{reason="header_too_large"} 1`)
+		assert.Contains(t, content, `aegis_http_rejected_total{reason="ambiguous_credentials"} 1`)
+		assert.Contains(t, content, `aegis_http_rejected_total{reason="other"} 1`)
+		assert.NotContains(t, content, "something-attacker-chose")
+
+		m.SetAuditDegraded(false)
+		assert.Contains(t, scrapeMetrics(t, m), "aegis_audit_degraded 0")
+	})
+
+	t.Run("no forbidden label keys on the new series", func(t *testing.T) {
+		m := NewMetrics()
+		m.InitAuditSuppressedLabels([]string{"RATE_LIMIT_EXCEEDED"})
+		m.RecordAuditDropped("completion", "queue_full", 1)
+		forbidden := map[string]bool{
+			"principal_id": true, "client_ip": true, "user_id": true, "ip": true,
+			"path": true, "url": true, "query": true, "bearer": true, "token": true,
+		}
+		for _, line := range strings.Split(scrapeMetrics(t, m), "\n") {
+			if !strings.HasPrefix(line, "aegis_audit_") && !strings.HasPrefix(line, "aegis_http_rejected_total") {
+				continue
+			}
+			s, e := strings.Index(line, "{"), strings.LastIndex(line, "}")
+			if s == -1 || e <= s {
+				continue
+			}
+			for _, pair := range strings.Split(line[s+1:e], ",") {
+				kv := strings.SplitN(pair, "=", 2)
+				assert.False(t, forbidden[strings.TrimSpace(kv[0])], "forbidden label in %s", line)
+			}
+		}
+	})
+}
