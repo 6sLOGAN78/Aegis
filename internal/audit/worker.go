@@ -90,12 +90,14 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 	for _, e := range events {
 		// Hostile or legacy values must never make Postgres reject the whole batch (D-18).
 		e.Normalize()
-		eventID := e.EventID
-		if _, perr := uuid.Parse(eventID); perr != nil {
+		// uuid.Parse accepts forms Postgres' uuid type rejects (urn:uuid:...), so the
+		// canonical text is what gets sent, never the original.
+		eventID, ok := canonicalUUID(e.EventID)
+		if !ok {
 			eventID = uuid.NewString()
 		}
-		reqID := e.RequestID
-		if _, perr := uuid.Parse(reqID); perr != nil {
+		reqID, ok := canonicalUUID(e.RequestID)
+		if !ok {
 			reqID = uuid.NewString()
 		}
 

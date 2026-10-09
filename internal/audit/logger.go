@@ -432,8 +432,11 @@ func AuditMiddleware(logger *Logger, snapshotVersion int64, opts ...Option) func
 			start := time.Now()
 
 			// Extract or generate request ID
+			// An inbound id is trusted only when it is a canonical UUID: anything else
+			// (free text, urn/braced forms, megabyte values) is replaced, so a request id
+			// can neither bloat the WAL nor be a value Postgres' uuid type rejects.
 			reqID := r.Header.Get("X-Request-ID")
-			if reqID == "" {
+			if _, err := uuid.Parse(reqID); err != nil || len(reqID) != 36 {
 				reqID = uuid.NewString()
 				r.Header.Set("X-Request-ID", reqID)
 			}

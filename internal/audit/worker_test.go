@@ -425,3 +425,40 @@ func TestAuditWorker_InsertStatementShape(t *testing.T) {
 	assert.True(t, strings.Contains(text, "$19, $20"), "insert must have 20 placeholders")
 	assert.True(t, strings.Contains(text, "ON CONFLICT (event_date, event_id) DO NOTHING"), "dedupe clause must remain")
 }
+
+// WR-04: values Postgres rejects must never reach the batch, or the cursor would never
+// advance past the poisoned event.
+func TestAuditWorker_NormalizesRolesAndLenientUUIDs(t *testing.T) {
+	const canonical = "123e4567-e89b-12d3-a456-426614174000"
+	evt := sampleCompletionEvent("orders.create")
+	evt.EventID = "urn:uuid:" + canonical
+	evt.RequestID = "{" + strings.ToUpper(canonical) + "}"
+	evt.PrincipalRoles = []string{"adm\x00in", "viewer"}
+
+	runWorkerOnce(t, []*CompletionEvent{evt}, map[int]any{
+		0: canonical,
+		2: canonical,
+		7: `["admin","viewer"]`,
+	})
+}
+
+func TestAuditWorker_BoundsRoles(t *testing.T) {
+	evt := sampleCompletionEvent("orders.create")
+	evt.PrincipalRoles = nil
+	for i := 0; i < 500; i++ {
+		evt.PrincipalRoles = append(evt.PrincipalRoles, strings.Repeat("r", 1000))
+	}
+	runWorkerOnce(t, []*CompletionEvent{evt}, map[int]any{
+		7: argMatcher(func(v any) bool {
+			s, ok := v.(string)
+			if !ok {
+				return false
+			}
+			var roles []string
+			if err := json.Unmarshal([]byte(s), &roles); err != nil {
+				return false
+			}
+			return len(roles) == MaxPrincipalRoles && len(roles[0]) == MaxPrincipalRoleBytes
+		}),
+	})
+}

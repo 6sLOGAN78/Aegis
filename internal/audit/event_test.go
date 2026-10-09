@@ -129,7 +129,7 @@ func TestNormalize_IdempotentNilSafeAndUntouched(t *testing.T) {
 	assert.Equal(t, "not-normalized-here", e.EventID)
 	assert.Equal(t, "also\x00left-alone", e.RequestID)
 	assert.Equal(t, ts, e.Timestamp)
-	assert.Equal(t, []string{"r\x00"}, e.PrincipalRoles)
+	assert.Equal(t, []string{"r"}, e.PrincipalRoles, "roles are normalized since WR-04")
 	assert.Equal(t, 403, e.HTTPStatus)
 	assert.Equal(t, 2.5, e.DurationMS)
 	assert.Equal(t, int64(7), e.SnapshotVersion)
@@ -143,4 +143,55 @@ func TestValidEventType(t *testing.T) {
 	assert.False(t, ValidEventType(""))
 	assert.False(t, ValidEventType("DENIAL"))
 	assert.False(t, ValidEventType("other"))
+}
+
+// WR-04: roles reach a JSONB column, so they must be NUL free and bounded.
+func TestNormalize_PrincipalRoles(t *testing.T) {
+	roles := []string{"ok", "bad\x00role", "bad\xffutf8", strings.Repeat("r", 500)}
+	for i := 0; i < 200; i++ {
+		roles = append(roles, "extra")
+	}
+	orig := append([]string(nil), roles...)
+	e := &CompletionEvent{PrincipalRoles: roles}
+	e.Normalize()
+
+	assert.Len(t, e.PrincipalRoles, MaxPrincipalRoles)
+	assert.Equal(t, "ok", e.PrincipalRoles[0])
+	assert.Equal(t, "badrole", e.PrincipalRoles[1])
+	assert.Equal(t, "badutf8", e.PrincipalRoles[2])
+	assert.Equal(t, MaxPrincipalRoleBytes, len(e.PrincipalRoles[3]))
+	for _, r := range e.PrincipalRoles {
+		assert.NotContains(t, r, "\x00")
+		assert.True(t, utf8.ValidString(r))
+	}
+	assert.Equal(t, orig, roles, "the caller's slice must not be mutated")
+
+	once := *e
+	e.Normalize()
+	assert.Equal(t, once, *e, "idempotent")
+
+	var none CompletionEvent
+	none.Normalize()
+	assert.Empty(t, none.PrincipalRoles)
+}
+
+// WR-04: an ID Postgres' uuid type would reject is canonicalized when it parses and
+// bounded when it does not (the worker then replaces it).
+func TestNormalize_IDs(t *testing.T) {
+	const canonical = "123e4567-e89b-12d3-a456-426614174000"
+	for _, in := range []string{
+		"urn:uuid:" + canonical,
+		"{" + canonical + "}",
+		"123E4567E89B12D3A456426614174000",
+		strings.ToUpper(canonical),
+	} {
+		e := &CompletionEvent{EventID: in, RequestID: in}
+		e.Normalize()
+		assert.Equal(t, canonical, e.EventID, in)
+		assert.Equal(t, canonical, e.RequestID, in)
+	}
+
+	huge := &CompletionEvent{RequestID: strings.Repeat("x", 1<<20)}
+	huge.Normalize()
+	assert.LessOrEqual(t, len(huge.RequestID), MaxIDBytes, "an unparseable id must be bounded")
 }

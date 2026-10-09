@@ -4,6 +4,8 @@ import (
 	"strings"
 	"time"
 	"unicode/utf8"
+
+	"github.com/google/uuid"
 )
 
 // Explicit audit record types stored in audit_events.event_type (D-03).
@@ -15,6 +17,16 @@ const (
 
 // MaxCanonicalPathBytes caps CanonicalPath so a hostile URL cannot bloat a row (D-18).
 const MaxCanonicalPathBytes = 2048
+
+// Bounds applied by Normalize to the fields that are not plain varchar columns (WR-04).
+const (
+	// MaxPrincipalRoles caps how many roles one event carries into the roles JSONB column.
+	MaxPrincipalRoles = 64
+	// MaxPrincipalRoleBytes caps the length of each role.
+	MaxPrincipalRoleBytes = 128
+	// MaxIDBytes caps an EventID or RequestID that is not a UUID (the worker replaces it).
+	MaxIDBytes = 64
+)
 
 // ValidEventType reports whether s is one of the known audit record types.
 func ValidEventType(s string) bool {
@@ -54,9 +66,13 @@ type CompletionEvent struct {
 
 // Normalize makes every string field safe for its audit_events column: it strips
 // NUL bytes, drops invalid UTF-8, and truncates on a rune boundary to the column
-// width (CanonicalPath to MaxCanonicalPathBytes). It mutates in place, is idempotent
-// and nil-safe. RequestID, EventID, Timestamp, PrincipalRoles and numeric fields are
-// left alone (D-18).
+// width (CanonicalPath to MaxCanonicalPathBytes). PrincipalRoles (a JSONB column) lose
+// NUL bytes and invalid UTF-8 and are capped to MaxPrincipalRoles entries of at most
+// MaxPrincipalRoleBytes; the slice is replaced, never mutated in place. EventID and
+// RequestID are rewritten to the canonical UUID form when they parse (Postgres rejects
+// forms such as urn:uuid:...) and are otherwise only length-bounded to MaxIDBytes; the
+// worker replaces an unparseable ID. It mutates in place, is idempotent and nil-safe.
+// Timestamp and numeric fields are left alone (D-18, WR-04).
 func (e *CompletionEvent) Normalize() {
 	if e == nil {
 		return
@@ -72,6 +88,45 @@ func (e *CompletionEvent) Normalize() {
 	e.ClientIP = clipString(e.ClientIP, 64)
 	e.ErrorCode = clipString(e.ErrorCode, 64)
 	e.CanonicalPath = clipString(e.CanonicalPath, MaxCanonicalPathBytes)
+	e.EventID = normalizeID(e.EventID)
+	e.RequestID = normalizeID(e.RequestID)
+	if len(e.PrincipalRoles) > 0 {
+		n := len(e.PrincipalRoles)
+		if n > MaxPrincipalRoles {
+			n = MaxPrincipalRoles
+		}
+		roles := make([]string, n)
+		for i := range roles {
+			roles[i] = clipString(e.PrincipalRoles[i], MaxPrincipalRoleBytes)
+		}
+		e.PrincipalRoles = roles
+	}
+}
+
+// canonicalUUID returns the canonical form of s when it parses as a UUID. uuid.Parse is
+// more lenient than Postgres (it accepts urn:uuid:...), so callers must store the
+// canonical form, never the original text.
+func canonicalUUID(s string) (string, bool) {
+	u, err := uuid.Parse(s)
+	if err != nil {
+		return "", false
+	}
+	return u.String(), true
+}
+
+// normalizeID canonicalizes a UUID and bounds anything else without altering its bytes.
+func normalizeID(s string) string {
+	if c, ok := canonicalUUID(s); ok {
+		return c
+	}
+	if len(s) <= MaxIDBytes {
+		return s
+	}
+	cut := MaxIDBytes
+	for cut > 0 && !utf8.RuneStart(s[cut]) {
+		cut--
+	}
+	return s[:cut]
 }
 
 func clipString(s string, maxBytes int) string {

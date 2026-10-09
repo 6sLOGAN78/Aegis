@@ -657,3 +657,39 @@ func TestDenialRecordedBeforeImplicitHeader(t *testing.T) {
 		assert.EqualValues(t, 200, sinkLogMap(t, buf)["http_status"])
 	})
 }
+
+// WR-04: an inbound X-Request-ID is trusted only when it is a canonical UUID.
+func TestAuditMiddlewareRequestIDHeader(t *testing.T) {
+	const good = "123e4567-e89b-12d3-a456-426614174000"
+	cases := []struct {
+		name, in string
+		keep     bool
+	}{
+		{"canonical uuid is kept", good, true},
+		{"urn form is replaced", "urn:uuid:" + good, false},
+		{"braced form is replaced", "{" + good + "}", false},
+		{"free text is replaced", "my-request-1", false},
+		{"oversize is replaced", strings.Repeat("a", 1<<20), false},
+		{"nul byte is replaced", good[:35] + "\x00", false},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sink := &sinkFake{}
+			sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+				FromContext(r.Context()).SetDecision("deny", "DENIED_DEFAULT")
+				w.WriteHeader(http.StatusForbidden)
+			}, nil, func(r *http.Request) { r.Header["X-Request-Id"] = []string{tc.in} })
+
+			require.Len(t, sink.denials, 1)
+			got := sink.denials[0].RequestID
+			_, err := uuid.Parse(got)
+			require.NoError(t, err)
+			require.Len(t, got, 36)
+			if tc.keep {
+				assert.Equal(t, tc.in, got)
+			} else {
+				assert.NotEqual(t, tc.in, got)
+			}
+		})
+	}
+}
