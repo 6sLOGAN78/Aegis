@@ -10,6 +10,7 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -214,5 +215,110 @@ func TestDualServer_BodySizeBounding(t *testing.T) {
 		ds.WorkloadHandler().ServeHTTP(rec, req)
 
 		assert.Equal(t, http.StatusRequestEntityTooLarge, rec.Code)
+	})
+}
+
+func TestDualServer_RejectionRecorder(t *testing.T) {
+	newCfg := func(maxConcurrent int) *config.Config {
+		return &config.Config{
+			Port:                  8080,
+			WorkloadPort:          9443,
+			MaxHeaderBytes:        256,
+			MaxBodyBytes:          1048576,
+			MaxConcurrentRequests: maxConcurrent,
+		}
+	}
+	reached := false
+	ok := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		reached = true
+		w.WriteHeader(http.StatusOK)
+	})
+
+	t.Run("user listener oversized headers record header_too_large", func(t *testing.T) {
+		ds := NewDualServer(newCfg(10), ok, ok, nil)
+		rec := &fakeRecorder{}
+		ds.SetRejectionRecorder(rec)
+
+		req := httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/x", nil)
+		req.Header.Set("X-Large", strings.Repeat("A", 300))
+		out := httptest.NewRecorder()
+		ds.UserHandler().ServeHTTP(out, req)
+
+		assert.Equal(t, http.StatusRequestHeaderFieldsTooLarge, out.Code)
+		assert.Equal(t, []string{"header_too_large"}, rec.got())
+	})
+
+	t.Run("workload listener bearer records ambiguous_credentials", func(t *testing.T) {
+		ds := NewDualServer(newCfg(10), ok, ok, nil)
+		rec := &fakeRecorder{}
+		ds.SetRejectionRecorder(rec)
+
+		req := httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/x", nil)
+		req.Header.Set("Authorization", "Bearer abc")
+		out := httptest.NewRecorder()
+		ds.WorkloadHandler().ServeHTTP(out, req)
+
+		assert.Equal(t, http.StatusUnauthorized, out.Code)
+		assert.Equal(t, []string{"ambiguous_credentials"}, rec.got())
+	})
+
+	t.Run("workload listener oversized headers record header_too_large", func(t *testing.T) {
+		ds := NewDualServer(newCfg(10), ok, ok, nil)
+		rec := &fakeRecorder{}
+		ds.SetRejectionRecorder(rec)
+
+		req := httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/x", nil)
+		req.Header.Set("X-Large", strings.Repeat("B", 300))
+		out := httptest.NewRecorder()
+		ds.WorkloadHandler().ServeHTTP(out, req)
+
+		assert.Equal(t, http.StatusRequestHeaderFieldsTooLarge, out.Code)
+		assert.Equal(t, []string{"header_too_large"}, rec.got())
+	})
+
+	t.Run("concurrency rejection reaches the recorder attached via DualServer", func(t *testing.T) {
+		hold := make(chan struct{})
+		running := make(chan struct{})
+		var once sync.Once
+		blocking := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			once.Do(func() { close(running) })
+			<-hold
+		})
+		ds := NewDualServer(newCfg(1), blocking, blocking, nil)
+		rec := &fakeRecorder{}
+		ds.SetRejectionRecorder(rec)
+
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			ds.UserHandler().ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/hold", nil))
+		}()
+		<-running
+
+		out := httptest.NewRecorder()
+		ds.WorkloadHandler().ServeHTTP(out, httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/x", nil))
+		close(hold)
+		<-done
+
+		assert.Equal(t, http.StatusTooManyRequests, out.Code)
+		assert.Equal(t, []string{"concurrency"}, rec.got())
+	})
+
+	t.Run("passing requests are not counted and nil recorder is safe", func(t *testing.T) {
+		ds := NewDualServer(newCfg(10), ok, ok, nil)
+
+		// No recorder attached: rejections must not panic.
+		bad := httptest.NewRequest(http.MethodGet, "https://127.0.0.1:9443/x", nil)
+		bad.Header.Set("Authorization", "Bearer abc")
+		assert.NotPanics(t, func() { ds.WorkloadHandler().ServeHTTP(httptest.NewRecorder(), bad) })
+
+		rec := &fakeRecorder{}
+		ds.SetRejectionRecorder(rec)
+		reached = false
+		out := httptest.NewRecorder()
+		ds.UserHandler().ServeHTTP(out, httptest.NewRequest(http.MethodGet, "http://127.0.0.1:8080/x", nil))
+		assert.True(t, reached)
+		assert.Equal(t, http.StatusOK, out.Code)
+		assert.Empty(t, rec.got())
 	})
 }

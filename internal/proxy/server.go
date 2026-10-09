@@ -110,6 +110,7 @@ type DualServer struct {
 	limiter         *ConcurrencyLimiter
 	userHandler     http.Handler
 	workloadHandler http.Handler
+	rejections      *rejectionHolder
 	shutdownCh      chan struct{}
 	shutdownOnce    sync.Once
 }
@@ -122,6 +123,7 @@ func NewDualServer(
 	workloadTLSConfig *tls.Config,
 ) *DualServer {
 	limiter := NewConcurrencyLimiter(cfg.MaxConcurrentRequests)
+	rejections := &rejectionHolder{}
 
 	// Ingress wrapper for User Listener (:8080)
 	userIngress := http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -138,6 +140,7 @@ func NewDualServer(
 			}
 		}
 		if headerBytes > cfg.MaxHeaderBytes {
+			rejections.record("header_too_large")
 			WriteProblemDetails(
 				w,
 				http.StatusRequestHeaderFieldsTooLarge,
@@ -163,6 +166,7 @@ func NewDualServer(
 
 		// AUTH-03: Strictly reject inbound Bearer tokens on workload port to eliminate Confused Deputy
 		if r.Header.Get("Authorization") != "" {
+			rejections.record("ambiguous_credentials")
 			WriteProblemDetails(
 				w,
 				http.StatusUnauthorized,
@@ -183,6 +187,7 @@ func NewDualServer(
 			}
 		}
 		if headerBytes > cfg.MaxHeaderBytes {
+			rejections.record("header_too_large")
 			WriteProblemDetails(
 				w,
 				http.StatusRequestHeaderFieldsTooLarge,
@@ -235,8 +240,17 @@ func NewDualServer(
 		limiter:         limiter,
 		userHandler:     wrappedUserHandler,
 		workloadHandler: wrappedWorkloadHandler,
+		rejections:      rejections,
 		shutdownCh:      make(chan struct{}),
 	}
+}
+
+// SetRejectionRecorder attaches the metrics recorder for rejections that occur
+// before the audit middleware (concurrency limit, oversized headers, ambiguous
+// credentials). Safe to call after construction; nil disables counting (D-16).
+func (d *DualServer) SetRejectionRecorder(r RejectionRecorder) {
+	d.rejections.set(r)
+	d.limiter.SetRejectionRecorder(r)
 }
 
 // UserServer returns the user http.Server.

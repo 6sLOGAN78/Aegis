@@ -134,3 +134,84 @@ func TestConcurrencyLimiter(t *testing.T) {
 		assert.Equal(t, 0, len(limiter.sem))
 	})
 }
+
+// fakeRecorder is a RejectionRecorder that remembers every reason it was given.
+type fakeRecorder struct {
+	mu      sync.Mutex
+	reasons []string
+}
+
+func (f *fakeRecorder) RecordRejection(reason string) {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.reasons = append(f.reasons, reason)
+}
+
+func (f *fakeRecorder) got() []string {
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	return append([]string(nil), f.reasons...)
+}
+
+func TestConcurrencyLimiter_RejectionRecorder(t *testing.T) {
+	saturate := func(t *testing.T, limiter *ConcurrencyLimiter) (http.Handler, func()) {
+		t.Helper()
+		hold := make(chan struct{})
+		running := make(chan struct{})
+		var once sync.Once
+		handler := limiter.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+			once.Do(func() { close(running) })
+			<-hold
+		}))
+		done := make(chan struct{})
+		go func() {
+			defer close(done)
+			handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/hold", nil))
+		}()
+		<-running
+		return handler, func() { close(hold); <-done }
+	}
+
+	t.Run("records one concurrency rejection and keeps the 429 wire behavior", func(t *testing.T) {
+		limiter := NewConcurrencyLimiter(1)
+		rec := &fakeRecorder{}
+		limiter.SetRejectionRecorder(rec)
+		handler, release := saturate(t, limiter)
+		defer release()
+
+		out := httptest.NewRecorder()
+		handler.ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/overflow", nil))
+
+		assert.Equal(t, http.StatusTooManyRequests, out.Code)
+		assert.Equal(t, "1", out.Header().Get("Retry-After"))
+		assert.Equal(t, "application/problem+json", out.Header().Get("Content-Type"))
+		assert.Equal(t, []string{"concurrency"}, rec.got())
+	})
+
+	t.Run("admitted requests are not counted", func(t *testing.T) {
+		limiter := NewConcurrencyLimiter(2)
+		rec := &fakeRecorder{}
+		limiter.SetRejectionRecorder(rec)
+		handler := limiter.Wrap(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {}))
+		handler.ServeHTTP(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/ok", nil))
+		assert.Empty(t, rec.got())
+	})
+
+	t.Run("nil recorder is a no-op", func(t *testing.T) {
+		limiter := NewConcurrencyLimiter(1)
+		handler, release := saturate(t, limiter)
+		defer release()
+		out := httptest.NewRecorder()
+		assert.NotPanics(t, func() {
+			handler.ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/overflow", nil))
+		})
+		assert.Equal(t, http.StatusTooManyRequests, out.Code)
+
+		limiter.SetRejectionRecorder(nil)
+		out = httptest.NewRecorder()
+		assert.NotPanics(t, func() {
+			handler.ServeHTTP(out, httptest.NewRequest(http.MethodGet, "/overflow", nil))
+		})
+		assert.Equal(t, http.StatusTooManyRequests, out.Code)
+	})
+}
