@@ -4,14 +4,14 @@ milestone: v1.0
 milestone_name: milestone
 status: executing
 stopped_at: Phase 8 context gathered
-last_updated: "2026-10-08T22:14:26.104Z"
-last_activity: 2026-10-08 -- Phase 8 planning complete
+last_updated: "2026-10-09T04:59:53.421Z"
+last_activity: 2026-10-09
 progress:
   total_phases: 9
   completed_phases: 8
   total_plans: 43
-  completed_plans: 31
-  percent: 72
+  completed_plans: 32
+  percent: 74
 ---
 
 # Project State
@@ -21,14 +21,14 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-06)
 
 **Core value:** Default-deny, fail-closed authorization and workload authentication where invalid credentials, stale security state, or dependency failures never produce implicit authorization.
-**Current focus:** v1.0 gap closure — Phase 7 complete; blockers B2, B5, B6, B7, B8 have no closure phase yet
+**Current focus:** Phase 8 — Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
 
 ## Current Position
 
-Phase: 8 (planned, not started)
-Plan: 0 of 12
+Phase: 8 (Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)) — EXECUTING
+Plan: 2 of 12
 Status: Ready to execute
-Last activity: 2026-10-09 -- Phase 8 planning complete
+Last activity: 2026-10-09
 
 ## Performance Metrics
 
@@ -62,6 +62,7 @@ Last activity: 2026-10-09 -- Phase 8 planning complete
 | Phase 07 P03 | 8min | 2 tasks | 2 files |
 | Phase 07 P04 | 6min | 2 tasks | 1 files |
 | Phase 07 P05 | 20min | 3 tasks | 1 files |
+| Phase 08 P01 | 20min | 3 tasks | 10 files |
 
 ## Accumulated Context
 
@@ -82,6 +83,7 @@ Recent decisions affecting current work:
 - [Phase 07]: mvp compose publishes only gateway and demo-issuer; control plane expose-only; hardened keeps existing 8084/9090 publication
 - [Phase 07]: Distributed compose uses three per-spool audit workers via x-audit-worker anchor (no Go change)
 - [Phase 07]: 07-05: MVP stack verified live unchanged; A4 PASS (HTTP 403); REV-03/AUD-03 remain open
+- [Phase 08]: 08-01: explicit event_type allowlist with status-based fallback; Normalize applied in worker per-event copy; non-UUID ids replaced with fresh UUIDs
 
 ### Roadmap Evolution
 

@@ -248,12 +248,12 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 12 plans
+**Plans:** 1/12 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 08-01-PLAN.md — Event type and suppressed-count fields, `Normalize()`, worker typing + 20-argument insert (worker and tests/dr test helpers), migration 000003, `denial` in the event_type contract
+- [x] 08-01-PLAN.md — Event type and suppressed-count fields, `Normalize()`, worker typing + 20-argument insert (worker and tests/dr test helpers), migration 000003, `denial` in the event_type contract
 - [ ] 08-02-PLAN.md — Spool: `WriteFrames` batch writer, hard limit, injectable statfs, write-fault gate (AppendPreForward unchanged)
 - [ ] 08-03-PLAN.md — Config keys with safe defaults, audit and rejection metrics, pre-middleware rejection counter
 
