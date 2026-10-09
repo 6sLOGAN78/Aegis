@@ -13,6 +13,7 @@ import (
 	"strconv"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"syscall"
 	"time"
 )
@@ -27,13 +28,31 @@ const FrameHeaderSize = 12
 var (
 	ErrSpoolSaturated  = errors.New("audit spool saturated (>= 90% capacity)")
 	ErrCorruptedRecord = errors.New("wal record checksum mismatch")
+
+	// ErrHardLimit is returned by WriteFrames when the spool has crossed the hard limit
+	// (default 95%). Nothing is written; the caller drops and counts the batch.
+	ErrHardLimit = errors.New("audit spool at hard limit")
 )
+
+// defaultHardLimitRatio is the usage ratio above which even denial and completion
+// records are refused. It sits above the 0.90 admission gate so those records keep
+// writing into the headroom while allowed traffic is refused.
+const defaultHardLimitRatio = 0.95
 
 // DiskSpoolConfig defines storage directory and capacity thresholds for the append-only WAL.
 type DiskSpoolConfig struct {
 	SpoolDir         string
 	MaxSegmentBytes  int64 // default 16MB
 	VolumeQuotaBytes int64 // default 1GB
+
+	// HardLimitRatio gates WriteFrames. 0 means 0.95; it must be greater than the
+	// 0.90 saturation gate and at most 0.99.
+	HardLimitRatio float64
+
+	// StatfsFunc reports filesystem usage for path. nil means the real syscall.Statfs
+	// (used = Blocks-Bfree, total = Blocks). Tests inject it to avoid depending on
+	// the host's real disk usage.
+	StatfsFunc func(path string) (used, total uint64, err error)
 }
 
 // DiskSpool manages local append-only WAL files on disk with synchronous fsync
@@ -46,6 +65,15 @@ type DiskSpool struct {
 	currentSize    int64
 	seq            int64
 	closed         bool
+
+	// writeFault, when set, makes CheckSaturation report saturation so the unchanged
+	// AppendPreForward refuses allowed traffic (fail-closed, D-12). It never blocks WriteFrames.
+	writeFault  atomic.Bool
+	faultReason atomic.Value // string
+
+	// Test seams used only by WriteFrames. nil means the real f.Write / f.Sync.
+	writeFn func(*os.File, []byte) (int, error)
+	syncFn  func(*os.File) error
 }
 
 // NewDiskSpool initializes a DiskSpool in the specified directory with 0700 permissions.
@@ -58,6 +86,13 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 	}
 	if cfg.VolumeQuotaBytes <= 0 {
 		cfg.VolumeQuotaBytes = 1024 * 1024 * 1024 // 1 GB default
+	}
+
+	if cfg.HardLimitRatio == 0 {
+		cfg.HardLimitRatio = defaultHardLimitRatio
+	}
+	if cfg.HardLimitRatio <= 0.90 || cfg.HardLimitRatio > 0.99 {
+		return nil, fmt.Errorf("hard limit ratio must be greater than the 0.90 saturation gate and at most 0.99, got %v", cfg.HardLimitRatio)
 	}
 
 	if err := os.MkdirAll(cfg.SpoolDir, 0700); err != nil {
@@ -125,9 +160,32 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 	}, nil
 }
 
+// statfsRatio returns the used/total ratio of the filesystem holding the spool.
+// ok is false when the figure is unavailable (statfs error or zero total).
+func (s *DiskSpool) statfsRatio() (float64, bool) {
+	if s.cfg.StatfsFunc != nil {
+		used, total, err := s.cfg.StatfsFunc(s.cfg.SpoolDir)
+		if err != nil || total == 0 {
+			return 0, false
+		}
+		return float64(used) / float64(total), true
+	}
+	var stat syscall.Statfs_t
+	if err := syscall.Statfs(s.cfg.SpoolDir, &stat); err != nil || stat.Blocks == 0 {
+		return 0, false
+	}
+	usedBlocks := stat.Blocks - stat.Bfree
+	return float64(usedBlocks) / float64(stat.Blocks), true
+}
+
 // CheckSaturation evaluates whether the spool directory or underlying filesystem
-// has reached or exceeded 90% capacity (AUD-02).
+// has reached or exceeded 90% capacity (AUD-02). It also reports saturation while
+// the write-fault flag is set, which fails allowed traffic closed (D-12).
 func (s *DiskSpool) CheckSaturation() (bool, error) {
+	if s.writeFault.Load() {
+		return true, nil
+	}
+
 	// 1. Check configured volume quota
 	if s.cfg.VolumeQuotaBytes > 0 {
 		usage, err := s.dirUsageBytes()
@@ -140,16 +198,57 @@ func (s *DiskSpool) CheckSaturation() (bool, error) {
 	}
 
 	// 2. Check underlying filesystem stats
-	var stat syscall.Statfs_t
-	if err := syscall.Statfs(s.cfg.SpoolDir, &stat); err == nil && stat.Blocks > 0 {
-		usedBlocks := stat.Blocks - stat.Bfree
-		ratio := float64(usedBlocks) / float64(stat.Blocks)
-		if ratio >= 0.90 {
-			return true, nil
-		}
+	if ratio, ok := s.statfsRatio(); ok && ratio >= 0.90 {
+		return true, nil
 	}
 
 	return false, nil
+}
+
+// checkHardLimit mirrors CheckSaturation's quota and filesystem checks against
+// cfg.HardLimitRatio and deliberately ignores the write-fault flag.
+func (s *DiskSpool) checkHardLimit() (bool, error) {
+	if s.cfg.VolumeQuotaBytes > 0 {
+		usage, err := s.dirUsageBytes()
+		if err == nil {
+			ratio := float64(usage) / float64(s.cfg.VolumeQuotaBytes)
+			if ratio >= s.cfg.HardLimitRatio {
+				return true, nil
+			}
+		}
+	}
+	if ratio, ok := s.statfsRatio(); ok && ratio >= s.cfg.HardLimitRatio {
+		return true, nil
+	}
+	return false, nil
+}
+
+// HardLimitExceeded reports whether usage has crossed the hard limit that gates
+// WriteFrames. The committer polls it to decide when to clear a write fault.
+func (s *DiskSpool) HardLimitExceeded() (bool, error) {
+	return s.checkHardLimit()
+}
+
+// SetWriteFault marks the audit pipeline as losing data. While set, CheckSaturation
+// reports true so AppendPreForward refuses allowed traffic. WriteFrames is unaffected.
+func (s *DiskSpool) SetWriteFault(reason string) {
+	s.faultReason.Store(reason)
+	s.writeFault.Store(true)
+}
+
+// ClearWriteFault clears the write-fault flag.
+func (s *DiskSpool) ClearWriteFault() {
+	s.writeFault.Store(false)
+	s.faultReason.Store("")
+}
+
+// WriteFaulted reports whether the write-fault flag is set and the recorded reason.
+func (s *DiskSpool) WriteFaulted() (bool, string) {
+	if !s.writeFault.Load() {
+		return false, ""
+	}
+	reason, _ := s.faultReason.Load().(string)
+	return true, reason
 }
 
 // IsSaturated reports whether the spool has reached or exceeded 90% capacity.
