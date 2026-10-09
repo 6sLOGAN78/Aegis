@@ -2,9 +2,9 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Completed 08-12-PLAN.md
-last_updated: "2026-10-09T10:40:17.136Z"
+status: gap_closure
+stopped_at: Phase 8 complete (human verification items open); v1.0 gap closure continues (B2, B5, B6, B8 open)
+last_updated: 2026-10-09T10:49:06.835Z
 last_activity: 2026-10-09
 progress:
   total_phases: 9
@@ -21,20 +21,20 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-06)
 
 **Core value:** Default-deny, fail-closed authorization and workload authentication where invalid credentials, stale security state, or dependency failures never produce implicit authorization.
-**Current focus:** Phase 8 — Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
+**Current focus:** v1.0 gap closure — Phases 7 and 8 complete; blockers B2, B5, B6, B8 have no closure phase yet
 
 ## Current Position
 
-Phase: 8 (Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)) — EXECUTING
-Plan: 12 of 12
-Status: Phase complete — ready for verification
-Last activity: 2026-10-09
+Phase: 8
+Plan: 12 of 12 complete
+Status: Phase 8 complete; 4 human verification items open in 08-HUMAN-UAT.md — v1.0 still reopened for gap closure
+Last activity: 2026-10-09 -- Phase 8 complete (AUD-03, AUD-04 closed on MVP-profile live evidence)
 
 ## Performance Metrics
 
 **Velocity:**
 
-- Total plans completed: 31
+- Total plans completed: 43
 - Average duration: 15 min
 - Total execution time: 6.2 hours
 
@@ -50,6 +50,7 @@ Last activity: 2026-10-09
 | Phase 5: Distributed Resilience & Chaos | 3/3 | Complete | 2026-10-07 |
 | Phase 6: Production Hardening & Runbooks | 3/3 | Complete | 2026-10-07 |
 | 7 | 6 | - | - |
+| 8 | 12 | - | - |
 
 **Recent Trend:**
 
