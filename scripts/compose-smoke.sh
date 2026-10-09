@@ -508,6 +508,145 @@ else
   fail "AUDIT-TYPES aegis_audit_degraded" "value '${v:-missing}', expected 0"
 fi
 
+# --- 4c. DEDUPE: cursor deleted, worker restarted, no new rows -------------
+echo "=== DEDUPE: delete the cursor, restart the worker, row count must not change (AUD-03) ==="
+for w in "${WORKERS[@]}"; do
+  # Quiesce: the row count must be unchanged across 3 consecutive 1-second samples.
+  prev=""
+  stable=0
+  for _ in $(seq 1 60); do
+    cur="$(audit_count)"
+    if [ -n "${cur}" ] && [ "${cur}" = "${prev}" ]; then
+      stable=$((stable + 1))
+    else
+      stable=0
+    fi
+    prev="${cur}"
+    if [ "${stable}" -ge 2 ]; then
+      break
+    fi
+    sleep 1
+  done
+  if [ "${stable}" -lt 2 ]; then
+    fail "DEDUPE ${w}" "audit_events count never stayed constant for 3 samples within 60s (last ${prev:-none})"
+    continue
+  fi
+  before="${prev}"
+
+  seg_before="$(cursor_field "${w}" segment_file)"
+  off_before="$(cursor_field "${w}" offset)"
+  case "${off_before}" in
+    ''|*[!0-9]*) off_before=0 ;;
+  esac
+  if [ -z "${seg_before}" ] || [ "${off_before}" -le 0 ]; then
+    fail "DEDUPE ${w}" "nothing to replay: cursor segment '${seg_before:-none}' offset ${off_before}"
+    continue
+  fi
+
+  if ! dc exec -T "${w}" rm -f "${WAL_CURSOR}" >/dev/null 2>&1; then
+    fail "DEDUPE ${w}" "rm unavailable in worker container (assumption A2)"
+    continue
+  fi
+  if ! dc restart "${w}" >/dev/null 2>&1; then
+    fail "DEDUPE ${w}" "docker compose restart failed"
+    continue
+  fi
+
+  seg_after=""
+  for _ in $(seq 1 30); do
+    seg_after="$(cursor_field "${w}" segment_file)"
+    if [ -n "${seg_after}" ]; then
+      break
+    fi
+    sleep 1
+  done
+  sleep 5
+  after="$(audit_count)"
+  if [ -z "${seg_after}" ]; then
+    fail "DEDUPE ${w}" "wal.cursor was not recreated within 30s of the restart"
+  elif [[ "${seg_after}" < "${seg_before}" ]]; then
+    fail "DEDUPE ${w}" "recreated cursor segment ${seg_after} sorts before the earlier ${seg_before}"
+  elif [ "${after}" != "${before}" ]; then
+    fail "DEDUPE ${w}" "audit_events count changed from ${before} to ${after:-none} after replay"
+  else
+    pass "DEDUPE ${w} cursor deleted, worker restarted, replay absorbed (count unchanged at ${before})"
+  fi
+done
+
+# --- 4d. ROTATION: multi-segment delivery (only when requested) --------------
+echo "=== ROTATION: multi-segment delivery (AUD-03) ==="
+if [ "${SMOKE_ROTATION_REQUESTS}" -le 0 ]; then
+  echo "ROTATION SKIPPED: set SMOKE_ROTATION_REQUESTS=300 and start the stack with AEGIS_SPOOL_SEGMENT_BYTES=65536 to exercise rotation (rotation is NOT claimed)"
+elif [ "${PROFILE}" != "mvp" ]; then
+  echo "ROTATION SKIPPED: the rotation check is only implemented for the mvp profile (rotation is NOT claimed)"
+else
+  rot_worker="${WORKERS[0]:-}"
+  seg_seq() { sed -n 's/^wal-[0-9]*-\([0-9]*\)\.log$/\1/p'; }
+  seq_a="$(cursor_field "${rot_worker}" segment_file | seg_seq)"
+  if [ -z "${rot_worker}" ] || [ -z "${seq_a}" ]; then
+    fail "ROTATION" "could not read a wal-<nanos>-<seq>.log segment name from the worker cursor"
+  else
+    seq_a=$((10#${seq_a}))
+    rot_ids=()
+    rot_no_id=0
+    rot_non200=0
+    tok=""
+    for i in $(seq 1 "${SMOKE_ROTATION_REQUESTS}"); do
+      if [ -z "${tok}" ] || [ $(((i - 1) % 100)) -eq 0 ]; then
+        tok="$(dev_token)"
+      fi
+      if [ -z "${tok}" ]; then
+        rot_non200=$((rot_non200 + 1))
+        continue
+      fi
+      probe="$(gw_probe "${tok}" /api/orders)"
+      code="${probe%% *}"
+      rid="${probe#* }"
+      if [ "${code}" != "200" ]; then
+        rot_non200=$((rot_non200 + 1))
+      elif valid_rid "${rid}"; then
+        rot_ids+=("${rid}")
+      else
+        rot_no_id=$((rot_no_id + 1))
+      fi
+      sleep 0.02
+    done
+    rot_n="${#rot_ids[@]}"
+    echo "ROTATION sent ${SMOKE_ROTATION_REQUESTS} requests: ${rot_n} with 200 and a request id, ${rot_non200} non-200, ${rot_no_id} 200 without request id"
+    if [ "${rot_n}" -eq 0 ] || [ "${rot_no_id}" -gt 0 ]; then
+      fail "ROTATION" "cannot verify delivery: ${rot_n} usable 200 responses, ${rot_no_id} 200 responses without X-Request-ID"
+    else
+      rot_list="$(printf "'%s'," "${rot_ids[@]}")"
+      rot_list="${rot_list%,}"
+      rot_ok="false"
+      if wait_q_eq "select count(distinct request_id) from audit_events where event_type='completion' and request_id in (${rot_list})" "${rot_n}" 90; then
+        rot_ok="true"
+      fi
+      seq_b="${seq_a}"
+      for _ in $(seq 1 15); do
+        seg_b="$(cursor_field "${rot_worker}" segment_file | seg_seq)"
+        if [ -n "${seg_b}" ]; then
+          seq_b=$((10#${seg_b}))
+        fi
+        if [ $((seq_b - seq_a)) -ge 2 ]; then
+          break
+        fi
+        sleep 1
+      done
+      ready_code="$(curl -s -o /dev/null -w '%{http_code}' "${GATEWAY_URL}/readyz" 2>/dev/null || true)"
+      if [ "${rot_ok}" != "true" ]; then
+        fail "ROTATION" "only ${LAST_Q:-none} of ${rot_n} completion rows arrived within 90s"
+      elif [ $((seq_b - seq_a)) -lt 2 ]; then
+        fail "ROTATION" "all ${rot_n} rows present but segment seq ${seq_a} -> ${seq_b}; segment size too large to rotate; start the stack with a smaller AEGIS_SPOOL_SEGMENT_BYTES"
+      elif [ "${ready_code}" != "200" ]; then
+        fail "ROTATION" "gateway /readyz returned HTTP ${ready_code:-none} after the burst (spool saturated?)"
+      else
+        pass "ROTATION ${rot_n} requests delivered across >=2 segment rotations (seq ${seq_a} -> ${seq_b})"
+      fi
+    fi
+  fi
+fi
+
 # --- 5. A4: quarantine denial (assumption, non-fatal) ----------------------
 echo "=== A4: quarantined principal denied (assumption) ==="
 a4_code="none"
