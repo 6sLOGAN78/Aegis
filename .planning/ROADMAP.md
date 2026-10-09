@@ -248,7 +248,7 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 11/12 plans executed
+**Plans:** 12/12 plans complete
 
 Plans:
 **Wave 1**
@@ -282,7 +282,7 @@ Plans:
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
-- [ ] 08-12-PLAN.md — Final regression, validation map, evidence-derived AUD-03 / AUD-04 verdicts and reconciliation notes
+- [x] 08-12-PLAN.md — Final regression, validation map, evidence-derived AUD-03 / AUD-04 verdicts and reconciliation notes
 
 ---
 
