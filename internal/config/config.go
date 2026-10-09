@@ -162,6 +162,25 @@ func LoadConfig() (*Config, error) {
 	return cfg, nil
 }
 
+// Upper (and lower) bounds for the audit pipeline settings. They keep the defaults
+// (8192 queue, 10/s, burst 50, 4096 keys) well inside the range while making sure the
+// unauthenticated cap and the suppression table can be neither disabled nor made
+// effectively unbounded by configuration (WR-05).
+const (
+	// maxAuditCompletionQueue bounds the completion queue: 100k frames is roughly
+	// 60-100 MB at typical frame sizes.
+	maxAuditCompletionQueue = 100000
+	// minAuditUnauthRate / maxAuditUnauthRate bound the per-reason refill rate. +Inf or a
+	// huge rate would refill the bucket on every call and remove the D-05 cap.
+	minAuditUnauthRate = 0.001
+	maxAuditUnauthRate = 1000.0
+	// maxAuditUnauthBurst bounds the bucket size for the same reason.
+	maxAuditUnauthBurst = 10000
+	// maxAuditSuppressKeys bounds the suppression table; every entry holds a copy of the
+	// first event (up to a few KiB), so 100k keys is a few hundred MB at the very worst.
+	maxAuditSuppressKeys = 100000
+)
+
 // loadAuditConfig applies the audit pipeline environment overrides. Every key is
 // parse-or-error with an explicit allowed range so a misconfiguration cannot
 // silently disable a protection (T-08-11).
@@ -173,7 +192,7 @@ func loadAuditConfig(cfg *Config) error {
 	if cfg.AuditCompletionFlushInterval, err = envDuration("AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL", cfg.AuditCompletionFlushInterval, time.Nanosecond, time.Second); err != nil {
 		return err
 	}
-	if cfg.AuditCompletionQueueSize, err = envInt("AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", cfg.AuditCompletionQueueSize, 64, 1000000); err != nil {
+	if cfg.AuditCompletionQueueSize, err = envInt("AEGIS_AUDIT_COMPLETION_QUEUE_SIZE", cfg.AuditCompletionQueueSize, 64, maxAuditCompletionQueue); err != nil {
 		return err
 	}
 	if v := os.Getenv("AEGIS_SPOOL_HARD_LIMIT_RATIO"); v != "" {
@@ -191,18 +210,18 @@ func loadAuditConfig(cfg *Config) error {
 		if perr != nil {
 			return fmt.Errorf("invalid AEGIS_AUDIT_UNAUTH_RATE %q: %w", v, perr)
 		}
-		if !(r > 0) {
-			return fmt.Errorf("invalid AEGIS_AUDIT_UNAUTH_RATE %q: must be > 0", v)
+		if math.IsNaN(r) || math.IsInf(r, 0) || r < minAuditUnauthRate || r > maxAuditUnauthRate {
+			return fmt.Errorf("invalid AEGIS_AUDIT_UNAUTH_RATE %q: must be a finite number between %g and %g", v, minAuditUnauthRate, maxAuditUnauthRate)
 		}
 		cfg.AuditUnauthRate = r
 	}
-	if cfg.AuditUnauthBurst, err = envInt("AEGIS_AUDIT_UNAUTH_BURST", cfg.AuditUnauthBurst, 1, math.MaxInt32); err != nil {
+	if cfg.AuditUnauthBurst, err = envInt("AEGIS_AUDIT_UNAUTH_BURST", cfg.AuditUnauthBurst, 1, maxAuditUnauthBurst); err != nil {
 		return err
 	}
 	if cfg.AuditSuppressWindow, err = envDuration("AEGIS_AUDIT_SUPPRESS_WINDOW", cfg.AuditSuppressWindow, time.Second, time.Hour); err != nil {
 		return err
 	}
-	if cfg.AuditSuppressMaxKeys, err = envInt("AEGIS_AUDIT_SUPPRESS_MAX_KEYS", cfg.AuditSuppressMaxKeys, 16, math.MaxInt32); err != nil {
+	if cfg.AuditSuppressMaxKeys, err = envInt("AEGIS_AUDIT_SUPPRESS_MAX_KEYS", cfg.AuditSuppressMaxKeys, 16, maxAuditSuppressKeys); err != nil {
 		return err
 	}
 	if v := os.Getenv("AEGIS_SPOOL_SEGMENT_BYTES"); v != "" {
