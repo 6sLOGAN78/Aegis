@@ -2,6 +2,7 @@ package audit
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"io"
 	"log/slog"
@@ -18,18 +19,24 @@ type auditContextKey struct{}
 
 // AuditContext tracks per-request security context and policy decision data for audit emission.
 type AuditContext struct {
-	mu             sync.Mutex
-	RequestID      string
-	PrincipalID    string
-	PrincipalKind  string
-	PrincipalRoles []string
-	CanonicalPath  string
-	RouteID        string
-	ServiceID      string
-	Decision       string
-	ReasonCode     string
-	ErrorCode      string
+	mu              sync.Mutex
+	RequestID       string
+	PrincipalID     string
+	PrincipalKind   string
+	PrincipalRoles  []string
+	CanonicalPath   string
+	RouteID         string
+	ServiceID       string
+	Decision        string
+	ReasonCode      string
+	ErrorCode       string
 	SnapshotVersion int64
+
+	// decisionSet is true once a handler called SetDecision; the middleware then
+	// treats ac.Decision as authoritative instead of guessing from the status.
+	decisionSet bool
+	// durableRecorded is true once the denial was handed to the durable sink.
+	durableRecorded bool
 }
 
 // WithAuditContext creates a new AuditContext and attaches it to ctx.
@@ -98,6 +105,27 @@ func (ac *AuditContext) SetDecision(decision, reasonCode string) {
 	defer ac.mu.Unlock()
 	ac.Decision = decision
 	ac.ReasonCode = reasonCode
+	ac.decisionSet = true
+}
+
+// markRecorded notes that a denial row was handed to the durable sink.
+func (ac *AuditContext) markRecorded() {
+	if ac == nil {
+		return
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	ac.durableRecorded = true
+}
+
+// wasRecorded reports whether a denial row was already handed to the durable sink.
+func (ac *AuditContext) wasRecorded() bool {
+	if ac == nil {
+		return false
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	return ac.durableRecorded
 }
 
 // SetErrorCode sets an error code on the audit context.
@@ -156,7 +184,7 @@ func (ac *AuditContext) ToCompletionEvent(method, clientIP string, snapshotVersi
 		roles = []string{}
 	}
 
-	return &CompletionEvent{
+	ev := &CompletionEvent{
 		EventID:         uuid.NewString(),
 		Timestamp:       time.Now().UTC(),
 		RequestID:       ac.RequestID,
@@ -172,7 +200,10 @@ func (ac *AuditContext) ToCompletionEvent(method, clientIP string, snapshotVersi
 		ReasonCode:      reasonCode,
 		SnapshotVersion: snapVer,
 		ErrorCode:       ac.ErrorCode,
+		EventType:       EventTypeDecision,
 	}
+	ev.Normalize()
+	return ev
 }
 
 // Logger wraps a structured log/slog.Logger writing JSON audit records.
@@ -225,11 +256,38 @@ func (l *Logger) LogCompletion(event CompletionEvent) {
 	l.logger.Info("audit_completion", attrs...)
 }
 
+// Sink receives durable audit events from AuditMiddleware.
+//
+// RecordDenial may block briefly until the record is durable (or dropped or
+// suppressed) and must never panic. EnqueueCompletion must be non-blocking.
+// Both receive a normalized copy the callee may keep.
+type Sink interface {
+	RecordDenial(ev *CompletionEvent)
+	EnqueueCompletion(ev *CompletionEvent)
+}
+
+type middlewareConfig struct {
+	sink Sink
+}
+
+// Option configures AuditMiddleware.
+type Option func(*middlewareConfig)
+
+// WithSink attaches a durable audit sink. A nil sink is ignored.
+func WithSink(s Sink) Option {
+	return func(c *middlewareConfig) {
+		c.sink = s
+	}
+}
+
 // StatusCaptureResponseWriter wraps http.ResponseWriter to capture the HTTP response status code.
 type StatusCaptureResponseWriter struct {
 	http.ResponseWriter
 	StatusCode  int
 	wroteHeader bool
+	// onFirstHeader, when set, runs once with the final (>= 200) status before the
+	// header reaches the underlying writer.
+	onFirstHeader func(code int)
 }
 
 // NewStatusCaptureResponseWriter creates a new StatusCaptureResponseWriter defaulting to status 200.
@@ -241,10 +299,19 @@ func NewStatusCaptureResponseWriter(w http.ResponseWriter) *StatusCaptureRespons
 }
 
 // WriteHeader captures the status code before writing to the wrapped response writer.
+// Informational 1xx responses (except 101) are forwarded without being treated as
+// the final response.
 func (rw *StatusCaptureResponseWriter) WriteHeader(code int) {
+	if code >= 100 && code < 200 && code != http.StatusSwitchingProtocols {
+		rw.ResponseWriter.WriteHeader(code)
+		return
+	}
 	if !rw.wroteHeader {
 		rw.StatusCode = code
 		rw.wroteHeader = true
+		if rw.onFirstHeader != nil && code >= 200 {
+			rw.onFirstHeader(code)
+		}
 		rw.ResponseWriter.WriteHeader(code)
 	}
 }
@@ -269,9 +336,84 @@ func (rw *StatusCaptureResponseWriter) Unwrap() http.ResponseWriter {
 	return rw.ResponseWriter
 }
 
+// buildAuditEvent snapshots the AuditContext into an event for the given status.
+// An explicit handler decision (decisionSet) is authoritative; otherwise the legacy
+// status-based formula applies.
+func buildAuditEvent(ac *AuditContext, reqID, clientIP, method string, status int, start time.Time, snapshotVersion int64) CompletionEvent {
+	duration := float64(time.Since(start).Microseconds()) / 1000.0
+
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+
+	decision := ac.Decision
+	if !ac.decisionSet {
+		if status >= 200 && status < 300 {
+			if decision != "deny" {
+				decision = "allow"
+			}
+		} else if status >= 400 {
+			decision = "deny"
+		}
+	}
+
+	reasonCode := ac.ReasonCode
+	if reasonCode == "" {
+		if decision == "allow" {
+			reasonCode = "ALLOWED"
+		} else {
+			reasonCode = fmt.Sprintf("HTTP_%d", status)
+		}
+	}
+
+	snapVer := snapshotVersion
+	if ac.SnapshotVersion > 0 {
+		snapVer = ac.SnapshotVersion
+	}
+
+	roles := make([]string, len(ac.PrincipalRoles))
+	copy(roles, ac.PrincipalRoles)
+
+	eventType := EventTypeCompletion
+	if decision == "deny" {
+		eventType = EventTypeDenial
+	}
+
+	return CompletionEvent{
+		EventID:         uuid.NewString(),
+		Timestamp:       time.Now().UTC(),
+		RequestID:       reqID,
+		PrincipalID:     ac.PrincipalID,
+		PrincipalKind:   ac.PrincipalKind,
+		PrincipalRoles:  roles,
+		ClientIP:        clientIP,
+		HTTPMethod:      method,
+		CanonicalPath:   ac.CanonicalPath,
+		RouteID:         ac.RouteID,
+		ServiceID:       ac.ServiceID,
+		Decision:        decision,
+		ReasonCode:      reasonCode,
+		HTTPStatus:      status,
+		DurationMS:      duration,
+		SnapshotVersion: snapVer,
+		ErrorCode:       ac.ErrorCode,
+		EventType:       eventType,
+	}
+}
+
 // AuditMiddleware returns an HTTP middleware recording execution duration and emitting
 // structured completion audit events on 100% of proxy responses (AUD-04).
-func AuditMiddleware(logger *Logger, snapshotVersion int64) func(http.Handler) http.Handler {
+//
+// With WithSink, a denial is handed to the sink before the first response header is
+// written (D-07) and an allowed request is handed over after the handler returns,
+// without blocking (D-08).
+func AuditMiddleware(logger *Logger, snapshotVersion int64, opts ...Option) func(http.Handler) http.Handler {
+	cfg := &middlewareConfig{}
+	for _, opt := range opts {
+		if opt != nil {
+			opt(cfg)
+		}
+	}
+
 	return func(next http.Handler) http.Handler {
 		return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 			start := time.Now()
@@ -296,61 +438,76 @@ func AuditMiddleware(logger *Logger, snapshotVersion int64) func(http.Handler) h
 			ctx, ac := WithAuditContext(r.Context(), reqID)
 			ac.CanonicalPath = r.URL.Path
 			r = r.WithContext(ctx)
+			method := r.Method
 
 			captureWriter := NewStatusCaptureResponseWriter(w)
 
+			if cfg.sink != nil {
+				sink := cfg.sink
+				captureWriter.onFirstHeader = func(code int) {
+					ev := buildAuditEvent(ac, reqID, clientIP, method, code, start, snapshotVersion)
+					if ev.Decision != "deny" {
+						return
+					}
+					durable := ev
+					durable.Normalize()
+					ac.markRecorded()
+					sink.RecordDenial(&durable)
+				}
+			}
+
 			defer func() {
-				duration := float64(time.Since(start).Microseconds()) / 1000.0
-
-				ac.mu.Lock()
-				decision := ac.Decision
-				if captureWriter.StatusCode >= 200 && captureWriter.StatusCode < 300 {
-					if decision != "deny" {
-						decision = "allow"
-					}
-				} else if captureWriter.StatusCode >= 400 {
-					decision = "deny"
-				}
-
-				reasonCode := ac.ReasonCode
-				if reasonCode == "" {
-					if decision == "allow" {
-						reasonCode = "ALLOWED"
-					} else {
-						reasonCode = fmt.Sprintf("HTTP_%d", captureWriter.StatusCode)
-					}
-				}
-
-				snapVer := snapshotVersion
-				if ac.SnapshotVersion > 0 {
-					snapVer = ac.SnapshotVersion
-				}
-
-				event := CompletionEvent{
-					EventID:         uuid.NewString(),
-					Timestamp:       time.Now().UTC(),
-					RequestID:       reqID,
-					PrincipalID:     ac.PrincipalID,
-					PrincipalKind:   ac.PrincipalKind,
-					PrincipalRoles:  ac.PrincipalRoles,
-					ClientIP:        clientIP,
-					HTTPMethod:      r.Method,
-					CanonicalPath:   ac.CanonicalPath,
-					RouteID:         ac.RouteID,
-					ServiceID:       ac.ServiceID,
-					Decision:        decision,
-					ReasonCode:      reasonCode,
-					HTTPStatus:      captureWriter.StatusCode,
-					DurationMS:      duration,
-					SnapshotVersion: snapVer,
-					ErrorCode:       ac.ErrorCode,
-				}
-				ac.mu.Unlock()
+				event := buildAuditEvent(ac, reqID, clientIP, method, captureWriter.StatusCode, start, snapshotVersion)
 
 				logger.LogCompletion(event)
+
+				if cfg.sink == nil {
+					return
+				}
+				durable := event
+				durable.Normalize()
+				if durable.Decision == "deny" {
+					if !ac.wasRecorded() {
+						ac.markRecorded()
+						cfg.sink.RecordDenial(&durable)
+					}
+				} else if durable.Decision == "allow" {
+					cfg.sink.EnqueueCompletion(&durable)
+				}
 			}()
 
 			next.ServeHTTP(captureWriter, r)
 		})
 	}
+}
+
+// WrapUpstreamErrorHandler records an AUD-04 error code on the request's AuditContext
+// and then delegates to next unchanged, so the wire response is not altered.
+func WrapUpstreamErrorHandler(next func(http.ResponseWriter, *http.Request, error)) func(http.ResponseWriter, *http.Request, error) {
+	return func(w http.ResponseWriter, r *http.Request, err error) {
+		if r != nil {
+			FromContext(r.Context()).SetErrorCode(classifyUpstreamError(err))
+		}
+		if next != nil {
+			next(w, r, err)
+		}
+	}
+}
+
+func classifyUpstreamError(err error) string {
+	var maxBytes *http.MaxBytesError
+	if errors.As(err, &maxBytes) {
+		return "REQUEST_BODY_TOO_LARGE"
+	}
+	if errors.Is(err, context.Canceled) {
+		return "CLIENT_CANCELED"
+	}
+	if errors.Is(err, context.DeadlineExceeded) {
+		return "UPSTREAM_TIMEOUT"
+	}
+	var ne net.Error
+	if errors.As(err, &ne) && ne.Timeout() {
+		return "UPSTREAM_TIMEOUT"
+	}
+	return "UPSTREAM_UNAVAILABLE"
 }

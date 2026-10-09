@@ -2,10 +2,14 @@ package audit
 
 import (
 	"bytes"
+	"context"
 	"encoding/json"
+	"errors"
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
+	"sync"
 	"testing"
 	"time"
 
@@ -177,4 +181,390 @@ func TestCompletionAuditLogging(t *testing.T) {
 			})
 		}
 	})
+}
+
+// sinkFake records Sink calls; onDenial/onCompletion are optional probes.
+type sinkFake struct {
+	mu           sync.Mutex
+	denials      []CompletionEvent
+	completions  []CompletionEvent
+	onDenial     func()
+	onCompletion func()
+}
+
+func (f *sinkFake) RecordDenial(ev *CompletionEvent) {
+	if f.onDenial != nil {
+		f.onDenial()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.denials = append(f.denials, *ev)
+}
+
+func (f *sinkFake) EnqueueCompletion(ev *CompletionEvent) {
+	if f.onCompletion != nil {
+		f.onCompletion()
+	}
+	f.mu.Lock()
+	defer f.mu.Unlock()
+	f.completions = append(f.completions, *ev)
+}
+
+// sinkProbeWriter records the calls made to the client-facing writer.
+type sinkProbeWriter struct {
+	header      http.Header
+	headerCalls []int
+	writes      int
+}
+
+func newSinkProbeWriter() *sinkProbeWriter { return &sinkProbeWriter{header: http.Header{}} }
+
+func (p *sinkProbeWriter) Header() http.Header  { return p.header }
+func (p *sinkProbeWriter) WriteHeader(code int) { p.headerCalls = append(p.headerCalls, code) }
+func (p *sinkProbeWriter) Write(b []byte) (int, error) {
+	p.writes++
+	return len(b), nil
+}
+func (p *sinkProbeWriter) touched() bool { return len(p.headerCalls) > 0 || p.writes > 0 }
+
+func sinkServe(t *testing.T, sink Sink, h http.HandlerFunc, w http.ResponseWriter, mutate func(*http.Request)) (*bytes.Buffer, http.ResponseWriter) {
+	t.Helper()
+	var buf bytes.Buffer
+	var mw func(http.Handler) http.Handler
+	if sink != nil {
+		mw = AuditMiddleware(NewLogger(&buf), 42, WithSink(sink))
+	} else {
+		mw = AuditMiddleware(NewLogger(&buf), 42)
+	}
+	req := httptest.NewRequest(http.MethodGet, "http://localhost:8080/orders", nil)
+	req.RemoteAddr = "10.0.0.5:54321"
+	if mutate != nil {
+		mutate(req)
+	}
+	if w == nil {
+		w = httptest.NewRecorder()
+	}
+	mw(h).ServeHTTP(w, req)
+	return &buf, w
+}
+
+func sinkLogMap(t *testing.T, buf *bytes.Buffer) map[string]interface{} {
+	t.Helper()
+	var m map[string]interface{}
+	require.NoError(t, json.Unmarshal(buf.Bytes(), &m), buf.String())
+	return m
+}
+
+func TestAuditMiddlewareSink(t *testing.T) {
+	t.Run("allowed request enqueues one completion with new event id and same request id", func(t *testing.T) {
+		sink := &sinkFake{}
+		var standIn *CompletionEvent
+		_, w := sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			ac := FromContext(r.Context())
+			ac.SetPrincipal("usr_1", "user", []string{"developer"})
+			ac.SetRoute("route_orders", "orders")
+			ac.SetDecision("allow", "ALLOWED_DEVELOPER_ORDERS")
+			standIn = ac.ToCompletionEvent("GET", "10.0.0.5", 42)
+			time.Sleep(time.Millisecond)
+			w.WriteHeader(http.StatusOK)
+			_, _ = w.Write([]byte("ok"))
+		}, nil, nil)
+
+		require.Len(t, sink.denials, 0)
+		require.Len(t, sink.completions, 1)
+		ev := sink.completions[0]
+		assert.Equal(t, EventTypeCompletion, ev.EventType)
+		assert.Equal(t, "allow", ev.Decision)
+		assert.Equal(t, http.StatusOK, ev.HTTPStatus)
+		assert.Greater(t, ev.DurationMS, 0.0)
+		_, err := uuid.Parse(ev.EventID)
+		require.NoError(t, err)
+		assert.Equal(t, w.Header().Get("X-Request-ID"), ev.RequestID)
+		require.NotNil(t, standIn)
+		assert.Equal(t, ev.RequestID, standIn.RequestID)
+		assert.NotEqual(t, standIn.EventID, ev.EventID, "completion must carry its own event id (D-01)")
+		assert.Equal(t, "10.0.0.5", ev.ClientIP)
+	})
+
+	t.Run("denied request records exactly one denial and no completion", func(t *testing.T) {
+		sink := &sinkFake{}
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			ac := FromContext(r.Context())
+			ac.SetDecision("deny", "RATE_LIMIT_EXCEEDED")
+			ac.SetErrorCode("RATE_LIMIT_EXCEEDED")
+			time.Sleep(time.Millisecond)
+			w.WriteHeader(http.StatusTooManyRequests)
+			_, _ = w.Write([]byte("slow down"))
+		}, nil, nil)
+
+		require.Len(t, sink.denials, 1)
+		require.Len(t, sink.completions, 0)
+		ev := sink.denials[0]
+		assert.Equal(t, EventTypeDenial, ev.EventType)
+		assert.Equal(t, "deny", ev.Decision)
+		assert.Equal(t, "RATE_LIMIT_EXCEEDED", ev.ReasonCode)
+		assert.Equal(t, "RATE_LIMIT_EXCEEDED", ev.ErrorCode)
+		assert.Equal(t, http.StatusTooManyRequests, ev.HTTPStatus)
+		assert.Greater(t, ev.DurationMS, 0.0)
+	})
+
+	t.Run("implicit 200 deny without WriteHeader is recorded once by the defer", func(t *testing.T) {
+		sink := &sinkFake{}
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("deny", "POLICY_DENY")
+			_, _ = w.Write([]byte("body"))
+		}, nil, nil)
+		require.Len(t, sink.denials, 1)
+		assert.Equal(t, http.StatusOK, sink.denials[0].HTTPStatus)
+		assert.Len(t, sink.completions, 0)
+	})
+
+	t.Run("hook-recorded denial is not recorded again by the defer", func(t *testing.T) {
+		sink := &sinkFake{}
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("deny", "POLICY_DENY")
+			w.WriteHeader(http.StatusForbidden)
+			_, _ = w.Write([]byte("no"))
+		}, nil, nil)
+		assert.Len(t, sink.denials, 1)
+	})
+
+	t.Run("legacy status guess preserved when no handler set a decision", func(t *testing.T) {
+		for _, tc := range []struct {
+			status int
+			reason string
+		}{
+			{http.StatusOK, "HTTP_200"},
+			{http.StatusForbidden, "HTTP_403"},
+			{http.StatusFound, "HTTP_302"},
+		} {
+			t.Run(fmt.Sprint(tc.status), func(t *testing.T) {
+				sink := &sinkFake{}
+				buf, _ := sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+					w.WriteHeader(tc.status)
+				}, nil, nil)
+				require.Len(t, sink.denials, 1)
+				assert.Len(t, sink.completions, 0)
+				assert.Equal(t, "deny", sink.denials[0].Decision)
+				assert.Equal(t, tc.reason, sink.denials[0].ReasonCode)
+				assert.Equal(t, tc.reason, sinkLogMap(t, buf)["reason_code"])
+			})
+		}
+	})
+
+	t.Run("explicit deny stays deny on a 200", func(t *testing.T) {
+		sink := &sinkFake{}
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("deny", "POLICY_DENY")
+			w.WriteHeader(http.StatusOK)
+		}, nil, nil)
+		require.Len(t, sink.denials, 1)
+		assert.Equal(t, "deny", sink.denials[0].Decision)
+		assert.Equal(t, http.StatusOK, sink.denials[0].HTTPStatus)
+	})
+
+	t.Run("1xx informational response does not trigger the hook or mark the header written", func(t *testing.T) {
+		sink := &sinkFake{}
+		probe := newSinkProbeWriter()
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("deny", "POLICY_DENY")
+			w.WriteHeader(http.StatusEarlyHints)
+			assert.Len(t, sink.denials, 0, "103 must not trigger the hook")
+			w.WriteHeader(http.StatusForbidden)
+		}, probe, nil)
+		require.Len(t, sink.denials, 1)
+		assert.Equal(t, http.StatusForbidden, sink.denials[0].HTTPStatus)
+		assert.Equal(t, []int{http.StatusEarlyHints, http.StatusForbidden}, probe.headerCalls)
+	})
+
+	t.Run("durable event is normalized while stdout keeps its field set", func(t *testing.T) {
+		sink := &sinkFake{}
+		method := strings.Repeat("M", 28)
+		buf, _ := sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("deny", "POLICY_DENY")
+			w.WriteHeader(http.StatusForbidden)
+		}, nil, func(r *http.Request) {
+			r.Method = method
+			r.URL.Path = "/or\x00ders"
+		})
+		require.Len(t, sink.denials, 1)
+		ev := sink.denials[0]
+		assert.NotContains(t, ev.CanonicalPath, "\x00")
+		assert.Equal(t, "/orders", ev.CanonicalPath)
+		assert.LessOrEqual(t, len(ev.HTTPMethod), 16)
+
+		m := sinkLogMap(t, buf)
+		for _, f := range []string{
+			"event_id", "timestamp", "request_id", "principal_id", "principal_kind",
+			"principal_roles", "client_ip", "http_method", "canonical_path", "route_id",
+			"service_id", "decision", "reason_code", "http_status", "duration_ms",
+			"snapshot_version", "error_code",
+		} {
+			assert.Contains(t, m, f)
+		}
+		assert.NotContains(t, m, "event_type")
+		assert.Equal(t, method, m["http_method"], "stdout keeps the raw method")
+	})
+
+	t.Run("no sink behaves as before", func(t *testing.T) {
+		buf, w := sinkServe(t, nil, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("allow", "ALLOWED")
+			w.WriteHeader(http.StatusOK)
+		}, nil, nil)
+		assert.Equal(t, http.StatusOK, w.(*httptest.ResponseRecorder).Code)
+		assert.Equal(t, "allow", sinkLogMap(t, buf)["decision"])
+	})
+}
+
+func TestDenialRecordedBeforeResponse(t *testing.T) {
+	probe := newSinkProbeWriter()
+	sink := &sinkFake{}
+	var touchedAtRecord bool
+	sink.onDenial = func() { touchedAtRecord = probe.touched() }
+
+	sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+		FromContext(r.Context()).SetDecision("deny", "DENIED_FORBIDDEN")
+		w.WriteHeader(http.StatusForbidden)
+		_, _ = w.Write([]byte("forbidden"))
+	}, probe, nil)
+
+	require.Len(t, sink.denials, 1)
+	assert.False(t, touchedAtRecord, "the denial must be handed to the sink before any header or byte is written")
+	assert.Equal(t, []int{http.StatusForbidden}, probe.headerCalls)
+	assert.Equal(t, 1, probe.writes)
+}
+
+func TestCompletionKeepsAllowOnBackendError(t *testing.T) {
+	for _, status := range []int{http.StatusNotFound, http.StatusInternalServerError, http.StatusBadGateway} {
+		t.Run(fmt.Sprint(status), func(t *testing.T) {
+			sink := &sinkFake{}
+			buf, _ := sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+				FromContext(r.Context()).SetDecision("allow", "ALLOWED_DEVELOPER_ORDERS")
+				w.WriteHeader(status)
+			}, nil, nil)
+			require.Len(t, sink.denials, 0)
+			require.Len(t, sink.completions, 1)
+			ev := sink.completions[0]
+			assert.Equal(t, "allow", ev.Decision)
+			assert.Equal(t, status, ev.HTTPStatus)
+			assert.Equal(t, EventTypeCompletion, ev.EventType)
+			assert.Equal(t, "ALLOWED_DEVELOPER_ORDERS", ev.ReasonCode)
+			assert.Equal(t, "allow", sinkLogMap(t, buf)["decision"])
+		})
+	}
+}
+
+func TestCompletionNonBlocking(t *testing.T) {
+	probe := newSinkProbeWriter()
+	sink := &sinkFake{}
+	var wroteBeforeEnqueue bool
+	sink.onCompletion = func() { wroteBeforeEnqueue = len(probe.headerCalls) == 1 && probe.writes == 1 }
+
+	sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+		FromContext(r.Context()).SetDecision("allow", "ALLOWED")
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("ok"))
+	}, probe, nil)
+
+	assert.True(t, wroteBeforeEnqueue, "completion is enqueued after the response was written")
+	assert.Len(t, sink.completions, 1)
+	assert.Len(t, sink.denials, 0)
+}
+
+type sinkTimeoutErr struct{}
+
+func (sinkTimeoutErr) Error() string   { return "i/o timeout" }
+func (sinkTimeoutErr) Timeout() bool   { return true }
+func (sinkTimeoutErr) Temporary() bool { return true }
+
+func TestWrapUpstreamErrorHandler(t *testing.T) {
+	tooLargeAndTimeout := fmt.Errorf("both: %w", errors.Join(&http.MaxBytesError{Limit: 1}, sinkTimeoutErr{}))
+	canceledAndTimeout := errors.Join(context.Canceled, sinkTimeoutErr{})
+
+	cases := []struct {
+		name string
+		err  error
+		want string
+	}{
+		{"max bytes", &http.MaxBytesError{Limit: 10}, "REQUEST_BODY_TOO_LARGE"},
+		{"max bytes wrapped", fmt.Errorf("x: %w", &http.MaxBytesError{Limit: 10}), "REQUEST_BODY_TOO_LARGE"},
+		{"canceled", context.Canceled, "CLIENT_CANCELED"},
+		{"canceled wrapped", fmt.Errorf("proxy: %w", context.Canceled), "CLIENT_CANCELED"},
+		{"deadline", context.DeadlineExceeded, "UPSTREAM_TIMEOUT"},
+		{"net timeout", sinkTimeoutErr{}, "UPSTREAM_TIMEOUT"},
+		{"refused", errors.New("dial tcp: connection refused"), "UPSTREAM_UNAVAILABLE"},
+		{"max bytes beats timeout", tooLargeAndTimeout, "REQUEST_BODY_TOO_LARGE"},
+		{"canceled beats timeout", canceledAndTimeout, "CLIENT_CANCELED"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			var gotW http.ResponseWriter
+			var gotErr error
+			wrapped := WrapUpstreamErrorHandler(func(w http.ResponseWriter, r *http.Request, err error) {
+				gotW, gotErr = w, err
+				w.WriteHeader(http.StatusBadGateway)
+			})
+			ctx, ac := WithAuditContext(context.Background(), "req-1")
+			req := httptest.NewRequest(http.MethodGet, "/x", nil).WithContext(ctx)
+			rec := httptest.NewRecorder()
+			wrapped(rec, req, tc.err)
+			assert.Equal(t, tc.want, ac.ErrorCode)
+			assert.Same(t, http.ResponseWriter(rec), gotW)
+			assert.Equal(t, tc.err, gotErr)
+			assert.Equal(t, http.StatusBadGateway, rec.Code)
+		})
+	}
+
+	t.Run("nil audit context is safe", func(t *testing.T) {
+		called := false
+		wrapped := WrapUpstreamErrorHandler(func(http.ResponseWriter, *http.Request, error) { called = true })
+		wrapped(httptest.NewRecorder(), httptest.NewRequest(http.MethodGet, "/x", nil), errors.New("boom"))
+		assert.True(t, called)
+	})
+
+	t.Run("nil next is safe and writes nothing", func(t *testing.T) {
+		ctx, ac := WithAuditContext(context.Background(), "req-1")
+		req := httptest.NewRequest(http.MethodGet, "/x", nil).WithContext(ctx)
+		rec := httptest.NewRecorder()
+		require.NotPanics(t, func() { WrapUpstreamErrorHandler(nil)(rec, req, errors.New("boom")) })
+		assert.Equal(t, "UPSTREAM_UNAVAILABLE", ac.ErrorCode)
+		assert.Equal(t, 0, rec.Body.Len())
+	})
+
+	t.Run("end to end keeps allow with upstream error code", func(t *testing.T) {
+		sink := &sinkFake{}
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("allow", "ALLOWED_DEVELOPER_ORDERS")
+			h := WrapUpstreamErrorHandler(func(w http.ResponseWriter, r *http.Request, err error) {
+				w.WriteHeader(http.StatusBadGateway)
+			})
+			h(w, r, errors.New("dial tcp: connection refused"))
+		}, nil, nil)
+		require.Len(t, sink.completions, 1)
+		require.Len(t, sink.denials, 0)
+		ev := sink.completions[0]
+		assert.Equal(t, "allow", ev.Decision)
+		assert.Equal(t, http.StatusBadGateway, ev.HTTPStatus)
+		assert.Equal(t, "UPSTREAM_UNAVAILABLE", ev.ErrorCode)
+	})
+}
+
+func TestToCompletionEventTypeAndNormalize(t *testing.T) {
+	_, ac := WithAuditContext(context.Background(), "req-1")
+	ac.SetPrincipal(strings.Repeat("p", 200), "user", []string{"dev"})
+	ac.SetCanonicalPath("/a\x00b")
+
+	e1 := ac.ToCompletionEvent("GET", "10.0.0.5", 7)
+	e2 := ac.ToCompletionEvent("GET", "10.0.0.5", 7)
+	require.NotNil(t, e1)
+	assert.Equal(t, EventTypeDecision, e1.EventType)
+	assert.NotEqual(t, e1.EventID, e2.EventID)
+	assert.Equal(t, "/ab", e1.CanonicalPath)
+	assert.Len(t, e1.PrincipalID, 128)
+	assert.Equal(t, "deny", e1.Decision)
+	assert.Equal(t, "UNKNOWN_REASON", e1.ReasonCode)
+	assert.Equal(t, int64(7), e1.SnapshotVersion)
+
+	ac.SetDecision("allow", "")
+	assert.Equal(t, "ALLOWED", ac.ToCompletionEvent("GET", "10.0.0.5", 0).ReasonCode)
 }
