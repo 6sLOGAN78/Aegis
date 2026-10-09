@@ -107,7 +107,9 @@ func main() {
 	auditLogger := audit.NewLogger(nil)
 
 	spoolCfg := audit.DiskSpoolConfig{
-		SpoolDir: cfg.SpoolDir,
+		SpoolDir:        cfg.SpoolDir,
+		MaxSegmentBytes: cfg.SpoolSegmentBytes,
+		HardLimitRatio:  cfg.SpoolHardLimitRatio,
 	}
 	if cfg.SpoolMaxBytes > 0 {
 		spoolCfg.VolumeQuotaBytes = cfg.SpoolMaxBytes
@@ -126,6 +128,24 @@ func main() {
 		metricsPort = ":" + metricsPort
 	}
 	metrics := telemetry.NewMetrics()
+
+	// Audit pipeline: governs, durably commits and summarizes denials and
+	// completions on both listeners (B7). Settings come from validated config.
+	auditPipeline := audit.NewPipeline(diskSpool, metrics, audit.PipelineConfig{
+		Governor: audit.GovernorConfig{
+			SuppressWindow: cfg.AuditSuppressWindow,
+			MaxKeys:        cfg.AuditSuppressMaxKeys,
+			UnauthRate:     cfg.AuditUnauthRate,
+			UnauthBurst:    cfg.AuditUnauthBurst,
+		},
+		Committer: audit.CommitterConfig{
+			GroupFlush:      cfg.AuditGroupFlushInterval,
+			CompletionFlush: cfg.AuditCompletionFlushInterval,
+			QueueSize:       cfg.AuditCompletionQueueSize,
+		},
+	})
+	metrics.InitAuditSuppressedLabels(audit.ClosedReasonLabels())
+
 	metricsServer := telemetry.NewServer(metricsPort, metrics)
 	metricsServer.Start()
 	log.Printf("Aegis Gateway private metrics exporter listening on %s", metricsPort)
@@ -146,6 +166,7 @@ func main() {
 					metrics.SetLeaseAge(time.Since(lastRenewed).Seconds())
 				}
 				metrics.SetSpoolUtilization(diskSpool.UtilizationRatio())
+				metrics.SetAuditQueueDepth(auditPipeline.QueueDepth())
 			}
 		}
 	}()
@@ -593,6 +614,7 @@ func main() {
 
 		// 6. Reverse Proxy Forwarding over mTLS with Header Scrubbing and Assertion Injection (GW-04, GW-05, BYP-01)
 		rp := proxy.NewReverseProxyWithMTLS(route.ParsedURL(), canonicalPath, reqID, assertionToken, upstreamTransport)
+		rp.ErrorHandler = audit.WrapUpstreamErrorHandler(rp.ErrorHandler)
 		rp.ServeHTTP(w, r)
 	})
 
@@ -896,13 +918,14 @@ func main() {
 
 		// 6. Forward over Mutual TLS to Backend (GW-05)
 		rp := proxy.NewReverseProxyWithMTLS(route.ParsedURL(), canonicalPath, reqID, assertionJWT, upstreamTransport)
+		rp.ErrorHandler = audit.WrapUpstreamErrorHandler(rp.ErrorHandler)
 		rp.ServeHTTP(w, r)
 	})
 
 	drainingState := proxy.NewDrainingState()
 
 	// Wrap handlers with audit middleware and telemetry metrics middleware
-	auditedUserHandler := audit.AuditMiddleware(auditLogger, 0)(gatewayHandler)
+	auditedUserHandler := audit.AuditMiddleware(auditLogger, 0, audit.WithSink(auditPipeline))(gatewayHandler)
 	userMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedUserHandler)
 	userProbeHandler := proxy.CreateProbeHandler(
 		drainingState,
@@ -912,11 +935,12 @@ func main() {
 		userMetricsHandler,
 	)
 
-	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, 0)(workloadHandler)
+	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, 0, audit.WithSink(auditPipeline))(workloadHandler)
 	workloadMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedWorkloadHandler)
 
 	// Dual-Listener Server Manager (:8080 and :9443 mTLS)
 	dualServer := proxy.NewDualServer(cfg, userProbeHandler, workloadMetricsHandler, workloadTLSConfig)
+	dualServer.SetRejectionRecorder(metrics)
 
 	// Configurable drain timeout (default 30s)
 	drainTimeout := 30 * time.Second
@@ -946,6 +970,14 @@ func main() {
 	if err := dualServer.Shutdown(drainCtx); err != nil {
 		log.Printf("Error during dual server shutdown: %v", err)
 	}
+
+	// D-10: flush queued denials, completions and suppression summaries to the
+	// spool after the HTTP drain and before the spool closes.
+	auditCtx, auditCancel := context.WithTimeout(context.Background(), 5*time.Second)
+	if err := auditPipeline.Shutdown(auditCtx); err != nil {
+		log.Printf("audit pipeline shutdown: %v", err)
+	}
+	auditCancel()
 
 	streamCancel()
 	streamClient.Stop()
