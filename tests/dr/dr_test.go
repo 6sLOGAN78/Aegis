@@ -64,8 +64,8 @@ func createSignedSnapshot(t *testing.T, priv ed25519.PrivateKey, version int64) 
 }
 
 func anyAuditArgs() []any {
-	args := make([]any, 19)
-	for i := 0; i < 19; i++ {
+	args := make([]any, 20)
+	for i := 0; i < 20; i++ {
 		args[i] = pgxmock.AnyArg()
 	}
 	return args

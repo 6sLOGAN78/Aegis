@@ -3,19 +3,23 @@ package audit
 import (
 	"context"
 	"encoding/binary"
+	"encoding/json"
+	"hash/crc32"
 	"os"
 	"path/filepath"
+	"strings"
 	"testing"
 	"time"
 
+	"github.com/google/uuid"
 	"github.com/pashagolub/pgxmock/v4"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 )
 
 func anyAuditArgs() []any {
-	args := make([]any, 19)
-	for i := 0; i < 19; i++ {
+	args := make([]any, 20)
+	for i := 0; i < 20; i++ {
 		args[i] = pgxmock.AnyArg()
 	}
 	return args
@@ -285,4 +289,139 @@ func TestAuditWorker_CorruptedRecordRecovery(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, 2, processed, "Worker must preserve and process both clean records despite corruption")
 	assert.NoError(t, mock.ExpectationsWereMet())
+}
+
+// writeWorkerTestFrames writes one WAL frame per event straight into a segment file,
+// bypassing DiskSpool (and its statfs saturation gate), and returns the segment name.
+func writeWorkerTestFrames(t *testing.T, dir string, events ...*CompletionEvent) string {
+	t.Helper()
+	const name = "wal-00000000000000000001-000001.log"
+	var buf []byte
+	for _, e := range events {
+		payload, err := json.Marshal(e)
+		require.NoError(t, err)
+		frame := make([]byte, FrameHeaderSize+len(payload)+1)
+		binary.BigEndian.PutUint32(frame[0:4], MagicHeader)
+		binary.BigEndian.PutUint32(frame[4:8], crc32.ChecksumIEEE(payload))
+		binary.BigEndian.PutUint32(frame[8:12], uint32(len(payload)))
+		copy(frame[12:], payload)
+		frame[FrameHeaderSize+len(payload)] = '\n'
+		buf = append(buf, frame...)
+	}
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), buf, 0600))
+	return name
+}
+
+// argMatcher adapts a predicate to pgxmock.Argument.
+type argMatcher func(v any) bool
+
+func (m argMatcher) Match(v any) bool { return m(v) }
+
+// auditArgsWith returns 20 AnyArg matchers with the given index overrides.
+func auditArgsWith(overrides map[int]any) []any {
+	args := anyAuditArgs()
+	for i, v := range overrides {
+		args[i] = v
+	}
+	return args
+}
+
+func runWorkerOnce(t *testing.T, events []*CompletionEvent, overrides map[int]any) (*AuditWorker, pgxmock.PgxPoolIface, string) {
+	t.Helper()
+	mock, err := pgxmock.NewPool()
+	require.NoError(t, err)
+	t.Cleanup(mock.Close)
+
+	dir := t.TempDir()
+	seg := writeWorkerTestFrames(t, dir, events...)
+
+	b := mock.ExpectBatch()
+	b.ExpectExec("INSERT INTO audit_events").
+		WithArgs(auditArgsWith(overrides)...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+
+	worker, err := NewAuditWorker(mock, WorkerConfig{SpoolDir: dir, BatchSize: 10, FlushInterval: 100 * time.Millisecond})
+	require.NoError(t, err)
+	n, err := worker.ProcessAvailable(context.Background())
+	require.NoError(t, err)
+	require.Equal(t, len(events), n)
+	require.NoError(t, mock.ExpectationsWereMet())
+	return worker, mock, seg
+}
+
+func TestAuditWorker_EventType(t *testing.T) {
+	cases := []struct {
+		name      string
+		eventType string
+		status    int
+		want      string
+	}{
+		{"explicit denial", EventTypeDenial, 403, "denial"},
+		{"explicit completion", EventTypeCompletion, 200, "completion"},
+		{"explicit decision", EventTypeDecision, 0, "decision"},
+		{"untyped status 0 falls back to decision", "", 0, "decision"},
+		{"untyped status 200 falls back to completion", "", 200, "completion"},
+		{"unknown type falls back by status", "weird", 200, "completion"},
+		{"uppercase type falls back by status", "DENIAL", 0, "decision"},
+	}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			evt := sampleCompletionEvent("orders.create")
+			evt.EventType = tc.eventType
+			evt.HTTPStatus = tc.status
+			runWorkerOnce(t, []*CompletionEvent{evt}, map[int]any{1: tc.want})
+		})
+	}
+}
+
+func TestAuditWorker_NormalizesPoison(t *testing.T) {
+	evt := sampleCompletionEvent("orders.create")
+	evt.EventID = "also-not-a-uuid"
+	evt.RequestID = "not-a-uuid"
+	evt.CanonicalPath = "/api/\x00x"
+	evt.HTTPMethod = strings.Repeat("M", 28)
+	evt.PrincipalID = strings.Repeat("p", 200)
+
+	isUUID := func(v any) bool {
+		s, ok := v.(string)
+		if !ok {
+			return false
+		}
+		_, err := uuid.Parse(s)
+		return err == nil
+	}
+	worker, _, seg := runWorkerOnce(t, []*CompletionEvent{evt}, map[int]any{
+		0:  argMatcher(isUUID),
+		2:  argMatcher(isUUID),
+		5:  strings.Repeat("p", 128),
+		10: strings.Repeat("M", 16),
+		11: "/api/x",
+	})
+
+	cursor, err := worker.Cursor().LoadOffset()
+	require.NoError(t, err)
+	assert.Equal(t, seg, cursor.SegmentFile)
+	assert.Greater(t, cursor.Offset, int64(0))
+}
+
+func TestAuditWorker_SuppressedCount(t *testing.T) {
+	t.Run("positive count is inserted", func(t *testing.T) {
+		evt := sampleCompletionEvent("orders.create")
+		evt.EventType = EventTypeDenial
+		evt.SuppressedCount = 7
+		runWorkerOnce(t, []*CompletionEvent{evt}, map[int]any{19: 7})
+	})
+	t.Run("zero count is NULL", func(t *testing.T) {
+		evt := sampleCompletionEvent("orders.create")
+		runWorkerOnce(t, []*CompletionEvent{evt}, map[int]any{19: nil})
+	})
+}
+
+func TestAuditWorker_InsertStatementShape(t *testing.T) {
+	src, err := os.ReadFile("worker.go")
+	require.NoError(t, err)
+	text := string(src)
+	assert.True(t, strings.Contains(text, "error_code, suppressed_count"), "insert column list must end with suppressed_count")
+	assert.True(t, strings.Contains(text, "$19, $20"), "insert must have 20 placeholders")
+	assert.True(t, strings.Contains(text, "ON CONFLICT (event_date, event_id) DO NOTHING"), "dedupe clause must remain")
 }

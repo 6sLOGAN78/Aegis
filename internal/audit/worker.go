@@ -80,20 +80,22 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 			event_id, event_type, request_id, timestamp, event_date,
 			principal_id, principal_kind, roles, service_id, route_id,
 			http_method, request_path, decision, reason_code, snapshot_version,
-			http_status, duration_ms, client_ip, error_code
+			http_status, duration_ms, client_ip, error_code, suppressed_count
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-			$11, $12, $13, $14, $15, $16, $17, $18, $19
+			$11, $12, $13, $14, $15, $16, $17, $18, $19, $20
 		) ON CONFLICT (event_date, event_id) DO NOTHING;
 	`
 
 	for _, e := range events {
+		// Hostile or legacy values must never make Postgres reject the whole batch (D-18).
+		e.Normalize()
 		eventID := e.EventID
-		if eventID == "" {
+		if _, perr := uuid.Parse(eventID); perr != nil {
 			eventID = uuid.NewString()
 		}
 		reqID := e.RequestID
-		if reqID == "" {
+		if _, perr := uuid.Parse(reqID); perr != nil {
 			reqID = uuid.NewString()
 		}
 
@@ -105,9 +107,18 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 		}
 
 		eventDate := ts.Format("2006-01-02")
-		eventType := "decision"
-		if e.HTTPStatus > 0 {
-			eventType = "completion"
+		// Explicit type wins (D-03); untyped or unknown records fall back to the legacy guess.
+		eventType := e.EventType
+		if !ValidEventType(eventType) {
+			eventType = EventTypeDecision
+			if e.HTTPStatus > 0 {
+				eventType = EventTypeCompletion
+			}
+		}
+
+		var suppressed any
+		if e.SuppressedCount > 0 {
+			suppressed = e.SuppressedCount
 		}
 
 		rolesJSON := "[]"
@@ -137,6 +148,7 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 			e.DurationMS,
 			e.ClientIP,
 			e.ErrorCode,
+			suppressed,
 		)
 	}
 

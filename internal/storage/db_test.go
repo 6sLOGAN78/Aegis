@@ -64,6 +64,7 @@ func TestEmbeddedMigrations_Integrity(t *testing.T) {
 
 	assert.Contains(t, fileNames, "000001_create_control_plane_tables.sql")
 	assert.Contains(t, fileNames, "000002_create_partitioned_audit_tables.sql")
+	assert.Contains(t, fileNames, "000003_add_audit_suppressed_count.sql")
 
 	for _, fname := range fileNames {
 		content, err := fs.ReadFile(migrations.FS, fname)
