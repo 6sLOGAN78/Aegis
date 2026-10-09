@@ -147,6 +147,7 @@ services:
     volumes:
       - ../certs:/certs:ro
       - aegis_wal_spool_1:/var/log/aegis/wal
+    # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]
@@ -200,6 +201,7 @@ services:
     volumes:
       - ../certs:/certs:ro
       - aegis_wal_spool_2:/var/log/aegis/wal
+    # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]
@@ -253,6 +255,7 @@ services:
     volumes:
       - ../certs:/certs:ro
       - aegis_wal_spool_3:/var/log/aegis/wal
+    # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
     stop_grace_period: 45s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]

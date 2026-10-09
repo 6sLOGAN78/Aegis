@@ -54,6 +54,17 @@ var gatewayAllowlist = map[string]bool{
 	"AEGIS_ASSERTION_PRIVATE_KEY":      true,
 	"AEGIS_DRAIN_TIMEOUT":              true,
 	"AEGIS_UPSTREAM_SCHEME":            true,
+
+	// Audit pipeline and spool settings (phase 08).
+	"AEGIS_SPOOL_SEGMENT_BYTES":             true,
+	"AEGIS_SPOOL_HARD_LIMIT_RATIO":          true,
+	"AEGIS_AUDIT_GROUP_FLUSH_INTERVAL":      true,
+	"AEGIS_AUDIT_COMPLETION_FLUSH_INTERVAL": true,
+	"AEGIS_AUDIT_COMPLETION_QUEUE_SIZE":     true,
+	"AEGIS_AUDIT_UNAUTH_RATE":               true,
+	"AEGIS_AUDIT_UNAUTH_BURST":              true,
+	"AEGIS_AUDIT_SUPPRESS_WINDOW":           true,
+	"AEGIS_AUDIT_SUPPRESS_MAX_KEYS":         true,
 }
 
 type service = map[string]interface{}
@@ -356,8 +367,38 @@ func TestGatewayStopGracePeriod(t *testing.T) {
 				}
 				grace, err := time.ParseDuration(raw)
 				require.NoError(t, err, "%s/%s: stop_grace_period %q", profile, name, raw)
-				assert.GreaterOrEqual(t, grace, drain+5*time.Second,
-					"%s/%s: stop_grace_period %s must be >= drain %s + 5s", profile, name, grace, drain)
+				assert.GreaterOrEqual(t, grace, drain+10*time.Second,
+					"%s/%s: stop_grace_period %s must be >= drain %s + 10s (5s audit pipeline shutdown + 5s metrics shutdown)", profile, name, grace, drain)
+			}
+		})
+	}
+}
+
+// TestGatewayAuditKnobsDefaultSafe keeps the live-proof knobs from leaking test
+// values into production: the MVP gateway exposes them as shell-overridable
+// variables whose defaults equal the binary defaults, and the hardened and
+// distributed gateways do not set them at all (T-08-42).
+func TestGatewayAuditKnobsDefaultSafe(t *testing.T) {
+	knobs := map[string]string{
+		"AEGIS_SPOOL_SEGMENT_BYTES":   "${AEGIS_SPOOL_SEGMENT_BYTES:-16777216}",
+		"AEGIS_AUDIT_SUPPRESS_WINDOW": "${AEGIS_AUDIT_SUPPRESS_WINDOW:-60s}",
+	}
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			gateways := gatewayNames(services)
+			require.NotEmpty(t, gateways, "%s: no gateway service found", profile)
+			for _, name := range gateways {
+				env := envMap(services[name])
+				for key, want := range knobs {
+					if profile == "mvp" {
+						assert.Equal(t, want, env[key],
+							"%s/%s: %s must default to the production value when the shell leaves it unset (T-08-42)", profile, name, key)
+					} else {
+						assert.NotContains(t, env, key,
+							"%s/%s: %s is a demo-only knob and must not be set in this profile (T-08-42)", profile, name, key)
+					}
+				}
 			}
 		})
 	}

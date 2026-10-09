@@ -107,7 +107,7 @@ services:
     volumes:
       - ../certs:/certs:ro
       - aegis_wal_spool:/var/log/aegis/wal
-    # Drain timeout 30s + 5s metrics shutdown + margin.
+    # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
     stop_grace_period: 45s
     healthcheck:
       # /readyz is 200 only with a snapshot, a fresh lease and an unsaturated spool.

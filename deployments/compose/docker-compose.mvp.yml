@@ -106,10 +106,12 @@ services:
       - AEGIS_UPSTREAM_SCHEME=https
       - AEGIS_ISSUER=aegis-issuer
       - AEGIS_AUDIENCE=aegis-gateway
+      - AEGIS_SPOOL_SEGMENT_BYTES=${AEGIS_SPOOL_SEGMENT_BYTES:-16777216}
+      - AEGIS_AUDIT_SUPPRESS_WINDOW=${AEGIS_AUDIT_SUPPRESS_WINDOW:-60s}
     volumes:
       - ../certs:/certs:ro
       - aegis_wal_spool:/var/log/aegis/wal
-    # Drain timeout 30s + 5s metrics shutdown + margin.
+    # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
     stop_grace_period: 45s
     healthcheck:
       # /readyz is 200 only with a snapshot, a fresh lease and an unsaturated spool.
