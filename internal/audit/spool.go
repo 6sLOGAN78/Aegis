@@ -348,6 +348,89 @@ func (s *DiskSpool) AppendPreForward(event *CompletionEvent) error {
 	return nil
 }
 
+// frameEvent marshals ev as given and builds the exact frame AppendPreForward builds:
+// [Magic: 4B][CRC32: 4B][Length: 4B][Payload: NB][\n: 1B]. It does not normalize;
+// callers call ev.Normalize() first. Used only by the batched write path.
+func frameEvent(ev *CompletionEvent) ([]byte, error) {
+	payload, err := json.Marshal(ev)
+	if err != nil {
+		return nil, fmt.Errorf("failed to marshal completion event: %w", err)
+	}
+	frame := make([]byte, FrameHeaderSize+len(payload)+1)
+	binary.BigEndian.PutUint32(frame[0:4], MagicHeader)
+	binary.BigEndian.PutUint32(frame[4:8], crc32.ChecksumIEEE(payload))
+	binary.BigEndian.PutUint32(frame[8:12], uint32(len(payload)))
+	copy(frame[12:], payload)
+	frame[FrameHeaderSize+len(payload)] = '\n'
+	return frame, nil
+}
+
+// WriteFrames appends a batch of pre-built frames to the active segment with ONE
+// write and ONE fsync under the spool mutex (group commit). It is gated by the hard
+// limit (default 95%), never by the 90% admission gate or the write-fault flag, so
+// denial and completion records keep writing while allowed traffic is refused.
+// The segment is rotated only after the whole batch is written and synced, so no
+// frame straddles two segments. On a write or fsync error the segment is truncated
+// back to the last good size (or rotated if truncation fails).
+func (s *DiskSpool) WriteFrames(frames [][]byte) error {
+	if len(frames) == 0 {
+		return nil
+	}
+
+	s.mu.Lock()
+	defer s.mu.Unlock()
+
+	if s.closed {
+		return errors.New("spool is closed")
+	}
+
+	exceeded, err := s.checkHardLimit()
+	if err != nil || exceeded {
+		return ErrHardLimit
+	}
+
+	size := 0
+	for _, f := range frames {
+		size += len(f)
+	}
+	buf := make([]byte, 0, size)
+	for _, f := range frames {
+		buf = append(buf, f...)
+	}
+
+	var werr error
+	if s.writeFn != nil {
+		_, werr = s.writeFn(s.activeFile, buf)
+	} else {
+		_, werr = s.activeFile.Write(buf)
+	}
+	if werr == nil {
+		if s.syncFn != nil {
+			werr = s.syncFn(s.activeFile)
+		} else {
+			werr = s.activeFile.Sync()
+		}
+	}
+	if werr != nil {
+		// Drop any torn bytes so a retry cannot append whole frames after them.
+		if terr := s.activeFile.Truncate(s.currentSize); terr != nil {
+			if rerr := s.rotateSegment(); rerr != nil {
+				return fmt.Errorf("failed to write wal batch: %w (truncate: %v, rotate: %v)", werr, terr, rerr)
+			}
+		}
+		return fmt.Errorf("failed to write wal batch: %w", werr)
+	}
+
+	s.currentSize += int64(len(buf))
+
+	if s.currentSize >= s.cfg.MaxSegmentBytes {
+		if err := s.rotateSegment(); err != nil {
+			return fmt.Errorf("failed to rotate segment after batch: %w", err)
+		}
+	}
+	return nil
+}
+
 func (s *DiskSpool) rotateSegment() error {
 	if s.activeFile != nil {
 		_ = s.activeFile.Sync()
