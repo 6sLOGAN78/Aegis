@@ -568,3 +568,92 @@ func TestToCompletionEventTypeAndNormalize(t *testing.T) {
 	ac.SetDecision("allow", "")
 	assert.Equal(t, "ALLOWED", ac.ToCompletionEvent("GET", "10.0.0.5", 0).ReasonCode)
 }
+
+// flushProbeWriter is a sinkProbeWriter that also implements http.Flusher.
+type flushProbeWriter struct {
+	*sinkProbeWriter
+	flushes int
+}
+
+func (f *flushProbeWriter) Flush() { f.flushes++ }
+
+// WR-03: the denial must be handed to the sink before the first response byte on every
+// path, including a handler that never calls WriteHeader.
+func TestDenialRecordedBeforeImplicitHeader(t *testing.T) {
+	deny := func(w http.ResponseWriter, r *http.Request) {
+		FromContext(r.Context()).SetDecision("deny", "DENIED_DEFAULT")
+	}
+
+	t.Run("Write without WriteHeader", func(t *testing.T) {
+		probe := newSinkProbeWriter()
+		sink := &sinkFake{}
+		var touchedAtRecord bool
+		sink.onDenial = func() { touchedAtRecord = probe.touched() }
+
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			deny(w, r)
+			_, _ = w.Write([]byte("body"))
+			_, _ = w.Write([]byte("more"))
+		}, probe, nil)
+
+		require.Len(t, sink.denials, 1, "recorded once, from the first byte")
+		assert.False(t, touchedAtRecord, "the denial must be recorded before the first response byte")
+		assert.Equal(t, http.StatusOK, sink.denials[0].HTTPStatus)
+		assert.Equal(t, 2, probe.writes)
+	})
+
+	t.Run("Flush without WriteHeader", func(t *testing.T) {
+		probe := &flushProbeWriter{sinkProbeWriter: newSinkProbeWriter()}
+		sink := &sinkFake{}
+		var flushedAtRecord int
+		sink.onDenial = func() { flushedAtRecord = probe.flushes }
+
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			deny(w, r)
+			w.(http.Flusher).Flush()
+		}, probe, nil)
+
+		require.Len(t, sink.denials, 1)
+		assert.Equal(t, 0, flushedAtRecord, "the denial must be recorded before the implicit-200 flush")
+		assert.Equal(t, 1, probe.flushes)
+	})
+
+	t.Run("1xx then Write", func(t *testing.T) {
+		probe := newSinkProbeWriter()
+		sink := &sinkFake{}
+		var writesAtRecord = -1
+		sink.onDenial = func() { writesAtRecord = probe.writes }
+
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			deny(w, r)
+			w.WriteHeader(http.StatusEarlyHints)
+			_, _ = w.Write([]byte("body"))
+		}, probe, nil)
+
+		require.Len(t, sink.denials, 1)
+		assert.Equal(t, 0, writesAtRecord)
+		assert.Equal(t, http.StatusOK, sink.denials[0].HTTPStatus, "the informational status is not the final one")
+		assert.Equal(t, []int{http.StatusEarlyHints}, probe.headerCalls, "the 1xx is still forwarded")
+	})
+
+	t.Run("allowed Write is unchanged", func(t *testing.T) {
+		probe := newSinkProbeWriter()
+		sink := &sinkFake{}
+		sinkServe(t, sink, func(w http.ResponseWriter, r *http.Request) {
+			FromContext(r.Context()).SetDecision("allow", "ALLOWED")
+			_, _ = w.Write([]byte("ok"))
+		}, probe, nil)
+		assert.Empty(t, sink.denials)
+		require.Len(t, sink.completions, 1)
+		assert.Equal(t, http.StatusOK, sink.completions[0].HTTPStatus)
+	})
+
+	t.Run("no sink keeps the implicit 200", func(t *testing.T) {
+		probe := newSinkProbeWriter()
+		buf, _ := sinkServe(t, nil, func(w http.ResponseWriter, r *http.Request) {
+			_, _ = w.Write([]byte("ok"))
+		}, probe, nil)
+		assert.Empty(t, probe.headerCalls, "without a sink the writer must not add an explicit WriteHeader")
+		assert.EqualValues(t, 200, sinkLogMap(t, buf)["http_status"])
+	})
+}

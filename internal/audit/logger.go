@@ -307,26 +307,39 @@ func (rw *StatusCaptureResponseWriter) WriteHeader(code int) {
 		return
 	}
 	if !rw.wroteHeader {
-		rw.StatusCode = code
-		rw.wroteHeader = true
-		if rw.onFirstHeader != nil && code >= 200 {
-			rw.onFirstHeader(code)
-		}
+		rw.commitHeader(code)
 		rw.ResponseWriter.WriteHeader(code)
 	}
 }
 
-// Write ensures WriteHeader(http.StatusOK) is called if not called yet.
+// commitHeader marks the final status as decided and runs the first-header hook. Every
+// path that can start the response (WriteHeader, Write, Flush) goes through it, so a
+// denial is recorded before the first response byte whatever the handler does (D-07).
+func (rw *StatusCaptureResponseWriter) commitHeader(code int) {
+	rw.StatusCode = code
+	rw.wroteHeader = true
+	if rw.onFirstHeader != nil && code >= 200 {
+		rw.onFirstHeader(code)
+	}
+}
+
+// Write starts the response with the implicit 200 when no header was written yet. The
+// first-header hook runs before any byte reaches the client; the underlying writer
+// still performs its own implicit WriteHeader(200), exactly as before.
 func (rw *StatusCaptureResponseWriter) Write(b []byte) (int, error) {
 	if !rw.wroteHeader {
-		rw.wroteHeader = true
+		rw.commitHeader(http.StatusOK)
 	}
 	return rw.ResponseWriter.Write(b)
 }
 
-// Flush implements http.Flusher if supported by underlying ResponseWriter.
+// Flush implements http.Flusher if supported by underlying ResponseWriter. A flush
+// before any header sends the implicit 200, so it goes through the same hook.
 func (rw *StatusCaptureResponseWriter) Flush() {
 	if f, ok := rw.ResponseWriter.(http.Flusher); ok {
+		if !rw.wroteHeader {
+			rw.commitHeader(http.StatusOK)
+		}
 		f.Flush()
 	}
 }
