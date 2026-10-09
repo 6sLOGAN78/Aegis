@@ -248,7 +248,7 @@ Plans:
   5. Field values written to audit rows are normalized (NUL bytes stripped, widths clipped) at record construction and again in the worker, so one hostile request cannot wedge the worker (D-18).
   6. On the rebuilt MVP stack the smoke script shows typed rows by request id, a suppression summary row, unchanged row count after deleting `wal.cursor` and restarting the worker, and delivery of every row across at least two segment rotations (D-17). Crash between insert and cursor save stays unit-level evidence; hardened and distributed profiles are not run live.
 
-**Plans:** 10/12 plans executed
+**Plans:** 11/12 plans executed
 
 Plans:
 **Wave 1**
@@ -278,7 +278,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 08-11-PLAN.md — Live MVP verification: bring-up and smoke (typed rows, dedupe replay, rotation), graceful-stop check, teardown (needs Docker, destructive)
+- [x] 08-11-PLAN.md — Live MVP verification: bring-up and smoke (typed rows, dedupe replay, rotation), graceful-stop check, teardown (needs Docker, destructive)
 
 **Wave 7** *(blocked on Wave 6 completion)*
 
