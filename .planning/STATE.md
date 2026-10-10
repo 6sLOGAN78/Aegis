@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: gap_closure
-stopped_at: Phase 8 complete (human verification items open); v1.0 gap closure continues (B2, B5, B6, B8 open)
-last_updated: 2026-10-09T10:49:06.835Z
-last_activity: 2026-10-09
+status: verifying
+stopped_at: Phase 9 context gathered
+last_updated: "2026-10-10T12:45:22.866Z"
+last_activity: 2026-10-09 -- Phase 8 complete (AUD-03, AUD-04 closed on MVP-profile live evidence)
 progress:
-  total_phases: 9
+  total_phases: 10
   completed_phases: 9
   total_plans: 43
   completed_plans: 43
-  percent: 100
+  percent: 90
 ---
 
 # Project State
@@ -108,10 +108,11 @@ Recent decisions affecting current work:
 
 - Phase 7 added: Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)
 - Phase 8 added: Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
+- Phase 9 added: Close gaps B9, B10: jti revocation and SPIFFE quarantine keys (REV-03, AUTH-04, OPS-01)
 
 ### Pending Todos
 
-See .planning/v1.0-MILESTONE-AUDIT.md — blockers B1–B8.
+See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 2026-10-10 — open blockers B2, B5, B6, B8, B9, B10.
 
 ### Blockers/Concerns
 
@@ -131,9 +132,9 @@ Items acknowledged and carried forward from previous milestone close:
 
 ## Session Continuity
 
-Last session: 2026-10-09T10:40:17.125Z
-Stopped at: Completed 08-12-PLAN.md
-Resume file: None
+Last session: 2026-10-10T12:45:22.853Z
+Stopped at: Phase 9 context gathered
+Resume file: .planning/phases/09-close-gaps-b9-b10-jti-revocation-and-spiffe-quarantine-keys-/09-CONTEXT.md
 
 ## Operator Next Steps
 
