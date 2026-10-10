@@ -890,7 +890,10 @@ if op_login; then
   done
 
   if [ "${wl_ok}" = "true" ]; then
-    qbody="$(jq -n '{reason:"compose-smoke-b10"}')"
+    # Short expiry backstop: if the cleanup trap cannot release the workload,
+    # the quarantine still lapses in 5 minutes instead of the 24h default.
+    q_exp="$(date -u -d '+300 seconds' +%Y-%m-%dT%H:%M:%SZ)"
+    qbody="$(jq -n --arg e "${q_exp}" '{reason:"compose-smoke-b10",expires_at:$e}')"
     qcode="$(cp_call POST "/control/v1/principals/${ENC}/quarantine" "${qbody}")"
     if [ "${qcode}" = "200" ]; then
       pass "WORKLOAD QUARANTINE path-form POST returned 200"
@@ -907,7 +910,7 @@ if op_login; then
     fi
 
     # Body form: POST /control/v1/quarantine with principal_id.
-    bbody="$(jq -n --arg p "${WL_ID}" '{principal_id:$p,reason:"compose-smoke-b10-body"}')"
+    bbody="$(jq -n --arg p "${WL_ID}" --arg e "${q_exp}" '{principal_id:$p,reason:"compose-smoke-b10-body",expires_at:$e}')"
     qcode="$(cp_call POST /control/v1/quarantine "${bbody}")"
     if [ "${qcode}" = "200" ]; then
       pass "WORKLOAD QUARANTINE body-form POST returned 200"
