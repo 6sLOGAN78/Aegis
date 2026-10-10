@@ -36,6 +36,10 @@ import (
 
 var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
 
+// missingJTI reports whether validated claims lack a jti (D-09). CheckRevocation
+// skips empty jti, so such tokens must be denied before revocation checks.
+func missingJTI(c *identity.UserClaims) bool { return c == nil || c.ID == "" }
+
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
