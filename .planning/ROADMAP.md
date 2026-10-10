@@ -324,9 +324,9 @@ Plans:
 Plans:
 - [ ] TBD (run /gsd-plan-phase 10 to break down)
 
-### Phase 11: Close gap B8: wire key rotation and DR quarantine reconstruction (REV-03, AUTH-01, CTRL-02)
+### Phase 11: Close gaps B8, B2: wire key rotation and DR quarantine reconstruction, fix Kubernetes manifests (REV-03, AUTH-01, CTRL-02)
 
-**Goal:** Rotation and DR code that today has only test callers runs in production. Covers B8: the gateway loads trusted keysets via AddTrustedKey/SetTrustedKeys (verifier.go) so signing keys rotate with zero downtime, and ReconstructQuarantines (store.go) runs at startup before readiness so quarantines survive a Redis loss.
+**Goal:** Rotation and DR code that today has only test callers runs in production. Covers B8: the gateway loads trusted keysets via AddTrustedKey/SetTrustedKeys (verifier.go) so signing keys rotate with zero downtime, and ReconstructQuarantines (store.go) runs at startup before readiness so quarantines survive a Redis loss. Also covers B2: the Kubernetes manifests run the current binaries (statefulset.yaml container port and probe paths match the real listeners and health endpoints, the audit spool uses a persistent volume instead of emptyDir, and configmap keys match the env vars the binaries read, e.g. AEGIS_WORKLOAD_ADDR). Full production K8S-01 (default-deny NetworkPolicies, topology spread) stays v2.
 **Requirements**: REV-03, AUTH-01, CTRL-02
 **Depends on:** Phase 10
 **Plans:** 0 plans

@@ -112,6 +112,7 @@ Recent decisions affecting current work:
 - Phase 9 added: Close gaps B9, B10: jti revocation and SPIFFE quarantine keys (REV-03, AUTH-04, OPS-01)
 - Phase 10 added: Close gaps B5, B6: dashboard and control-plane flows (OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02)
 - Phase 11 added: Close gap B8: wire key rotation and DR quarantine reconstruction (REV-03, AUTH-01, CTRL-02)
+- Phase 11 edited: B2 (Kubernetes manifests runnable) added to scope; full K8S-01 stays v2
 
 ### Pending Todos
 
