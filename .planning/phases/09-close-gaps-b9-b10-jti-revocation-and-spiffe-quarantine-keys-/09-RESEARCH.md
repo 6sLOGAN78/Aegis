@@ -278,11 +278,11 @@ done
 | A3 | Alpine busybox/GNU `stat -f` semantics on the host: host uses GNU `stat` (verified here), macOS hosts differ | Q8 | Disk check skips with a message on non-GNU stat |
 | A4 | `TOKEN_MISSING_JTI` as `classIdentified` / HTTP 401 is the right fit | Q2 | Discretionary per CONTEXT; low risk |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **Body-form schema:** optional `principal_id` on `QuarantineRequest` vs a new schema. Recommend optional field on the existing schema (smallest change, one regenerated struct).
-2. **Dashboard jti column:** recommend API + `types.ts` only, skip `AuditStream.tsx` and the dist rebuild unless the build is cheap.
-3. **Runbook fix scope:** section 3 auth/field drift is beyond the strict D-03 text; recommend fixing it since the phase makes `POST /quarantine` real.
+1. **Body-form schema:** optional `principal_id` on `QuarantineRequest` vs a new schema. Recommend optional field on the existing schema (smallest change, one regenerated struct). RESOLVED: optional `principal_id` on `QuarantineRequest` (plan 09-03).
+2. **Dashboard jti column:** recommend API + `types.ts` only, skip `AuditStream.tsx` and the dist rebuild unless the build is cheap. RESOLVED: dashboard jti column skipped; `types.ts` hand-edit only, no dist rebuild (plan 09-03).
+3. **Runbook fix scope:** section 3 auth/field drift is beyond the strict D-03 text; recommend fixing it since the phase makes `POST /quarantine` real. RESOLVED: runbook section 3 fixed in plan 09-06. Missing-jti reason: RESOLVED as `TOKEN_MISSING_JTI`, 401, `classIdentified` (plan 09-05).
 
 ## Environment Availability
 

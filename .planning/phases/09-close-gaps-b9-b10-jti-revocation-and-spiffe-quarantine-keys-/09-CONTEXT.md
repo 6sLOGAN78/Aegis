@@ -35,7 +35,7 @@ Not in scope: B5, B6, B8 (including `ReconstructQuarantines` wiring and rotation
 - **D-05:** The issuer sets `RegisteredClaims.ID = uuid.NewString()` (random UUID v4) on every token. `github.com/google/uuid` is already a dependency.
 - **D-06:** The issuer's login response includes `jti` next to `access_token`.
 - **D-07:** The gateway records the token's jti in the audit event, so the decision, denial and completion rows carry it. This needs a new event field (normalized like the other ids), a new migration `000004` adding a nullable `jti` column to `audit_events`, the worker insert, and the audit read API. The dashboard audit stream should show it if that is a small change; otherwise the API alone is enough.
-- **D-08:** Revocation TTL keeps the existing 24h default with the `ttl_seconds` override (`HandleRevokeToken`). No change.
+- **D-08 [informational]:** Revocation TTL keeps the existing 24h default with the `ttl_seconds` override (`HandleRevokeToken`). No change.
 - **D-09:** The user listener denies tokens without a jti, fail closed. Use the same deny path and status as other invalid-token rejections, with a distinct reason code (for example `TOKEN_MISSING_JTI`). The reason code must be classified in the Phase 8 governor reason table, or `TestEveryMainReasonIsClassified` fails.
 
 ### Quarantine API shape (REV-03, OPS-01)

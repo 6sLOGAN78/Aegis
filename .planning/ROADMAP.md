@@ -291,10 +291,28 @@ Plans:
 **Goal:** Close v1.0 audit blockers B9 and B10. The demo issuer requires seeded username/password and issues a jti; JTI revocation and workload (SPIFFE) quarantine are denied on every gateway replica within 5s, proven live on mvp, hardened and distributed. Decisions in 09-CONTEXT.md.
 **Requirements**: REV-03, AUTH-04, OPS-01 (quarantine/revocation routes only)
 **Depends on:** Phase 8
-**Plans:** 0 plans
+**Plans:** 8 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 9 to break down)
+**Wave 1**
+
+- [ ] 09-01-PLAN.md — Issuer username/password login + jti; compose password env
+- [ ] 09-02-PLAN.md — Audit jti write path (event, context, worker, migration 000004)
+- [ ] 09-03-PLAN.md — OpenAPI additions, regenerated types, audit read API jti
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
+- [ ] 09-04-PLAN.md — ParseSPIFFEID and quarantine handlers (decode, validate, body form)
+- [ ] 09-05-PLAN.md — Gateway TOKEN_MISSING_JTI guard and jti in audit events
+- [ ] 09-06-PLAN.md — Integration login helpers and runbook fix
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
+- [ ] 09-07-PLAN.md — compose-smoke.sh new sections, disk pre-flight, lint
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 09-08-PLAN.md — Live smoke on mvp, hardened, distributed (human checkpoint)
 
 ---
 
