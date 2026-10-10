@@ -24,7 +24,7 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 - [x] **Phase 6: Production Hardening & Operational Runbooks** - Kubernetes reference manifests, credential rotation drills, disaster recovery drills, security audit review, and SLO validation runbooks
 - [x] **Phase 7: Close gaps B1, B3, B4 (compose alignment)** - v1.0 gap closure: all three compose profiles run the current binaries; partial contribution to REV-03 and AUD-03, which remain unsatisfied (completed 2026-10-09)
 - [x] **Phase 8: Close gap B7 (denials and completions to the audit spool)** - v1.0 gap closure: gateway writes denial and completion records to the durable spool; AUD-04 and AUD-03 closed on MVP-profile live evidence, with human verification items open (completed 2026-10-09)
-- [ ] **Phase 9: Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys)** - v1.0 gap closure: issuer emits jti so JTI revocation matches; workload quarantine keys decoded and POST /quarantine fixed (REV-03, AUTH-04, OPS-01)
+- [x] **Phase 9: Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys)** - v1.0 gap closure: issuer emits jti so JTI revocation matches; workload quarantine keys decoded and POST /quarantine fixed (REV-03, AUTH-04, OPS-01) (completed 2026-10-10)
 
 ---
 
@@ -291,7 +291,7 @@ Plans:
 **Goal:** Close v1.0 audit blockers B9 and B10. The demo issuer requires seeded username/password and issues a jti; JTI revocation and workload (SPIFFE) quarantine are denied on every gateway replica within 5s, proven live on mvp, hardened and distributed. Decisions in 09-CONTEXT.md.
 **Requirements**: REV-03, AUTH-04, OPS-01 (quarantine/revocation routes only)
 **Depends on:** Phase 8
-**Plans:** 7/8 plans executed
+**Plans:** 8/8 plans complete
 
 Plans:
 **Wave 1**
@@ -312,7 +312,7 @@ Plans:
 
 **Wave 4** *(blocked on Wave 3 completion)*
 
-- [ ] 09-08-PLAN.md — Live smoke on mvp, hardened, distributed (human checkpoint)
+- [x] 09-08-PLAN.md — Live smoke on mvp, hardened, distributed (human checkpoint)
 
 ---
 
@@ -332,4 +332,4 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 | 6. Production Hardening & Operational Runbooks | 3/3 | Complete | 2026-10-07 |
 | 7. Close gaps B1, B3, B4 (compose alignment) | 6/6 | Complete | 2026-10-09 |
 | 8. Close gap B7 (denials and completions to the audit spool) | 12/12 | Complete | 2026-10-09 |
-| 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 7/8 | In Progress|  |
+| 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 8/8 | Complete   | 2026-10-10 |
