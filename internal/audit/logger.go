@@ -30,6 +30,7 @@ type AuditContext struct {
 	Decision        string
 	ReasonCode      string
 	ErrorCode       string
+	JTI             string
 	SnapshotVersion int64
 
 	// decisionSet is true once a handler called SetDecision; the middleware then
@@ -138,6 +139,16 @@ func (ac *AuditContext) SetErrorCode(errCode string) {
 	ac.ErrorCode = errCode
 }
 
+// SetJTI records the presented token's jti on the audit context.
+func (ac *AuditContext) SetJTI(jti string) {
+	if ac == nil {
+		return
+	}
+	ac.mu.Lock()
+	defer ac.mu.Unlock()
+	ac.JTI = jti
+}
+
 // SetSnapshotVersion sets the configuration snapshot version on the audit context.
 func (ac *AuditContext) SetSnapshotVersion(v int64) {
 	if ac == nil {
@@ -200,6 +211,7 @@ func (ac *AuditContext) ToCompletionEvent(method, clientIP string, snapshotVersi
 		ReasonCode:      reasonCode,
 		SnapshotVersion: snapVer,
 		ErrorCode:       ac.ErrorCode,
+		JTI:             ac.JTI,
 		EventType:       EventTypeDecision,
 	}
 	ev.Normalize()
@@ -409,6 +421,7 @@ func buildAuditEvent(ac *AuditContext, reqID, clientIP, method string, status in
 		DurationMS:      duration,
 		SnapshotVersion: snapVer,
 		ErrorCode:       ac.ErrorCode,
+		JTI:             ac.JTI,
 		EventType:       eventType,
 	}
 }
