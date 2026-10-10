@@ -15,16 +15,25 @@
 #   AUD-03 rotation ROTATION: only when SMOKE_ROTATION_REQUESTS is set; otherwise it prints
 #       ROTATION SKIPPED and rotation is NOT claimed
 #   A4  (assumption, non-fatal) a quarantined principal is denied
+#   DISK  pre-flight: exits early when the Docker root filesystem is more than 85% full
+#   REV-03 JTI  (B9) revoke one token's jti: every gateway replica answers 403 TOKEN_REVOKED
+#       within 5s ("denied after Xs", polled per replica), a fresh token still gets 200, and
+#       the audit rows carry the jti
+#   WORKLOAD QUARANTINE  (B10) the :9443 orders workload is quarantined via the @uri-encoded
+#       SPIFFE path and via POST /control/v1/quarantine {principal_id}; PRINCIPAL_QUARANTINED
+#       on every replica, then released and allowed again
 #   GRACE (--stop-check only) a gateway stops with exit code 0, not 137
 #
 # AUD-03 and AUD-04 evidence requires AUDIT-TYPES, DEDUPE and ROTATION to all PASS in the
 # same run, on a stack started with a small AEGIS_SPOOL_SEGMENT_BYTES for ROTATION.
 # A crash between the Postgres insert and the cursor save is covered by unit tests only
-# (TestAuditWorker_RestartRecovery); this script does not exercise it. REV-03 stays open.
+# (TestAuditWorker_RestartRecovery); this script does not exercise it. REV-03 is proven live by the JTI revoke section
+# (B9/B10 closed); crash recovery of the audit worker remains unit-level.
 # It never starts or tears down the stack: callers run the stack bring-up
 # (with --build --wait) and the teardown (with -v) themselves.
 #
-# Env: SMOKE_USER (default admin), SMOKE_PASSWORD (default: demo operator password).
+# Env: SMOKE_USER (default admin), SMOKE_PASSWORD (default: demo operator password),
+#      SMOKE_DEV_PASSWORD (default: demo developer password).
 #      SMOKE_SUPPRESS_WINDOW_SECS (default 60) must match the stack's
 #        AEGIS_AUDIT_SUPPRESS_WINDOW in seconds; the wait for the suppression summary row
 #        is 2x this plus 30 seconds.
@@ -63,6 +72,26 @@ for tool in docker curl jq; do
   fi
 done
 
+# --- DISK pre-flight (D-17): statfs ratio of the Docker root, never df -------
+echo "=== DISK pre-flight ==="
+disk_root="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)"
+disk_b=""
+disk_f=""
+if [ -n "${disk_root}" ] && [ -d "${disk_root}" ]; then
+  read -r disk_b disk_f < <(stat -f -c '%b %f' "${disk_root}" 2>/dev/null || true) || true
+fi
+case "${disk_b}:${disk_f}" in
+  ''|:*|*:|*[!0-9:]*) echo "DISK SKIPPED: cannot measure" ;;
+  *)
+    disk_ratio="$(awk -v b="${disk_b}" -v f="${disk_f}" 'BEGIN { if (b > 0) printf "%.3f", (b - f) / b; else print "0" }')"
+    if awk -v r="${disk_ratio}" 'BEGIN { exit !(r > 0.85) }'; then
+      echo "DISK pre-flight failed: Docker root ${disk_root} is ${disk_ratio} full (limit 0.85); free space before running the smoke" >&2
+      exit 3
+    fi
+    echo "DISK ok: Docker root usage ratio ${disk_ratio}"
+    ;;
+esac
+
 FILE="${ROOT_DIR}/deployments/compose/docker-compose.${PROFILE}.yml"
 if [ ! -f "${FILE}" ]; then
   echo "compose file not found: ${FILE}" >&2
@@ -71,6 +100,7 @@ fi
 
 SMOKE_USER="${SMOKE_USER:-admin}"
 SMOKE_PASSWORD="${SMOKE_PASSWORD:-admin-secret}"
+SMOKE_DEV_PASSWORD="${SMOKE_DEV_PASSWORD:-demo-developer-pass}"
 SMOKE_SUPPRESS_WINDOW_SECS="${SMOKE_SUPPRESS_WINDOW_SECS:-60}"
 SMOKE_ROTATION_REQUESTS="${SMOKE_ROTATION_REQUESTS:-0}"
 case "${SMOKE_SUPPRESS_WINDOW_SECS}" in
@@ -135,11 +165,62 @@ cp_call() {
   fi
 }
 
-# dev_token prints a fresh developer access token (issuer is only reachable inside the network).
+# dev_login prints "<access_token> <jti>" for a fresh developer login (issuer is only
+# reachable inside the network). The body is built with jq --arg; nothing is echoed.
+dev_login() {
+  local body resp
+  body="$(jq -n --arg u developer --arg p "${SMOKE_DEV_PASSWORD}" '{username:$u,password:$p}')"
+  resp="$(dc exec -T "${GW}" curl -s -X POST -H 'Content-Type: application/json' \
+    -d "${body}" http://demo-issuer:8085/login 2>/dev/null || true)"
+  printf '%s' "${resp}" | jq -r '[(.access_token // ""), (.jti // "")] | join(" ")' 2>/dev/null || true
+}
+
+# dev_token prints a fresh developer access token.
 dev_token() {
-  dc exec -T "${GW}" curl -s -X POST -H 'Content-Type: application/json' \
-    -d '{"role":"developer"}' http://demo-issuer:8085/login 2>/dev/null \
-    | jq -r '.access_token // empty' 2>/dev/null || true
+  local out
+  out="$(dev_login)"
+  printf '%s\n' "${out%% *}"
+}
+
+# Gateway replicas (one per service whose name starts with gateway).
+mapfile -t GATEWAYS < <(dc config --services 2>/dev/null | grep '^gateway' || true)
+
+# replica_poll LABEL WANT_STATUS WANT_BODY CURL_ARGS... : right after a control call
+# returned 200, poll every gateway replica directly (dc exec curl against 127.0.0.1)
+# until it answers WANT_STATUS with WANT_BODY in the response, and fail if any replica
+# takes more than 5s. Prints "<label>: <g> denied after <el>s (includes exec latency)".
+replica_poll() {
+  local label="$1" want_status="$2" want_body="$3"
+  shift 3
+  local g t0 now el out status body
+  t0="$(date +%s.%N)"
+  if [ "${#GATEWAYS[@]}" -eq 0 ]; then
+    fail "${label}" "no gateway services found via dc config --services"
+    return 1
+  fi
+  for g in "${GATEWAYS[@]}"; do
+    while :; do
+      out="$(dc exec -T "${g}" curl -s -w '\n%{http_code}' "$@" 2>/dev/null || true)"
+      status="${out##*$'\n'}"
+      body="${out%$'\n'*}"
+      now="$(date +%s.%N)"
+      el="$(awk -v a="${now}" -v b="${t0}" 'BEGIN { printf "%.2f", a - b }')"
+      if [ "${status}" = "${want_status}" ] && { [ -z "${want_body}" ] || [[ "${body}" == *"${want_body}"* ]]; }; then
+        echo "${label}: ${g} denied after ${el}s (includes exec latency)"
+        if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+          fail "${label} ${g}" "propagation took ${el}s, limit 5s"
+        else
+          pass "${label} ${g} within 5s"
+        fi
+        break
+      fi
+      if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+        fail "${label} ${g}" "no HTTP ${want_status} ${want_body} within 5s (last HTTP ${status:-none})"
+        break
+      fi
+      sleep 0.2
+    done
+  done
 }
 
 # gw_code TOKEN PATH prints the HTTP status code from the user-facing listener.
@@ -232,6 +313,8 @@ cleanup() {
       || echo "WARN: could not release quarantine for usr_developer_01" >&2
     cp_call DELETE /control/v1/principals/smoke-b4-probe/quarantine >/dev/null \
       || echo "WARN: could not release quarantine for smoke-b4-probe" >&2
+    cp_call DELETE "/control/v1/principals/$(jq -rn --arg v 'spiffe://aegis.local/workload/orders' '$v|@uri')/quarantine" >/dev/null \
+      || echo "WARN: could not release quarantine for the orders workload" >&2
   else
     echo "WARN: cleanup login failed; usr_developer_01 and smoke-b4-probe may still be quarantined" >&2
   fi
@@ -653,7 +736,7 @@ a4_code="none"
 a4_denied="false"
 tok="$(dev_token)"
 if [ -z "${tok}" ] || ! op_login; then
-  echo "A4 RESULT: FAIL (HTTP none, could not obtain token or operator session; record in SUMMARY, do not fix in this phase)"
+  echo "A4 RESULT: FAIL (HTTP none, could not obtain token or operator session; record in SUMMARY)"
 else
   qcode="$(cp_call POST /control/v1/principals/usr_developer_01/quarantine '{"reason":"compose-smoke-a4"}')"
   for _ in $(seq 1 10); do
@@ -667,9 +750,145 @@ else
   if [ "${a4_denied}" = "true" ]; then
     echo "A4 RESULT: PASS (HTTP ${a4_code})"
   else
-    echo "A4 RESULT: FAIL (HTTP ${a4_code}, quarantined user still allowed; quarantine POST was HTTP ${qcode:-none}; record in SUMMARY, out-of-scope causes are the missing jti / encoded SPIFFE key / B8 gaps, do not fix in this phase)"
+    echo "A4 RESULT: FAIL (HTTP ${a4_code}, quarantined user still allowed; quarantine POST was HTTP ${qcode:-none}; record in SUMMARY; B9 jti and B10 encoded SPIFFE key are closed, so investigate the gateway quarantine path)"
   fi
   cp_call DELETE /control/v1/principals/usr_developer_01/quarantine >/dev/null || true
+fi
+
+# --- 5b. REV-03 JTI: revoke one token, other tokens keep working ------------
+echo "=== REV-03 JTI revoke: per-replica propagation and audit jti ==="
+# wait_q_ge SQL MIN SECONDS polls psql_q until its numeric output is >= MIN.
+wait_q_ge() {
+  local sql="$1" min="$2" secs="$3" i
+  LAST_Q=""
+  for i in $(seq 1 "${secs}"); do
+    LAST_Q="$(psql_q "${sql}")"
+    case "${LAST_Q}" in
+      ''|*[!0-9]*) ;;
+      *) if [ "${LAST_Q}" -ge "${min}" ]; then return 0; fi ;;
+    esac
+    sleep 1
+  done
+  return 1
+}
+
+if op_login; then
+  # A quarantined principal would mask revocation: make sure usr_developer_01 is released.
+  cp_call DELETE /control/v1/principals/usr_developer_01/quarantine >/dev/null || true
+  login_out="$(dev_login)"
+  rtok="${login_out%% *}"
+  JTI="${login_out#* }"
+  if [ -z "${rtok}" ] || ! valid_rid "${JTI}"; then
+    fail "REV-03 JTI login" "issuer returned no access_token or a malformed jti"
+  else
+    # WINDOW GUARD: wait out an earlier TOKEN_REVOKED denial younger than the window so the
+    # first denial of this run is a new suppression key.
+    rev_age="$(psql_q "select coalesce(extract(epoch from (now() - max(\"timestamp\")))::int, 1000000) from audit_events where event_type='denial' and reason_code='TOKEN_REVOKED'")"
+    case "${rev_age}" in
+      ''|*[!0-9-]*) rev_age=1000000 ;;
+    esac
+    if [ "${rev_age}" -lt 0 ]; then
+      rev_age=0
+    fi
+    rev_need=$((SMOKE_SUPPRESS_WINDOW_SECS + 2))
+    if [ "${rev_age}" -lt "${rev_need}" ]; then
+      rev_wait=$((rev_need - rev_age))
+      echo "REV-03 waiting ${rev_wait}s for the previous suppression window to close"
+      sleep "${rev_wait}"
+    fi
+
+    for g in "${GATEWAYS[@]}"; do
+      rcode="$(dc exec -T "${g}" curl -s -o /dev/null -w '%{http_code}' \
+        -H "Authorization: Bearer ${rtok}" http://127.0.0.1:8080/api/orders 2>/dev/null || true)"
+      if [ "${rcode}" = "200" ]; then
+        pass "REV-03 JTI ${g} allowed the token before revocation"
+      else
+        fail "REV-03 JTI ${g} baseline" "expected 200, got HTTP ${rcode:-none}"
+      fi
+    done
+
+    rev_body="$(jq -n --arg j "${JTI}" '{jti:$j,reason:"compose-smoke",ttl_seconds:300}')"
+    rcode="$(cp_call POST /control/v1/revocations "${rev_body}")"
+    if [ "${rcode}" = "200" ]; then
+      pass "REV-03 JTI revocation POST returned 200"
+      replica_poll "REV-03 JTI" 403 TOKEN_REVOKED \
+        -H "Authorization: Bearer ${rtok}" http://127.0.0.1:8080/api/orders
+      fresh="$(dev_token)"
+      fcode="$(gw_code "${fresh}" /api/orders)"
+      if [ "${fcode}" = "200" ]; then
+        pass "REV-03 JTI a fresh developer token still returns 200"
+      else
+        fail "REV-03 JTI fresh token" "expected 200, got HTTP ${fcode:-none}"
+      fi
+    else
+      fail "REV-03 JTI revocation POST" "HTTP ${rcode:-none}"
+    fi
+
+    if wait_q_ge "select count(*) from audit_events where jti='${JTI}' and event_type='denial' and reason_code='TOKEN_REVOKED'" 1 60; then
+      pass "REV-03 JTI audit: TOKEN_REVOKED denial rows carry the jti (${LAST_Q})"
+    else
+      fail "REV-03 JTI audit denial" "no denial row with the revoked jti and TOKEN_REVOKED (last count ${LAST_Q:-none})"
+    fi
+    if wait_q_ge "select count(*) from audit_events where jti='${JTI}' and event_type<>'denial'" 1 60; then
+      pass "REV-03 JTI audit: the earlier allowed request carries the jti (${LAST_Q})"
+    else
+      fail "REV-03 JTI audit allowed" "no allowed-request row with the jti (last count ${LAST_Q:-none})"
+    fi
+  fi
+else
+  fail "REV-03 JTI operator login" "could not obtain session and CSRF token from control plane"
+fi
+
+# --- 5c. WORKLOAD QUARANTINE (:9443) ---------------------------------------
+echo "=== WORKLOAD QUARANTINE (:9443): SPIFFE id as encoded path and body form ==="
+WL_ID="spiffe://aegis.local/workload/orders"
+ENC="$(jq -rn --arg v "${WL_ID}" '$v|@uri')"
+WL_PAY='{"amount":100.0,"currency":"USD"}'
+wl_mtls_args=(--cacert /certs/root-ca.crt --cert /certs/workload-orders.crt --key /certs/workload-orders.key
+  -X POST -H 'Content-Type: application/json' -d "${WL_PAY}" https://127.0.0.1:9443/api/payments)
+
+if op_login; then
+  wl_ok="true"
+  for g in "${GATEWAYS[@]}"; do
+    out="$(dc exec -T "${g}" curl -s -w '\n%{http_code}' "${wl_mtls_args[@]}" 2>/dev/null || true)"
+    if [ "${out##*$'\n'}" = "200" ]; then
+      pass "WORKLOAD QUARANTINE ${g} baseline mTLS POST /api/payments returned 200"
+    else
+      fail "WORKLOAD QUARANTINE ${g} baseline" "expected 200, got HTTP ${out##*$'\n'}"
+      wl_ok="false"
+    fi
+  done
+
+  if [ "${wl_ok}" = "true" ]; then
+    qbody="$(jq -n '{reason:"compose-smoke-b10"}')"
+    qcode="$(cp_call POST "/control/v1/principals/${ENC}/quarantine" "${qbody}")"
+    if [ "${qcode}" = "200" ]; then
+      pass "WORKLOAD QUARANTINE path-form POST returned 200"
+      replica_poll "WORKLOAD QUARANTINE" 403 PRINCIPAL_QUARANTINED "${wl_mtls_args[@]}"
+    else
+      fail "WORKLOAD QUARANTINE path-form POST" "HTTP ${qcode:-none}"
+    fi
+    qcode="$(cp_call DELETE "/control/v1/principals/${ENC}/quarantine")"
+    if [ "${qcode}" = "200" ] || [ "${qcode}" = "204" ]; then
+      pass "WORKLOAD QUARANTINE path-form DELETE returned ${qcode}"
+      replica_poll "WORKLOAD UNQUARANTINE (recovered 200)" 200 "" "${wl_mtls_args[@]}"
+    else
+      fail "WORKLOAD QUARANTINE path-form DELETE" "HTTP ${qcode:-none}"
+    fi
+
+    # Body form: POST /control/v1/quarantine with principal_id.
+    bbody="$(jq -n --arg p "${WL_ID}" '{principal_id:$p,reason:"compose-smoke-b10-body"}')"
+    qcode="$(cp_call POST /control/v1/quarantine "${bbody}")"
+    if [ "${qcode}" = "200" ]; then
+      pass "WORKLOAD QUARANTINE body-form POST returned 200"
+      replica_poll "WORKLOAD QUARANTINE body form" 403 PRINCIPAL_QUARANTINED "${wl_mtls_args[@]}"
+    else
+      fail "WORKLOAD QUARANTINE body-form POST" "HTTP ${qcode:-none}"
+    fi
+    cp_call DELETE "/control/v1/principals/${ENC}/quarantine" >/dev/null || true
+  fi
+else
+  fail "WORKLOAD QUARANTINE operator login" "could not obtain session and CSRF token from control plane"
 fi
 
 # --- 6. GRACE: gateway stops cleanly (only with --stop-check) --------------

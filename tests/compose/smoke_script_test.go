@@ -76,10 +76,46 @@ func TestSmokeScriptHonestHeader(t *testing.T) {
 func TestSmokeScriptNoCredentialEcho(t *testing.T) {
 	_, script := readSmokeScript(t)
 	printing := regexp.MustCompile(`^\s*(echo|printf)\b`)
-	secret := regexp.MustCompile(`SMOKE_PASSWORD|CSRF|SESSION`)
+	secret := regexp.MustCompile(`SMOKE_PASSWORD|SMOKE_DEV_PASSWORD|CSRF|SESSION`)
 	for i, line := range strings.Split(script, "\n") {
 		if printing.MatchString(line) && secret.MatchString(line) {
 			t.Errorf("line %d prints a credential variable: %s", i+1, line)
+		}
+	}
+}
+
+func TestSmokeScriptCoversJTIAndWorkloadQuarantine(t *testing.T) {
+	_, script := readSmokeScript(t)
+	required := []string{
+		"=== REV-03 JTI",
+		"=== WORKLOAD QUARANTINE",
+		"=== DISK",
+		"TOKEN_REVOKED",
+		"PRINCIPAL_QUARANTINED",
+		"workload-orders",
+		"@uri",
+		"denied after",
+		"stat -f",
+		"DISK SKIPPED",
+		"/control/v1/revocations",
+		"principal_id",
+		"jti",
+		"grep '^gateway'",
+	}
+	for _, want := range required {
+		assert.Contains(t, script, want, "smoke script must contain %q", want)
+	}
+	assert.NotContains(t, script, `"role"`, "login bodies must be {username,password}, not role")
+}
+
+func TestSmokeScriptNoTokenValueEcho(t *testing.T) {
+	_, script := readSmokeScript(t)
+	printing := regexp.MustCompile(`^\s*(echo|printf)\b`)
+	// Expansions of token variables; bare "access_token" reads are fine.
+	secret := regexp.MustCompile(`\$\{?(tok|token|rtok|fresh)\b`)
+	for i, line := range strings.Split(script, "\n") {
+		if printing.MatchString(line) && secret.MatchString(line) {
+			t.Errorf("line %d prints a token variable: %s", i+1, line)
 		}
 	}
 }
