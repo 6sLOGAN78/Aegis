@@ -36,24 +36,31 @@ This runbook is invoked when a credential compromise or anomalous behavior requi
 
 For automated SIEM/SOAR webhooks or headless SRE terminal operations. The management API uses an operator **session cookie plus a CSRF header** (not a Bearer token; data plane Bearer credentials are rejected on management endpoints). The caller needs the `sec-ops` role.
 
+**Transport.** The control plane serves **plain HTTP** on `:8084` (`http://control-plane:8084` inside the compose network, the same URL the seed job and healthchecks use); there is no TLS listener, so `https://` fails with a TLS handshake error. The `aegis_session` cookie is issued with `Secure`, so a cookie jar (`curl -c/-b cookies.txt`) will **not** send it back over plain HTTP (curl makes an exception only for `localhost`). Extract the session id from the `Set-Cookie` header and pass it explicitly as `-H "Cookie: aegis_session=${SESSION}"` (this is what `op_login` in `scripts/compose-smoke.sh` does). On the mvp profile port 8084 is not published to the host, so run these commands inside the compose network, e.g. prefix each `curl` with `docker compose -f deployments/compose/docker-compose.mvp.yml exec -T control-plane`. On hardened and distributed it is also published as `http://localhost:8084`.
+
 ```bash
-# 1. Log in as an operator; store the session cookie and capture the csrf_token
-#    from the JSON response ({username, role, csrf_token, expires_at}).
-curl -sk -c cookies.txt -X POST https://control-plane:8084/control/v1/auth/login \
+CP_URL=http://control-plane:8084
+
+# 1. Log in as an operator. Capture the session id from Set-Cookie and the
+#    csrf_token from the JSON body ({username, role, csrf_token, expires_at}).
+RESP="$(curl -s -i -X POST "${CP_URL}/control/v1/auth/login" \
   -H "Content-Type: application/json" \
-  -d '{"username":"<operator>","password":"<operator-password>"}'
-CSRF_TOKEN=<csrf_token from the response>
+  -d '{"username":"<operator>","password":"<operator-password>"}' | tr -d '\r')"
+SESSION="$(printf '%s\n' "${RESP}" | sed -n 's/^[Ss]et-[Cc]ookie: aegis_session=\([^;]*\).*/\1/p' | head -n1)"
+CSRF_TOKEN="$(printf '%s\n' "${RESP}" | sed -n '/^$/,$p' | jq -r '.csrf_token')"
 
 # 2a. Path form. SPIFFE ids MUST be percent-encoded (an unencoded "/" returns 404):
 #     spiffe://aegis.local/workload/orders -> spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders
-curl -sk -b cookies.txt -X POST \
-  "https://control-plane:8084/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine" \
+curl -s -X POST \
+  "${CP_URL}/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine" \
+  -H "Cookie: aegis_session=${SESSION}" \
   -H "X-CSRF-Token: ${CSRF_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"reason":"CRITICAL_TOKEN_EXFILTRATION","expires_at":"2026-10-08T16:00:00Z"}'
 
 # 2b. Body form (no path encoding needed; principal_id in the body):
-curl -sk -b cookies.txt -X POST https://control-plane:8084/control/v1/quarantine \
+curl -s -X POST "${CP_URL}/control/v1/quarantine" \
+  -H "Cookie: aegis_session=${SESSION}" \
   -H "X-CSRF-Token: ${CSRF_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"principal_id":"usr_compromised_9918","reason":"CRITICAL_TOKEN_EXFILTRATION","expires_at":"2026-10-08T16:00:00Z"}'
@@ -76,8 +83,9 @@ curl -s -X POST http://demo-issuer:8085/login \
   -H "Content-Type: application/json" \
   -d '{"username":"developer","password":"<demo-password>"}'
 
-# 1. Revoke the token by jti (same session cookie + CSRF header as section 3).
-curl -sk -b cookies.txt -X POST https://control-plane:8084/control/v1/revocations \
+# 1. Revoke the token by jti (same plain-HTTP transport, Cookie and CSRF headers as section 3).
+curl -s -X POST "${CP_URL}/control/v1/revocations" \
+  -H "Cookie: aegis_session=${SESSION}" \
   -H "X-CSRF-Token: ${CSRF_TOKEN}" \
   -H "Content-Type: application/json" \
   -d '{"jti":"<jti from login response>","reason":"LEAKED_TOKEN","ttl_seconds":3600}'
@@ -117,8 +125,10 @@ Once an investigation is concluded and credentials have been securely reset:
 ```bash
 # 1. Remove Principal Quarantine via REST API
 #    (SPIFFE ids must be percent-encoded in the path, e.g. spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders)
-curl -sk -b cookies.txt -X DELETE \
-  "https://control-plane:8084/control/v1/principals/usr_compromised_9918/quarantine" \
+#    (same plain-HTTP transport, Cookie and CSRF headers as section 3)
+curl -s -X DELETE \
+  "${CP_URL}/control/v1/principals/usr_compromised_9918/quarantine" \
+  -H "Cookie: aegis_session=${SESSION}" \
   -H "X-CSRF-Token: ${CSRF_TOKEN}"
 
 # 2. Verify Principal Access Restored with Fresh Token
