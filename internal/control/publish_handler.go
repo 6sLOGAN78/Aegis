@@ -2,13 +2,38 @@ package control
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
+	"sort"
+	"strings"
 
 	controlv1 "aegis/pkg/api/control/v1"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
 	"github.com/go-chi/chi/v5"
+	"google.golang.org/protobuf/proto"
 )
+
+// resolveIdentityMappings returns the configured mappings when set (config is
+// authoritative), otherwise carries forward the active snapshot's mappings.
+// The result is sorted by role for deterministic payloads.
+func (s *APIServer) resolveIdentityMappings() []*snapshotv1.IdentityMapping {
+	var out []*snapshotv1.IdentityMapping
+	if len(s.identityMappings) > 0 {
+		for _, m := range s.identityMappings {
+			out = append(out, proto.Clone(m).(*snapshotv1.IdentityMapping))
+		}
+	} else if s.distServer != nil {
+		if active := s.distServer.GetActiveSnapshotInternal(); active != nil {
+			var prev snapshotv1.SnapshotPayload
+			if err := proto.Unmarshal(active.Payload, &prev); err == nil {
+				out = prev.IdentityMappings
+			}
+		}
+	}
+	sort.SliceStable(out, func(i, j int) bool { return out[i].Role < out[j].Role })
+	return out
+}
 
 // HandlePublishPolicy generates, signs, persists, and broadcasts a monotonic configuration snapshot envelope.
 func (s *APIServer) HandlePublishPolicy(w http.ResponseWriter, r *http.Request) {
@@ -30,10 +55,32 @@ func (s *APIServer) HandlePublishPolicy(w http.ResponseWriter, r *http.Request) 
 		return
 	}
 
+	if s.policyRepo == nil || s.routeRepo == nil || s.snapshotRepo == nil {
+		writeErrorResponse(w, r, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Storage backend unavailable")
+		return
+	}
+
 	draft, err := s.policyRepo.GetDraft(r.Context(), id)
 	if err != nil {
 		writeErrorResponse(w, r, http.StatusNotFound, "NOT_FOUND", "Policy draft not found")
 		return
+	}
+
+	// Publish-time validation (CTRL-01): never sign unvalidated policy.
+	if s.validator == nil {
+		writeErrorResponse(w, r, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Policy validator unavailable")
+		return
+	}
+	if err := s.validator.ValidatePolicyDraft(draft.SourceRego); err != nil {
+		writeErrorResponse(w, r, http.StatusUnprocessableEntity, "UNPROCESSABLE_ENTITY", "Policy failed validation")
+		return
+	}
+	if strings.Contains(draft.SourceRego, "test_") {
+		summary, testErr := s.validator.RunRegoTests(r.Context(), draft.SourceRego, draft.SourceRego)
+		if testErr != nil || summary == nil || summary.Failed > 0 {
+			writeErrorResponse(w, r, http.StatusUnprocessableEntity, "UNPROCESSABLE_ENTITY", "Policy unit tests failed")
+			return
+		}
 	}
 
 	// 2. Load routes catalog
@@ -46,12 +93,12 @@ func (s *APIServer) HandlePublishPolicy(w http.ResponseWriter, r *http.Request) 
 	routeDefs := make([]*snapshotv1.RouteDefinition, 0, len(records))
 	for _, rec := range records {
 		routeDefs = append(routeDefs, &snapshotv1.RouteDefinition{
-			RouteId:              rec.RouteID,
-			ServiceId:            rec.ServiceID,
-			HttpMethod:           rec.HTTPMethod,
-			PathTemplate:         rec.PathTemplate,
-			UpstreamUrl:          rec.UpstreamURL,
-			UpstreamSpiffeId:     rec.UpstreamSPIFFEID,
+			RouteId:          rec.RouteID,
+			ServiceId:        rec.ServiceID,
+			HttpMethod:       rec.HTTPMethod,
+			PathTemplate:     rec.PathTemplate,
+			UpstreamUrl:      rec.UpstreamURL,
+			UpstreamSpiffeId: rec.UpstreamSPIFFEID,
 			RateLimit: &snapshotv1.RateLimitPolicy{
 				RequestsPerSecond: int32(rec.RateLimitRPS),
 				Burst:             int32(rec.RateLimitBurst),
@@ -67,8 +114,9 @@ func (s *APIServer) HandlePublishPolicy(w http.ResponseWriter, r *http.Request) 
 	// 3. Assemble monotonic snapshot payload (N+1)
 	nextVersion := activeVersion + 1
 	payload := &snapshotv1.SnapshotPayload{
-		Version: nextVersion,
-		Routes:  routeDefs,
+		Version:          nextVersion,
+		Routes:           routeDefs,
+		IdentityMappings: s.resolveIdentityMappings(),
 		PolicyModules: []*snapshotv1.PolicyModule{
 			{
 				PackageName: draft.PackageName,
@@ -97,7 +145,8 @@ func (s *APIServer) HandlePublishPolicy(w http.ResponseWriter, r *http.Request) 
 
 	// 5. Persist to PostgreSQL
 	if err := s.snapshotRepo.SaveSnapshot(r.Context(), newEnv, username); err != nil {
-		writeErrorResponse(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to persist snapshot: "+err.Error())
+		log.Printf("publish: failed to persist snapshot: %v", err)
+		writeErrorResponse(w, r, http.StatusInternalServerError, "INTERNAL_ERROR", "Failed to persist snapshot")
 		return
 	}
 
@@ -108,7 +157,9 @@ func (s *APIServer) HandlePublishPolicy(w http.ResponseWriter, r *http.Request) 
 
 	// Mark draft as active / published
 	draft.Status = "published"
-	_ = s.policyRepo.UpdateDraft(r.Context(), draft)
+	if err := s.policyRepo.UpdateDraft(r.Context(), draft); err != nil {
+		log.Printf("publish: failed to mark draft published: %v", err)
+	}
 
 	resp := controlv1.PolicyPublishResponse{
 		PublishedAt:     newEnv.CreatedAt.AsTime(),
