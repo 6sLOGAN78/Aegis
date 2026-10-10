@@ -69,7 +69,8 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
         {
           reason: quarantineReason.trim(),
           expires_at: expiresAt,
-        }
+        },
+        { idempotencyKey: crypto.randomUUID() }
       );
     },
     onSuccess: (data) => {
@@ -92,7 +93,7 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
       return apiClient.post<{ status: string; jti: string }>('/control/v1/revocations', {
         jti: jti.trim(),
         reason: revokeReason.trim() || 'ADMINISTRATIVE_TOKEN_REVOCATION',
-      });
+      }, { idempotencyKey: crypto.randomUUID() });
     },
     onSuccess: (data) => {
       setSuccessBanner(`Token JTI "${data.jti}" successfully revoked cluster-wide.`);
@@ -110,7 +111,9 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
     mutationFn: async (id: string) => {
       setErrorBanner(null);
       setSuccessBanner(null);
-      return apiClient.delete(`/control/v1/principals/${encodeURIComponent(id)}/quarantine`);
+      return apiClient.delete(`/control/v1/principals/${encodeURIComponent(id)}/quarantine`, {
+        idempotencyKey: crypto.randomUUID(),
+      });
     },
     onSuccess: (_, id) => {
       setSuccessBanner(`Principal "${id}" unquarantined successfully.`);
