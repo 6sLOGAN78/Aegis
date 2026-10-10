@@ -18,8 +18,8 @@ import (
 )
 
 func anyAuditArgs() []any {
-	args := make([]any, 20)
-	for i := 0; i < 20; i++ {
+	args := make([]any, 21)
+	for i := 0; i < 21; i++ {
 		args[i] = pgxmock.AnyArg()
 	}
 	return args
@@ -317,7 +317,7 @@ type argMatcher func(v any) bool
 
 func (m argMatcher) Match(v any) bool { return m(v) }
 
-// auditArgsWith returns 20 AnyArg matchers with the given index overrides.
+// auditArgsWith returns 21 AnyArg matchers with the given index overrides.
 func auditArgsWith(overrides map[int]any) []any {
 	args := anyAuditArgs()
 	for i, v := range overrides {
