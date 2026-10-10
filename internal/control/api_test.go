@@ -283,6 +283,26 @@ func TestControlAPI(t *testing.T) {
 		rec = do(http.MethodDelete, "/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine", "")
 		assert.Equal(t, http.StatusOK, rec.Code)
 
+		// CR-01: non-lowercase scheme canonicalises to the gateway's key,
+		// for the path form, the body form and unquarantine.
+		rec = do(http.MethodPost, "/control/v1/principals/SPIFFE%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine", `{"reason":"x"}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(1), exists(key))
+		assert.Equal(t, int64(0), exists("quarantine:principal:SPIFFE://aegis.local/workload/orders"))
+		rec = do(http.MethodDelete, "/control/v1/principals/Spiffe%3A%2F%2FAEGIS.LOCAL%2Fworkload%2Forders/quarantine", "")
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(0), exists(key))
+		rec = do(http.MethodPost, "/control/v1/quarantine", `{"principal_id":"SPIFFE://aegis.local/workload/orders","reason":"x"}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(1), exists(key))
+		rec = do(http.MethodDelete, "/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine", "")
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(0), exists(key))
+
+		// CR-01: whitespace-padded body id is rejected, not stored verbatim
+		rec = do(http.MethodPost, "/control/v1/quarantine", `{"principal_id":" spiffe://aegis.local/workload/orders","reason":"x"}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
 		// body form without principal_id
 		rec = do(http.MethodPost, "/control/v1/quarantine", `{"reason":"x"}`)
 		assert.Equal(t, http.StatusBadRequest, rec.Code)
@@ -300,6 +320,10 @@ func TestControlAPI(t *testing.T) {
 			"/control/v1/principals/spiffe:%2F%2Fevil.local%2Fworkload%2Forders/quarantine",
 			"/control/v1/principals/a%2541/quarantine",
 			"/control/v1/principals/" + long + "/quarantine",
+			// CR-01: leading/trailing whitespace and non-spiffe URI shapes
+			"/control/v1/principals/%20spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine",
+			"/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders%20/quarantine",
+			"/control/v1/principals/https%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine",
 		} {
 			rec = do(http.MethodPost, target, `{"reason":"x"}`)
 			assert.Equal(t, http.StatusBadRequest, rec.Code, target)

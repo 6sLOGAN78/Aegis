@@ -44,7 +44,13 @@ func canonicalPrincipalID(raw string) (string, error) {
 	if strings.Contains(id, "%") {
 		return "", fmt.Errorf("principal id contains invalid percent-encoding")
 	}
-	if strings.HasPrefix(id, "spiffe://") {
+	if strings.TrimSpace(id) != id {
+		return "", fmt.Errorf("principal id has leading or trailing whitespace")
+	}
+	// Classify SPIFFE ids without regard to scheme case (url.Parse, and so
+	// the gateway, lowercases the scheme). Anything URI-shaped must parse
+	// strictly; it never falls through as an opaque user id (fail closed).
+	if looksLikeSPIFFE(id) {
 		canon, err := identity.ParseSPIFFEID(id, quarantineTrustDomain)
 		if err != nil {
 			return "", fmt.Errorf("invalid SPIFFE principal id: %w", err)
@@ -52,6 +58,16 @@ func canonicalPrincipalID(raw string) (string, error) {
 		return canon, nil
 	}
 	return id, nil
+}
+
+// looksLikeSPIFFE reports whether id must be validated as a SPIFFE id: it has
+// a "spiffe:" scheme in any case, or it is URI-shaped ("://").
+func looksLikeSPIFFE(id string) bool {
+	const scheme = "spiffe:"
+	if len(id) >= len(scheme) && strings.EqualFold(id[:len(scheme)], scheme) {
+		return true
+	}
+	return strings.Contains(id, "://")
 }
 
 // pathPrincipalID returns the still-encoded {id} path parameter. chi returns
