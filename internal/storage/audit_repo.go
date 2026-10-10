@@ -90,7 +90,7 @@ func (r *AuditRepo) ListAuditEvents(ctx context.Context, params ListAuditEventsP
 	query := `
 SELECT event_id, event_type, request_id, timestamp, principal_id, principal_kind,
        roles, service_id, route_id, http_method, request_path, decision, reason_code,
-       snapshot_version, http_status, duration_ms
+       snapshot_version, http_status, duration_ms, jti
 FROM audit_events
 WHERE timestamp >= $1 AND timestamp <= $2`
 
@@ -143,6 +143,7 @@ WHERE timestamp >= $1 AND timestamp <= $2`
 			snapVer                                                      int64
 			httpStatus                                                   *int
 			durationMs                                                   *float64
+			jti                                                          *string
 			ts                                                           time.Time
 		)
 
@@ -163,6 +164,7 @@ WHERE timestamp >= $1 AND timestamp <= $2`
 			&snapVer,
 			&httpStatus,
 			&durationMs,
+			&jti,
 		); err != nil {
 			return nil, fmt.Errorf("failed to scan audit event: %w", err)
 		}
@@ -204,6 +206,7 @@ WHERE timestamp >= $1 AND timestamp <= $2`
 			SnapshotVersion: snapVer,
 			StatusCode:      httpStatus,
 			DurationMs:      durInt,
+			Jti:             jti,
 		})
 	}
 
@@ -229,7 +232,7 @@ WHERE timestamp >= $1 AND timestamp <= $2`
 const getAuditEventQuery = `
 SELECT event_id, event_type, request_id, timestamp, principal_id, principal_kind,
        roles, service_id, route_id, http_method, request_path, decision, reason_code,
-       snapshot_version, http_status, duration_ms
+       snapshot_version, http_status, duration_ms, jti
 FROM audit_events
 WHERE event_id = $1
 LIMIT 1;`
@@ -244,6 +247,7 @@ func (r *AuditRepo) GetAuditEvent(ctx context.Context, eventID string) (*control
 		snapVer                                                      int64
 		httpStatus                                                   *int
 		durationMs                                                   *float64
+		jti                                                          *string
 		ts                                                           time.Time
 	)
 
@@ -270,6 +274,7 @@ func (r *AuditRepo) GetAuditEvent(ctx context.Context, eventID string) (*control
 		&snapVer,
 		&httpStatus,
 		&durationMs,
+		&jti,
 	)
 	if err != nil {
 		if errors.Is(err, pgx.ErrNoRows) {
@@ -315,5 +320,6 @@ func (r *AuditRepo) GetAuditEvent(ctx context.Context, eventID string) (*control
 		SnapshotVersion: snapVer,
 		StatusCode:      httpStatus,
 		DurationMs:      durInt,
+		Jti:             jti,
 	}, nil
 }

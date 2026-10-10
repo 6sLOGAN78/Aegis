@@ -16,6 +16,7 @@ export interface AuditEvent {
   decision: AuditEventDecision;
   reason_code: string;
   snapshot_version: number;
+  jti?: string;
   status_code?: number;
   duration_ms?: number;
   roles?: string[];
@@ -144,9 +145,26 @@ export interface QuarantineRecord {
 
 export interface QuarantineRequest {
   reason: string;
+  principal_id?: string;
   actor?: string;
   expires_at?: string;
   ttl_seconds?: number;
+}
+
+export interface QuarantineListResponse {
+  quarantines: QuarantineRecord[];
+}
+
+export interface RevokeTokenRequest {
+  jti: string;
+  reason?: string;
+  ttl_seconds?: number;
+}
+
+export interface RevokeTokenResponse {
+  status: string;
+  jti: string;
+  revoked_at: string;
 }
 
 export interface UnquarantineRequest {
