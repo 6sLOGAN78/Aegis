@@ -324,6 +324,16 @@ Plans:
 Plans:
 - [ ] TBD (run /gsd-plan-phase 10 to break down)
 
+### Phase 11: Close gap B8: wire key rotation and DR quarantine reconstruction (REV-03, AUTH-01, CTRL-02)
+
+**Goal:** Rotation and DR code that today has only test callers runs in production. Covers B8: the gateway loads trusted keysets via AddTrustedKey/SetTrustedKeys (verifier.go) so signing keys rotate with zero downtime, and ReconstructQuarantines (store.go) runs at startup before readiness so quarantines survive a Redis loss.
+**Requirements**: REV-03, AUTH-01, CTRL-02
+**Depends on:** Phase 10
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 11 to break down)
+
 ---
 
 ## Progress
