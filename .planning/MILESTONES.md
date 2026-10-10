@@ -1,6 +1,8 @@
 # Milestones
 
-## v1.0 Aegis Distributed Zero-Trust Access Gateway (Shipped: 2026-10-07)
+## v1.0 Aegis Distributed Zero-Trust Access Gateway (Shipped: 2026-10-07 — REOPENED 2026-10-08 for gap closure)
+
+> Re-audit on 2026-10-08 found 24/38 requirements wired end to end and 8 integration blockers. See [v1.0-MILESTONE-AUDIT.md](v1.0-MILESTONE-AUDIT.md). The audit figures below are from the superseded 2026-10-07 audit.
 
 **Phases completed:** 7 phases (00 through 06), 25 plans, 55 tasks  
 **Codebase:** 26,710 LOC Go, 3,050 LOC TypeScript, 264 LOC Rego  
