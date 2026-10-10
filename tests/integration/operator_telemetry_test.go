@@ -422,11 +422,11 @@ decision := {"allow": true, "reason_code": "RULE_AUTHORIZED"} if {
 	auditRows := mockDB.NewRows([]string{
 		"event_id", "event_type", "request_id", "timestamp", "principal_id", "principal_kind",
 		"roles", "service_id", "route_id", "http_method", "request_path", "decision", "reason_code",
-		"snapshot_version", "http_status", "duration_ms",
+		"snapshot_version", "http_status", "duration_ms", "jti",
 	}).AddRow(
 		eventID, "decision", reqUUID, now, "user_legitimate_42", &kind,
 		[]byte(`["orders.read"]`), "orders", "orders.list", &method, &path, "allow", "RULE_AUTHORIZED",
-		int64(2), &httpStatus, &durMs,
+		int64(2), &httpStatus, &durMs, (*string)(nil),
 	)
 
 	mockDB.ExpectQuery(regexp.QuoteMeta("SELECT event_id, event_type, request_id, timestamp, principal_id, principal_kind")).
