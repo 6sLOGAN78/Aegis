@@ -23,6 +23,15 @@ func (s *APIServer) HandleCreatePolicyDraft(w http.ResponseWriter, r *http.Reque
 		return
 	}
 
+	if req.PolicyId == "" || !validIDRegex.MatchString(req.PolicyId) {
+		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "Invalid policy_id")
+		return
+	}
+	if s.policyRepo == nil {
+		writeErrorResponse(w, r, http.StatusServiceUnavailable, "SERVICE_UNAVAILABLE", "Storage backend unavailable")
+		return
+	}
+
 	username := "admin"
 	if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
 		username = sess.Username
