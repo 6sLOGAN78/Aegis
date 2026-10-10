@@ -110,6 +110,7 @@ Recent decisions affecting current work:
 - Phase 7 added: Close gaps B1, B3, B4: align compose configs with current binaries (REV-03, AUD-03)
 - Phase 8 added: Close gap B7: route denials and completion events to the audit spool (AUD-03, AUD-04)
 - Phase 9 added: Close gaps B9, B10: jti revocation and SPIFFE quarantine keys (REV-03, AUTH-04, OPS-01)
+- Phase 10 added: Close gaps B5, B6: dashboard and control-plane flows (OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02)
 
 ### Pending Todos
 

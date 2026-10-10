@@ -314,6 +314,16 @@ Plans:
 
 - [x] 09-08-PLAN.md — Live smoke on mvp, hardened, distributed (human checkpoint)
 
+### Phase 10: Close gaps B5, B6: dashboard and control-plane flows (OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02)
+
+**Goal:** Dashboard author → validate → publish → swap works end to end, and the convergence view shows healthy gateways as converged. Covers B5 (periodic snapshot ack or control-plane Ping so gateways are not falsely "partitioned" after 60s), B6 (dashboard publish 404: save the draft and align the default policy id with the seeded one), publish-time Rego validation (CTRL-01), identity mappings at publish (CTRL-02), and OpenAPI drift / idempotency (OPS-01, OPS-02).
+**Requirements**: OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02
+**Depends on:** Phase 9
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 10 to break down)
+
 ---
 
 ## Progress
