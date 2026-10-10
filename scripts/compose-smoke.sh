@@ -17,7 +17,7 @@
 #   A4  (assumption, non-fatal) a quarantined principal is denied
 #   DISK  pre-flight: exits early when the Docker root filesystem is more than 85% full
 #   REV-03 JTI  (B9) revoke one token's jti: every gateway replica answers 403 TOKEN_REVOKED
-#       within 5s ("denied after Xs", polled per replica), a fresh token still gets 200, and
+#       within 5s ("denied after Xs since control call", all replicas polled in parallel), a fresh token still gets 200, and
 #       the audit rows carry the jti
 #   WORKLOAD QUARANTINE  (B10) the :9443 orders workload is quarantined via the @uri-encoded
 #       SPIFFE path and via POST /control/v1/quarantine {principal_id}; PRINCIPAL_QUARANTINED
@@ -188,39 +188,57 @@ mapfile -t GATEWAYS < <(dc config --services 2>/dev/null | grep '^gateway' || tr
 # replica_poll LABEL WANT_STATUS WANT_BODY CURL_ARGS... : right after a control call
 # returned 200, poll every gateway replica directly (dc exec curl against 127.0.0.1)
 # until it answers WANT_STATUS with WANT_BODY in the response, and fail if any replica
-# takes more than 5s. Prints "<label>: <g> denied after <el>s (includes exec latency)".
+# takes more than 5s. All replicas are polled IN PARALLEL from one t0 taken right after
+# the control call, so each figure is that replica's own convergence time since the
+# control call (D-15), independent of replica order or how slow the other replicas are.
+# Prints "<label>: <g> denied after <el>s since control call (includes exec latency)".
 replica_poll() {
   local label="$1" want_status="$2" want_body="$3"
   shift 3
-  local g t0 now el out status body
+  local g t0 rdir res verdict el status
   t0="$(date +%s.%N)"
   if [ "${#GATEWAYS[@]}" -eq 0 ]; then
     fail "${label}" "no gateway services found via dc config --services"
     return 1
   fi
+  rdir="$(mktemp -d)"
   for g in "${GATEWAYS[@]}"; do
-    while :; do
-      out="$(dc exec -T "${g}" curl -s -w '\n%{http_code}' "$@" 2>/dev/null || true)"
-      status="${out##*$'\n'}"
-      body="${out%$'\n'*}"
-      now="$(date +%s.%N)"
-      el="$(awk -v a="${now}" -v b="${t0}" 'BEGIN { printf "%.2f", a - b }')"
-      if [ "${status}" = "${want_status}" ] && { [ -z "${want_body}" ] || [[ "${body}" == *"${want_body}"* ]]; }; then
-        echo "${label}: ${g} denied after ${el}s (includes exec latency)"
-        if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
-          fail "${label} ${g}" "propagation took ${el}s, limit 5s"
-        else
-          pass "${label} ${g} within 5s"
+    (
+      local out body now
+      while :; do
+        out="$(dc exec -T "${g}" curl -s -w '\n%{http_code}' "$@" </dev/null 2>/dev/null || true)"
+        status="${out##*$'\n'}"
+        body="${out%$'\n'*}"
+        now="$(date +%s.%N)"
+        el="$(awk -v a="${now}" -v b="${t0}" 'BEGIN { printf "%.2f", a - b }')"
+        if [ "${status}" = "${want_status}" ] && { [ -z "${want_body}" ] || [[ "${body}" == *"${want_body}"* ]]; }; then
+          echo "ok ${el} ${status}" >"${rdir}/${g}"
+          exit 0
         fi
-        break
-      fi
-      if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
-        fail "${label} ${g}" "no HTTP ${want_status} ${want_body} within 5s (last HTTP ${status:-none})"
-        break
-      fi
-      sleep 0.2
-    done
+        if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+          echo "timeout ${el} ${status:-none}" >"${rdir}/${g}"
+          exit 0
+        fi
+        sleep 0.2
+      done
+    ) &
   done
+  wait
+  for g in "${GATEWAYS[@]}"; do
+    res="$(cat "${rdir}/${g}" 2>/dev/null || echo "timeout ? none")"
+    read -r verdict el status <<<"${res}"
+    if [ "${verdict}" = "ok" ]; then
+      echo "${label}: ${g} denied after ${el}s since control call (includes exec latency)"
+      if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+        fail "${label} ${g}" "propagation took ${el}s, limit 5s"
+      else
+        pass "${label} ${g} within 5s"
+      fi
+    else
+      fail "${label} ${g}" "no HTTP ${want_status} ${want_body} within 5s (last HTTP ${status})"
+    fi
+  done
+  rm -rf "${rdir}"
 }
 
 # gw_code TOKEN PATH prints the HTTP status code from the user-facing listener.
