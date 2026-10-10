@@ -80,10 +80,10 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 			event_id, event_type, request_id, timestamp, event_date,
 			principal_id, principal_kind, roles, service_id, route_id,
 			http_method, request_path, decision, reason_code, snapshot_version,
-			http_status, duration_ms, client_ip, error_code, suppressed_count
+			http_status, duration_ms, client_ip, error_code, suppressed_count, jti
 		) VALUES (
 			$1, $2, $3, $4, $5, $6, $7, $8, $9, $10,
-			$11, $12, $13, $14, $15, $16, $17, $18, $19, $20
+			$11, $12, $13, $14, $15, $16, $17, $18, $19, $20, $21
 		) ON CONFLICT (event_date, event_id) DO NOTHING;
 	`
 
@@ -123,6 +123,11 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 			suppressed = e.SuppressedCount
 		}
 
+		var jti any
+		if e.JTI != "" {
+			jti = e.JTI
+		}
+
 		rolesJSON := "[]"
 		if len(e.PrincipalRoles) > 0 {
 			if b, err := json.Marshal(e.PrincipalRoles); err == nil {
@@ -151,6 +156,7 @@ func (w *AuditWorker) ProcessBatch(ctx context.Context, events []CompletionEvent
 			e.ClientIP,
 			e.ErrorCode,
 			suppressed,
+			jti,
 		)
 	}
 

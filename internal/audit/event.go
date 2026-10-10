@@ -62,6 +62,9 @@ type CompletionEvent struct {
 	EventType string `json:"event_type,omitempty"`
 	// SuppressedCount is set only on summary rows that stand for suppressed duplicate denials.
 	SuppressedCount int `json:"suppressed_count,omitempty"`
+	// JTI is the token id of the credential the request presented (D-07). Appended last and
+	// omitempty so old WAL frames still decode and old workers ignore it.
+	JTI string `json:"jti,omitempty"`
 }
 
 // Normalize makes every string field safe for its audit_events column: it strips
@@ -87,6 +90,7 @@ func (e *CompletionEvent) Normalize() {
 	e.ReasonCode = clipString(e.ReasonCode, 64)
 	e.ClientIP = clipString(e.ClientIP, 64)
 	e.ErrorCode = clipString(e.ErrorCode, 64)
+	e.JTI = clipString(e.JTI, 128)
 	e.CanonicalPath = clipString(e.CanonicalPath, MaxCanonicalPathBytes)
 	e.EventID = normalizeID(e.EventID)
 	e.RequestID = normalizeID(e.RequestID)
