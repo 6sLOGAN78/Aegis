@@ -291,14 +291,14 @@ Plans:
 **Goal:** Close v1.0 audit blockers B9 and B10. The demo issuer requires seeded username/password and issues a jti; JTI revocation and workload (SPIFFE) quarantine are denied on every gateway replica within 5s, proven live on mvp, hardened and distributed. Decisions in 09-CONTEXT.md.
 **Requirements**: REV-03, AUTH-04, OPS-01 (quarantine/revocation routes only)
 **Depends on:** Phase 8
-**Plans:** 8 plans
+**Plans:** 3/8 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 09-01-PLAN.md — Issuer username/password login + jti; compose password env
-- [ ] 09-02-PLAN.md — Audit jti write path (event, context, worker, migration 000004)
-- [ ] 09-03-PLAN.md — OpenAPI additions, regenerated types, audit read API jti
+- [x] 09-01-PLAN.md — Issuer username/password login + jti; compose password env
+- [x] 09-02-PLAN.md — Audit jti write path (event, context, worker, migration 000004)
+- [x] 09-03-PLAN.md — OpenAPI additions, regenerated types, audit read API jti
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
@@ -332,4 +332,4 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 | 6. Production Hardening & Operational Runbooks | 3/3 | Complete | 2026-10-07 |
 | 7. Close gaps B1, B3, B4 (compose alignment) | 6/6 | Complete | 2026-10-09 |
 | 8. Close gap B7 (denials and completions to the audit spool) | 12/12 | Complete | 2026-10-09 |
-| 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 0/0 | Not started | - |
+| 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 3/8 | In Progress|  |
