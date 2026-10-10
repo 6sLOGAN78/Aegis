@@ -433,6 +433,21 @@ func TestSeedService(t *testing.T) {
 	}
 }
 
+func TestDemoIssuerCredentials(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			issuer, ok := services["demo-issuer"]
+			require.True(t, ok, "%s: demo-issuer service missing", profile)
+			env := envMap(issuer)
+			assert.Equal(t, "8085", env["PORT"], "%s demo-issuer: PORT", profile)
+			for _, k := range []string{"AEGIS_DEMO_PASSWORD_DEVELOPER", "AEGIS_DEMO_PASSWORD_FINANCE", "AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN"} {
+				assert.NotEmpty(t, env[k], "%s demo-issuer: %s must be set", profile, k)
+			}
+		})
+	}
+}
+
 func TestControlPlaneHealthcheck(t *testing.T) {
 	for _, profile := range profiles {
 		t.Run(profile, func(t *testing.T) {

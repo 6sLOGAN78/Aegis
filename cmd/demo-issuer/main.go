@@ -2,6 +2,8 @@ package main
 
 import (
 	"crypto/ed25519"
+	"crypto/sha256"
+	"crypto/subtle"
 	"encoding/base64"
 	"encoding/json"
 	"log"
@@ -12,20 +14,51 @@ import (
 	"time"
 
 	"github.com/golang-jwt/jwt/v5"
+	"github.com/google/uuid"
 )
 
 // DefaultDeterministicSeed is a 32-byte seed ensuring deterministic demo key generation across restarts.
 var DefaultDeterministicSeed = []byte("aegis-demo-issuer-secret-seed-32")
 
 type SeedUser struct {
-	UserID string   `json:"user_id"`
-	Roles  []string `json:"roles"`
+	UserID   string   `json:"user_id"`
+	Roles    []string `json:"roles"`
+	Password string   `json:"-"`
 }
 
 var seedDatabase = map[string]SeedUser{
 	"developer":         {UserID: "usr_developer_01", Roles: []string{"developer"}},
 	"finance":           {UserID: "usr_finance_01", Roles: []string{"finance"}},
 	"application-admin": {UserID: "usr_admin_01", Roles: []string{"application-admin"}},
+}
+
+// seedPasswordConfig maps each seeded username to its env var and demo default.
+var seedPasswordConfig = map[string]struct{ env, def string }{
+	"developer":         {"AEGIS_DEMO_PASSWORD_DEVELOPER", "demo-developer-pass"},
+	"finance":           {"AEGIS_DEMO_PASSWORD_FINANCE", "demo-finance-pass"},
+	"application-admin": {"AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN", "demo-admin-pass"},
+}
+
+// loadSeedPasswords populates seedDatabase passwords from env, falling back to
+// demo defaults and warning (user name only, never the value) for each default.
+func loadSeedPasswords() {
+	for name, cfg := range seedPasswordConfig {
+		u := seedDatabase[name]
+		if v := os.Getenv(cfg.env); v != "" {
+			u.Password = v
+		} else {
+			u.Password = cfg.def
+			log.Printf("WARN: using default demo password for user %q; set %s", name, cfg.env)
+		}
+		seedDatabase[name] = u
+	}
+}
+
+// passwordOK compares sha256 digests in constant time.
+func passwordOK(expected, supplied string) bool {
+	a := sha256.Sum256([]byte(expected))
+	b := sha256.Sum256([]byte(supplied))
+	return subtle.ConstantTimeCompare(a[:], b[:]) == 1
 }
 
 type IssuerServer struct {
@@ -92,20 +125,27 @@ func (s *IssuerServer) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	}
 
 	var req struct {
-		Role string `json:"role"`
+		Username string `json:"username"`
+		Password string `json:"password"`
 	}
-	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
+	dec := json.NewDecoder(r.Body)
+	dec.DisallowUnknownFields()
+	if err := dec.Decode(&req); err != nil || req.Username == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusBadRequest)
 		_ = json.NewEncoder(w).Encode(map[string]string{"error": "INVALID_REQUEST"})
 		return
 	}
 
-	user, ok := seedDatabase[req.Role]
-	if !ok {
+	user, known := seedDatabase[req.Username]
+	expected := user.Password
+	if !known {
+		expected = "aegis-dummy-password-for-unknown-users"
+	}
+	if !passwordOK(expected, req.Password) || !known || user.Password == "" {
 		w.Header().Set("Content-Type", "application/json")
 		w.WriteHeader(http.StatusUnauthorized)
-		_ = json.NewEncoder(w).Encode(map[string]string{"error": "UNKNOWN_ROLE"})
+		_ = json.NewEncoder(w).Encode(map[string]string{"error": "INVALID_CREDENTIALS"})
 		return
 	}
 
@@ -118,6 +158,7 @@ func (s *IssuerServer) HandleLogin(w http.ResponseWriter, r *http.Request) {
 			Issuer:    s.issuer,
 			Audience:  jwt.ClaimStrings{s.audience},
 			Subject:   user.UserID,
+			ID:        uuid.NewString(),
 			IssuedAt:  jwt.NewNumericDate(now),
 			ExpiresAt: jwt.NewNumericDate(now.Add(5 * time.Minute)),
 		},
@@ -134,6 +175,7 @@ func (s *IssuerServer) HandleLogin(w http.ResponseWriter, r *http.Request) {
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(map[string]interface{}{
 		"access_token": signedToken,
+		"jti":          claims.ID,
 		"token_type":   "Bearer",
 		"expires_in":   300,
 	})
@@ -165,6 +207,7 @@ func main() {
 		port = "8085"
 	}
 
+	loadSeedPasswords()
 	privKey := ed25519.NewKeyFromSeed(DefaultDeterministicSeed)
 	server := NewIssuerServer(privKey, "aegis-issuer", "aegis-gateway")
 

@@ -11,10 +11,78 @@ import (
 
 	"aegis/internal/identity"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/require"
 )
 
+func login(t *testing.T, url string, body map[string]string) (*http.Response, map[string]interface{}) {
+	t.Helper()
+	b, _ := json.Marshal(body)
+	resp, err := http.Post(url+"/login", "application/json", bytes.NewReader(b))
+	require.NoError(t, err)
+	t.Cleanup(func() { resp.Body.Close() })
+	var res map[string]interface{}
+	_ = json.NewDecoder(resp.Body).Decode(&res)
+	return resp, res
+}
+
+func TestDemoIssuerJti(t *testing.T) {
+	t.Setenv("AEGIS_DEMO_PASSWORD_DEVELOPER", "dev-pw")
+	t.Setenv("AEGIS_DEMO_PASSWORD_FINANCE", "fin-pw")
+	t.Setenv("AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN", "adm-pw")
+	loadSeedPasswords()
+	t.Cleanup(func() {
+		t.Setenv("AEGIS_DEMO_PASSWORD_DEVELOPER", "")
+		t.Setenv("AEGIS_DEMO_PASSWORD_FINANCE", "")
+		t.Setenv("AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN", "")
+		loadSeedPasswords()
+	})
+
+	privKey := ed25519.NewKeyFromSeed(DefaultDeterministicSeed)
+	ts := httptest.NewServer(NewIssuerServer(privKey, "aegis-issuer", "aegis-gateway").Routes())
+	defer ts.Close()
+	validator := identity.NewTokenValidator("aegis-issuer", "aegis-gateway", privKey.Public())
+
+	seen := map[string]bool{}
+	for i := 0; i < 2; i++ {
+		resp, res := login(t, ts.URL, map[string]string{"username": "developer", "password": "dev-pw"})
+		require.Equal(t, http.StatusOK, resp.StatusCode)
+		claims, err := validator.ValidateBearerToken("Bearer " + res["access_token"].(string))
+		require.NoError(t, err)
+		_, err = uuid.Parse(claims.ID)
+		require.NoError(t, err)
+		require.Equal(t, claims.ID, res["jti"])
+		require.False(t, seen[claims.ID])
+		seen[claims.ID] = true
+	}
+
+	for _, tc := range []struct{ user, pw string }{{"finance", "fin-pw"}, {"application-admin", "adm-pw"}} {
+		resp, _ := login(t, ts.URL, map[string]string{"username": tc.user, "password": tc.pw})
+		require.Equal(t, http.StatusOK, resp.StatusCode, tc.user)
+	}
+
+	for name, body := range map[string]map[string]string{
+		"wrong":   {"username": "developer", "password": "nope"},
+		"missing": {"username": "developer"},
+		"unknown": {"username": "intruder", "password": "dev-pw"},
+	} {
+		resp, res := login(t, ts.URL, body)
+		require.Equal(t, http.StatusUnauthorized, resp.StatusCode, name)
+		require.Equal(t, "INVALID_CREDENTIALS", res["error"], name)
+	}
+
+	resp, res := login(t, ts.URL, map[string]string{"role": "developer"})
+	require.Equal(t, http.StatusBadRequest, resp.StatusCode)
+	require.Equal(t, "INVALID_REQUEST", res["error"])
+
+	r2, err := http.Post(ts.URL+"/login", "application/json", bytes.NewReader(nil))
+	require.NoError(t, err)
+	r2.Body.Close()
+	require.Equal(t, http.StatusBadRequest, r2.StatusCode)
+}
+
 func TestDemoIssuer(t *testing.T) {
+	loadSeedPasswords()
 	privKey := ed25519.NewKeyFromSeed(DefaultDeterministicSeed)
 	server := NewIssuerServer(privKey, "aegis-issuer", "aegis-gateway")
 	ts := httptest.NewServer(server.Routes())
@@ -35,7 +103,7 @@ func TestDemoIssuer(t *testing.T) {
 
 		for _, tc := range roles {
 			t.Run(tc.role, func(t *testing.T) {
-				body, _ := json.Marshal(map[string]string{"role": tc.role})
+				body, _ := json.Marshal(map[string]string{"username": tc.role, "password": seedDatabase[tc.role].Password})
 				resp, err := http.Post(ts.URL+"/login", "application/json", bytes.NewReader(body))
 				require.NoError(t, err)
 				defer resp.Body.Close()
@@ -58,8 +126,8 @@ func TestDemoIssuer(t *testing.T) {
 		}
 	})
 
-	t.Run("Rejects unknown role with 401", func(t *testing.T) {
-		body, _ := json.Marshal(map[string]string{"role": "unknown-intruder"})
+	t.Run("Rejects unknown user with 401", func(t *testing.T) {
+		body, _ := json.Marshal(map[string]string{"username": "unknown-intruder", "password": "x"})
 		resp, err := http.Post(ts.URL+"/login", "application/json", bytes.NewReader(body))
 		require.NoError(t, err)
 		defer resp.Body.Close()
@@ -67,7 +135,7 @@ func TestDemoIssuer(t *testing.T) {
 		require.Equal(t, http.StatusUnauthorized, resp.StatusCode)
 		var res map[string]string
 		_ = json.NewDecoder(resp.Body).Decode(&res)
-		require.Equal(t, "UNKNOWN_ROLE", res["error"])
+		require.Equal(t, "INVALID_CREDENTIALS", res["error"])
 	})
 
 	t.Run("Rate limiting enforces max 20 attempts per minute per IP", func(t *testing.T) {
@@ -76,7 +144,7 @@ func TestDemoIssuer(t *testing.T) {
 		isolatedTs := httptest.NewServer(isolatedServer.Routes())
 		defer isolatedTs.Close()
 
-		body, _ := json.Marshal(map[string]string{"role": "developer"})
+		body, _ := json.Marshal(map[string]string{"username": "developer", "password": seedDatabase["developer"].Password})
 
 		// 20 rapid requests should all succeed
 		for i := 1; i <= 20; i++ {
