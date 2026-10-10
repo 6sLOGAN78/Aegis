@@ -59,6 +59,7 @@ var reasonTable = map[string]reasonClass{
 	"ROUTE_NOT_FOUND":                  classIdentified,
 	"PRINCIPAL_QUARANTINED":            classIdentified,
 	"TOKEN_REVOKED":                    classIdentified,
+	"TOKEN_MISSING_JTI":                classIdentified,
 	"DENIED_DEFAULT":                   classIdentified,
 	"DENIED_WORKLOAD_FORBIDDEN":        classIdentified,
 	"DENIED_DEVELOPER_ADMIN_FORBIDDEN": classIdentified,

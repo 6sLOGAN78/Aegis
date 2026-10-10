@@ -43,7 +43,7 @@ func govAnon(reason string) *CompletionEvent {
 func TestGovernorSuppression(t *testing.T) {
 	reasons := []string{
 		"RATE_LIMIT_EXCEEDED", "AUDIT_SPOOL_SATURATED", "ROUTE_NOT_FOUND",
-		"PRINCIPAL_QUARANTINED", "TOKEN_REVOKED", "EVALUATION_ERROR",
+		"PRINCIPAL_QUARANTINED", "TOKEN_REVOKED", "TOKEN_MISSING_JTI", "EVALUATION_ERROR",
 		"DENIED_EMPTY_RESULT", "MALFORMED_DECISION", "DENIED_DEFAULT",
 	}
 	for _, reason := range reasons {
