@@ -25,7 +25,7 @@ This runbook is invoked when a credential compromise or anomalous behavior requi
 4. Fill in the modal fields:
    - **Principal ID:** Enter the exact `sub` claim (e.g. `usr_compromised_9918`).
    - **Reason Code:** Select or type reason (e.g. `TOKEN_EXFILTRATION_INCIDENT`).
-   - **TTL / Duration:** Set duration (e.g., `24 Hours`, `7 Days`, or `Permanent`).
+   - **Expiry (`expires_at`):** Set duration (e.g., `24 Hours`, `7 Days`, or `Permanent`).
 5. **Typed Confirmation Gate:** Type `QUARANTINE` into the confirmation field to unlock the submit button.
 6. Click **"Confirm & Broadcast Quarantine"**.
 7. Confirm that the status badge updates to **"QUARANTINED"** and latency badge shows `< 50ms`.
@@ -34,47 +34,58 @@ This runbook is invoked when a credential compromise or anomalous behavior requi
 
 ## 3. Emergency Quarantine via Control Plane REST API
 
-For automated SIEM/SOAR webhooks or headless SRE terminal operations:
+For automated SIEM/SOAR webhooks or headless SRE terminal operations. The management API uses an operator **session cookie plus a CSRF header** (not a Bearer token; data plane Bearer credentials are rejected on management endpoints). The caller needs the `sec-ops` role.
 
 ```bash
-# 1. Authenticate with Control Plane Management Token
-MANAGEMENT_TOKEN=$(cat /etc/aegis/secrets/admin-token)
-
-# 2. Issue Emergency Quarantine Request
-curl -X POST http://control-plane:8084/control/v1/quarantine \
-  -H "Authorization: Bearer ${MANAGEMENT_TOKEN}" \
+# 1. Log in as an operator; store the session cookie and capture the csrf_token
+#    from the JSON response ({username, role, csrf_token, expires_at}).
+curl -sk -c cookies.txt -X POST https://control-plane:8084/control/v1/auth/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "principal_id": "usr_compromised_9918",
-    "reason": "CRITICAL_TOKEN_EXFILTRATION",
-    "ttl_seconds": 86400
-  }'
+  -d '{"username":"<operator>","password":"<operator-password>"}'
+CSRF_TOKEN=<csrf_token from the response>
 
-# Expected Response:
-# HTTP 200 OK
-# {"status":"success","principal_id":"usr_compromised_9918","quarantined_until":"2026-10-08T16:00:00Z"}
+# 2a. Path form. SPIFFE ids MUST be percent-encoded (an unencoded "/" returns 404):
+#     spiffe://aegis.local/workload/orders -> spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders
+curl -sk -b cookies.txt -X POST \
+  "https://control-plane:8084/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine" \
+  -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"reason":"CRITICAL_TOKEN_EXFILTRATION","expires_at":"2026-10-08T16:00:00Z"}'
+
+# 2b. Body form (no path encoding needed; principal_id in the body):
+curl -sk -b cookies.txt -X POST https://control-plane:8084/control/v1/quarantine \
+  -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"principal_id":"usr_compromised_9918","reason":"CRITICAL_TOKEN_EXFILTRATION","expires_at":"2026-10-08T16:00:00Z"}'
 ```
+
+Notes:
+- Quarantine duration is set with `expires_at` (RFC 3339 timestamp), not `ttl_seconds`. Omit it for the default duration.
+- Only `aegis.local` SPIFFE ids (`spiffe://aegis.local/...`) are accepted as workload principals.
+- Quarantine takes effect on every gateway replica within the **5 second** per-replica convergence target (ADR-0005).
 
 ---
 
-## 4. Emergency Mass JTI Revocation Procedure
+## 4. Emergency JTI Revocation Procedure
 
-When individual token JTIs must be invalidated without blacklisting the entire user account:
+When an individual token must be invalidated without blacklisting the entire user account. Every token minted by the demo issuer now carries a `jti`, returned in the issuer login response:
 
 ```bash
-# 1. Revoke Specific Token JTI
-curl -X POST http://control-plane:8084/control/v1/revocations \
-  -H "Authorization: Bearer ${MANAGEMENT_TOKEN}" \
+# 0. Issuer login: body is {username,password}; the response includes access_token and jti.
+curl -s -X POST http://demo-issuer:8085/login \
   -H "Content-Type: application/json" \
-  -d '{
-    "jti": "jti-compromised-token-uuid-1234",
-    "ttl_seconds": 3600
-  }'
+  -d '{"username":"developer","password":"<demo-password>"}'
 
-# Expected Response:
-# HTTP 200 OK
-# {"status":"revoked","jti":"jti-compromised-token-uuid-1234"}
+# 1. Revoke the token by jti (same session cookie + CSRF header as section 3).
+curl -sk -b cookies.txt -X POST https://control-plane:8084/control/v1/revocations \
+  -H "X-CSRF-Token: ${CSRF_TOKEN}" \
+  -H "Content-Type: application/json" \
+  -d '{"jti":"<jti from login response>","reason":"LEAKED_TOKEN","ttl_seconds":3600}'
 ```
+
+- `ttl_seconds` defaults to 24 hours if omitted; set it at least as long as the remaining token lifetime.
+- Tokens that carry **no `jti`** are denied by the gateway with `401 TOKEN_MISSING_JTI`, so a revoked token cannot be replayed by stripping the claim.
+- Revoked jtis are enforced across all replicas within the 5 second convergence target (ADR-0005).
 
 ---
 
@@ -105,8 +116,10 @@ Once an investigation is concluded and credentials have been securely reset:
 
 ```bash
 # 1. Remove Principal Quarantine via REST API
-curl -X DELETE http://control-plane:8084/control/v1/quarantine/usr_compromised_9918 \
-  -H "Authorization: Bearer ${MANAGEMENT_TOKEN}"
+#    (SPIFFE ids must be percent-encoded in the path, e.g. spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders)
+curl -sk -b cookies.txt -X DELETE \
+  "https://control-plane:8084/control/v1/principals/usr_compromised_9918/quarantine" \
+  -H "X-CSRF-Token: ${CSRF_TOKEN}"
 
 # 2. Verify Principal Access Restored with Fresh Token
 curl -i -H "Authorization: Bearer $(mint-fresh-token-for usr_compromised_9918)" http://gateway:8080/api/orders
