@@ -63,6 +63,26 @@ for tool in docker curl jq; do
   fi
 done
 
+# --- DISK pre-flight (D-17): statfs ratio of the Docker root, never df -------
+echo "=== DISK pre-flight ==="
+disk_root="$(docker info -f '{{.DockerRootDir}}' 2>/dev/null || true)"
+disk_b=""
+disk_f=""
+if [ -n "${disk_root}" ] && [ -d "${disk_root}" ]; then
+  read -r disk_b disk_f < <(stat -f -c '%b %f' "${disk_root}" 2>/dev/null || true) || true
+fi
+case "${disk_b}:${disk_f}" in
+  ''|:*|*:|*[!0-9:]*) echo "DISK SKIPPED: cannot measure" ;;
+  *)
+    disk_ratio="$(awk -v b="${disk_b}" -v f="${disk_f}" 'BEGIN { if (b > 0) printf "%.3f", (b - f) / b; else print "0" }')"
+    if awk -v r="${disk_ratio}" 'BEGIN { exit !(r > 0.85) }'; then
+      echo "DISK pre-flight failed: Docker root ${disk_root} is ${disk_ratio} full (limit 0.85); free space before running the smoke" >&2
+      exit 3
+    fi
+    echo "DISK ok: Docker root usage ratio ${disk_ratio}"
+    ;;
+esac
+
 FILE="${ROOT_DIR}/deployments/compose/docker-compose.${PROFILE}.yml"
 if [ ! -f "${FILE}" ]; then
   echo "compose file not found: ${FILE}" >&2
@@ -71,6 +91,7 @@ fi
 
 SMOKE_USER="${SMOKE_USER:-admin}"
 SMOKE_PASSWORD="${SMOKE_PASSWORD:-admin-secret}"
+SMOKE_DEV_PASSWORD="${SMOKE_DEV_PASSWORD:-demo-developer-pass}"
 SMOKE_SUPPRESS_WINDOW_SECS="${SMOKE_SUPPRESS_WINDOW_SECS:-60}"
 SMOKE_ROTATION_REQUESTS="${SMOKE_ROTATION_REQUESTS:-0}"
 case "${SMOKE_SUPPRESS_WINDOW_SECS}" in
@@ -135,11 +156,62 @@ cp_call() {
   fi
 }
 
-# dev_token prints a fresh developer access token (issuer is only reachable inside the network).
+# dev_login prints "<access_token> <jti>" for a fresh developer login (issuer is only
+# reachable inside the network). The body is built with jq --arg; nothing is echoed.
+dev_login() {
+  local body resp
+  body="$(jq -n --arg u developer --arg p "${SMOKE_DEV_PASSWORD}" '{username:$u,password:$p}')"
+  resp="$(dc exec -T "${GW}" curl -s -X POST -H 'Content-Type: application/json' \
+    -d "${body}" http://demo-issuer:8085/login 2>/dev/null || true)"
+  printf '%s' "${resp}" | jq -r '[(.access_token // ""), (.jti // "")] | join(" ")' 2>/dev/null || true
+}
+
+# dev_token prints a fresh developer access token.
 dev_token() {
-  dc exec -T "${GW}" curl -s -X POST -H 'Content-Type: application/json' \
-    -d '{"role":"developer"}' http://demo-issuer:8085/login 2>/dev/null \
-    | jq -r '.access_token // empty' 2>/dev/null || true
+  local out
+  out="$(dev_login)"
+  printf '%s\n' "${out%% *}"
+}
+
+# Gateway replicas (one per service whose name starts with gateway).
+mapfile -t GATEWAYS < <(dc config --services 2>/dev/null | grep '^gateway' || true)
+
+# replica_poll LABEL WANT_STATUS WANT_BODY CURL_ARGS... : right after a control call
+# returned 200, poll every gateway replica directly (dc exec curl against 127.0.0.1)
+# until it answers WANT_STATUS with WANT_BODY in the response, and fail if any replica
+# takes more than 5s. Prints "<label>: <g> denied after <el>s (includes exec latency)".
+replica_poll() {
+  local label="$1" want_status="$2" want_body="$3"
+  shift 3
+  local g t0 now el out status body
+  t0="$(date +%s.%N)"
+  if [ "${#GATEWAYS[@]}" -eq 0 ]; then
+    fail "${label}" "no gateway services found via dc config --services"
+    return 1
+  fi
+  for g in "${GATEWAYS[@]}"; do
+    while :; do
+      out="$(dc exec -T "${g}" curl -s -w '\n%{http_code}' "$@" 2>/dev/null || true)"
+      status="${out##*$'\n'}"
+      body="${out%$'\n'*}"
+      now="$(date +%s.%N)"
+      el="$(awk -v a="${now}" -v b="${t0}" 'BEGIN { printf "%.2f", a - b }')"
+      if [ "${status}" = "${want_status}" ] && { [ -z "${want_body}" ] || [[ "${body}" == *"${want_body}"* ]]; }; then
+        echo "${label}: ${g} denied after ${el}s (includes exec latency)"
+        if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+          fail "${label} ${g}" "propagation took ${el}s, limit 5s"
+        else
+          pass "${label} ${g} within 5s"
+        fi
+        break
+      fi
+      if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+        fail "${label} ${g}" "no HTTP ${want_status} ${want_body} within 5s (last HTTP ${status:-none})"
+        break
+      fi
+      sleep 0.2
+    done
+  done
 }
 
 # gw_code TOKEN PATH prints the HTTP status code from the user-facing listener.
