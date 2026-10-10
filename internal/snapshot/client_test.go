@@ -1,10 +1,13 @@
 package snapshot
 
 import (
+	"errors"
 	"math"
 	"sync"
 	"testing"
 	"time"
+
+	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
@@ -77,4 +80,33 @@ func TestStreamClient_StopIdempotent(t *testing.T) {
 		}()
 	}
 	wg.Wait()
+}
+
+func TestHeartbeat_AckOnVerifiedLease(t *testing.T) {
+	ack := buildHeartbeatAck("gw-1", 7, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, "")
+	assert.Equal(t, "gw-1", ack.GatewayId)
+	assert.Equal(t, int64(7), ack.ActiveVersion)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, ack.Status)
+	assert.NotNil(t, ack.AcknowledgedAt)
+}
+
+func TestHeartbeat_PreservesRejected(t *testing.T) {
+	status, msg := nextAckState(errors.New("bad signature"))
+	require.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, status)
+	require.NotEmpty(t, msg)
+	ack := buildHeartbeatAck("gw-1", 3, status, msg)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, ack.Status)
+	assert.NotEmpty(t, ack.ErrorMessage)
+
+	status, msg = nextAckState(nil)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, status)
+	assert.Empty(t, msg)
+}
+
+func TestHeartbeat_NoAckOnInvalidLease(t *testing.T) {
+	// The ack is sent only inside the VerifyLease err == nil branch; an
+	// unverifiable lease must fail verification.
+	v := NewVerifier()
+	err := v.VerifyLease(&snapshotv1.FreshnessLease{}, 1)
+	assert.Error(t, err)
 }
