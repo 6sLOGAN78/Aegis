@@ -32,15 +32,16 @@ func TestAuditRepo_ListAuditEvents_Default24h(t *testing.T) {
 	status := 200
 	kind := "user"
 	roles := []byte(`["orders.read"]`)
+	jti := "j-1"
 
 	rows := mock.NewRows([]string{
 		"event_id", "event_type", "request_id", "timestamp", "principal_id", "principal_kind",
 		"roles", "service_id", "route_id", "http_method", "request_path", "decision", "reason_code",
-		"snapshot_version", "http_status", "duration_ms",
+		"snapshot_version", "http_status", "duration_ms", "jti",
 	}).AddRow(
 		eventID, "decision", reqID, now, "user-123", &kind,
 		roles, "orders", "route-orders-get", &method, &path, "allow", "RULE_ALLOW",
-		int64(1), &status, &durMs,
+		int64(1), &status, &durMs, &jti,
 	)
 
 	// Expect query with default 24h bounding ($1, $2) and default limit 51 ($3)
@@ -62,6 +63,8 @@ func TestAuditRepo_ListAuditEvents_Default24h(t *testing.T) {
 	assert.Equal(t, "RULE_ALLOW", event.ReasonCode)
 	assert.Equal(t, 200, *event.StatusCode)
 	assert.Equal(t, 1, *event.DurationMs)
+	require.NotNil(t, event.Jti)
+	assert.Equal(t, "j-1", *event.Jti)
 	require.NotNil(t, event.Roles)
 	assert.Equal(t, []string{"orders.read"}, *event.Roles)
 
@@ -94,11 +97,11 @@ func TestAuditRepo_ListAuditEvents_WithFiltersAndPagination(t *testing.T) {
 	rows := mock.NewRows([]string{
 		"event_id", "event_type", "request_id", "timestamp", "principal_id", "principal_kind",
 		"roles", "service_id", "route_id", "http_method", "request_path", "decision", "reason_code",
-		"snapshot_version", "http_status", "duration_ms",
+		"snapshot_version", "http_status", "duration_ms", "jti",
 	}).
-		AddRow(id1, "decision", reqID, t1, "user-bad", &kind, roles, "orders", "route-orders-post", &method, &path, "deny", "POLICY_DENY", int64(1), &status, &durMs).
-		AddRow(id2, "decision", reqID, t2, "user-bad", &kind, roles, "orders", "route-orders-post", &method, &path, "deny", "POLICY_DENY", int64(1), &status, &durMs).
-		AddRow(id3, "decision", reqID, t3, "user-bad", &kind, roles, "orders", "route-orders-post", &method, &path, "deny", "POLICY_DENY", int64(1), &status, &durMs)
+		AddRow(id1, "decision", reqID, t1, "user-bad", &kind, roles, "orders", "route-orders-post", &method, &path, "deny", "POLICY_DENY", int64(1), &status, &durMs, (*string)(nil)).
+		AddRow(id2, "decision", reqID, t2, "user-bad", &kind, roles, "orders", "route-orders-post", &method, &path, "deny", "POLICY_DENY", int64(1), &status, &durMs, (*string)(nil)).
+		AddRow(id3, "decision", reqID, t3, "user-bad", &kind, roles, "orders", "route-orders-post", &method, &path, "deny", "POLICY_DENY", int64(1), &status, &durMs, (*string)(nil))
 
 	principalID := "user-bad"
 	serviceID := "orders"
@@ -150,11 +153,11 @@ func TestAuditRepo_GetAuditEvent(t *testing.T) {
 	rows := mock.NewRows([]string{
 		"event_id", "event_type", "request_id", "timestamp", "principal_id", "principal_kind",
 		"roles", "service_id", "route_id", "http_method", "request_path", "decision", "reason_code",
-		"snapshot_version", "http_status", "duration_ms",
+		"snapshot_version", "http_status", "duration_ms", "jti",
 	}).AddRow(
 		eventID, "decision", reqID, now, "service-cart", &kind,
 		roles, "orders", "route-orders-delete", &method, &path, "allow", "RULE_ALLOW",
-		int64(2), &status, &durMs,
+		int64(2), &status, &durMs, (*string)(nil),
 	)
 
 	mock.ExpectQuery(regexp.QuoteMeta("SELECT event_id, event_type, request_id, timestamp, principal_id, principal_kind")).
@@ -165,6 +168,7 @@ func TestAuditRepo_GetAuditEvent(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, eventID, event.EventId)
 	assert.Equal(t, "service-cart", event.PrincipalId)
+	assert.Nil(t, event.Jti)
 
 	// 2. Not found
 	notFoundID := uuid.New()
