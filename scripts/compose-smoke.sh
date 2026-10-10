@@ -33,7 +33,7 @@
 # (with --build --wait) and the teardown (with -v) themselves.
 #
 # Env: SMOKE_USER (default admin), SMOKE_PASSWORD (default: demo operator password),
-#      SMOKE_DEV_PASSWORD (default: demo developer password).
+#      SMOKE_DEV_PASSWORD (default: $AEGIS_DEMO_PASSWORD_DEVELOPER, else the demo developer password).
 #      SMOKE_SUPPRESS_WINDOW_SECS (default 60) must match the stack's
 #        AEGIS_AUDIT_SUPPRESS_WINDOW in seconds; the wait for the suppression summary row
 #        is 2x this plus 30 seconds.
@@ -100,7 +100,7 @@ fi
 
 SMOKE_USER="${SMOKE_USER:-admin}"
 SMOKE_PASSWORD="${SMOKE_PASSWORD:-admin-secret}"
-SMOKE_DEV_PASSWORD="${SMOKE_DEV_PASSWORD:-demo-developer-pass}"
+SMOKE_DEV_PASSWORD="${SMOKE_DEV_PASSWORD:-${AEGIS_DEMO_PASSWORD_DEVELOPER:-demo-developer-pass}}"
 SMOKE_SUPPRESS_WINDOW_SECS="${SMOKE_SUPPRESS_WINDOW_SECS:-60}"
 SMOKE_ROTATION_REQUESTS="${SMOKE_ROTATION_REQUESTS:-0}"
 case "${SMOKE_SUPPRESS_WINDOW_SECS}" in

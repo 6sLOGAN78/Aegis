@@ -173,9 +173,9 @@ services:
       - "8085:8085"
     environment:
       - PORT=8085
-      - AEGIS_DEMO_PASSWORD_DEVELOPER=demo-developer-pass
-      - AEGIS_DEMO_PASSWORD_FINANCE=demo-finance-pass
-      - AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN=demo-admin-pass
+      - AEGIS_DEMO_PASSWORD_DEVELOPER=${AEGIS_DEMO_PASSWORD_DEVELOPER:-demo-developer-pass}
+      - AEGIS_DEMO_PASSWORD_FINANCE=${AEGIS_DEMO_PASSWORD_FINANCE:-demo-finance-pass}
+      - AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN=${AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN:-demo-admin-pass}
     networks:
       - aegis-internal
 

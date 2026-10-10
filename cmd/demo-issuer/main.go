@@ -40,7 +40,9 @@ var seedPasswordConfig = map[string]struct{ env, def string }{
 }
 
 // loadSeedPasswords populates seedDatabase passwords from env, falling back to
-// demo defaults and warning (user name only, never the value) for each default.
+// demo defaults. It warns (user name only, never the value) whenever the
+// effective password is the public built-in default, whether it came from the
+// fallback or was set explicitly to that value (e.g. by a compose file).
 func loadSeedPasswords() {
 	for name, cfg := range seedPasswordConfig {
 		u := seedDatabase[name]
@@ -48,7 +50,9 @@ func loadSeedPasswords() {
 			u.Password = v
 		} else {
 			u.Password = cfg.def
-			log.Printf("WARN: using default demo password for user %q; set %s", name, cfg.env)
+		}
+		if passwordOK(cfg.def, u.Password) {
+			log.Printf("WARN: demo user %q is using the public default password; set %s", name, cfg.env)
 		}
 		seedDatabase[name] = u
 	}

@@ -5,6 +5,7 @@ import (
 	"crypto/ed25519"
 	"encoding/base64"
 	"encoding/json"
+	"log"
 	"net/http"
 	"net/http/httptest"
 	"testing"
@@ -79,6 +80,35 @@ func TestDemoIssuerJti(t *testing.T) {
 	require.NoError(t, err)
 	r2.Body.Close()
 	require.Equal(t, http.StatusBadRequest, r2.StatusCode)
+}
+
+// TestSeedPasswordDefaultWarning guards WR-04: the default-password warning
+// fires when the effective value equals the built-in default, including when
+// it is set explicitly via env, and stays quiet for a custom value.
+func TestSeedPasswordDefaultWarning(t *testing.T) {
+	var buf bytes.Buffer
+	prevOut, prevFlags := log.Writer(), log.Flags()
+	log.SetOutput(&buf)
+	log.SetFlags(0)
+	t.Cleanup(func() {
+		log.SetOutput(prevOut)
+		log.SetFlags(prevFlags)
+		// Registered before the t.Setenv calls, so it runs after their
+		// restores and reloads the table from the original environment.
+		loadSeedPasswords()
+	})
+
+	t.Setenv("AEGIS_DEMO_PASSWORD_DEVELOPER", "demo-developer-pass") // explicit default
+	t.Setenv("AEGIS_DEMO_PASSWORD_FINANCE", "custom-fin-pw")
+	t.Setenv("AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN", "") // unset -> default
+	loadSeedPasswords()
+
+	out := buf.String()
+	require.Contains(t, out, `demo user "developer" is using the public default password`)
+	require.Contains(t, out, `demo user "application-admin" is using the public default password`)
+	require.NotContains(t, out, `"finance"`)
+	require.NotContains(t, out, "demo-developer-pass", "the password value must never be logged")
+	require.NotContains(t, out, "custom-fin-pw", "the password value must never be logged")
 }
 
 func TestDemoIssuer(t *testing.T) {
