@@ -253,7 +253,7 @@ func TestBackendBypassPrevention(t *testing.T) {
 		client := &http.Client{Timeout: 5 * time.Second}
 
 		// 1. Authenticate with demo issuer to get developer token
-		loginPayload, _ := json.Marshal(map[string]string{"role": "developer"})
+		loginPayload, _ := json.Marshal(map[string]string{"username": "developer", "password": demoPassword("developer")})
 		loginResp, err := client.Post("http://localhost:8085/login", "application/json", bytes.NewReader(loginPayload))
 		require.NoError(t, err)
 		defer loginResp.Body.Close()

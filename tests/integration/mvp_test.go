@@ -8,6 +8,8 @@ import (
 	"io"
 	"net"
 	"net/http"
+	"os"
+	"strings"
 	"testing"
 	"time"
 
@@ -16,10 +18,28 @@ import (
 	"github.com/stretchr/testify/require"
 )
 
+// demoPassword returns the demo issuer password for a seeded user. It honors
+// the AEGIS_DEMO_PASSWORD_<ROLE> override and otherwise falls back to the
+// documented compose demo defaults.
+func demoPassword(role string) string {
+	envName := "AEGIS_DEMO_PASSWORD_" + strings.ToUpper(strings.ReplaceAll(role, "-", "_"))
+	if v := os.Getenv(envName); v != "" {
+		return v
+	}
+	switch role {
+	case "finance":
+		return "demo-finance-pass"
+	case "application-admin":
+		return "demo-admin-pass"
+	default:
+		return "demo-developer-pass"
+	}
+}
+
 // loginToken authenticates against the demo issuer and returns a signed Ed25519 Bearer token.
 func loginToken(t *testing.T, client *http.Client, role string) string {
 	t.Helper()
-	payload, err := json.Marshal(map[string]string{"role": role})
+	payload, err := json.Marshal(map[string]string{"username": role, "password": demoPassword(role)})
 	require.NoError(t, err)
 
 	resp, err := client.Post("http://localhost:8085/login", "application/json", bytes.NewReader(payload))
