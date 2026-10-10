@@ -322,11 +322,19 @@ Plans:
 **Plans:** 6 plans
 
 Plans:
+**Wave 1**
+
 - [ ] 10-01-PLAN.md — B5: gateway acks each verified lease, control plane handles Pong
 - [ ] 10-02-PLAN.md — CTRL-01/02: publish-time Rego validation, identity mappings loader and carry-forward, nil guards
 - [ ] 10-03-PLAN.md — B6: dashboard save-then-publish, mvp-authz default, idempotency keys, rebuild dist
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 10-04-PLAN.md — CTRL-02: load mappings at startup, read-only compose mounts in 3 profiles
 - [ ] 10-05-PLAN.md — OPS-02: require Idempotency-Key per mutating route, update tests and scripts
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 10-06-PLAN.md — OPS-01: OpenAPI drift test, spec fill-in, regenerate types
 
 ### Phase 11: Close gaps B8, B2: wire key rotation and DR quarantine reconstruction, fix Kubernetes manifests (REV-03, AUTH-01, CTRL-02)
@@ -337,6 +345,7 @@ Plans:
 **Plans:** 0 plans
 
 Plans:
+
 - [ ] TBD (run /gsd-plan-phase 11 to break down)
 
 ---
