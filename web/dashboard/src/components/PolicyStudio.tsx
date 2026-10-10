@@ -1,4 +1,4 @@
-import React, { useState } from 'react';
+import React, { useRef, useState } from 'react';
 import Editor, { type BeforeMount } from '@monaco-editor/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -49,6 +49,8 @@ reason_code := "ALLOWED" if {
 }
 `;
 
+export const DEFAULT_POLICY_ID = 'mvp-authz';
+
 interface PolicyStudioProps {
   session: SessionInfo | null;
   onCandidateRegoChange?: (rego: string) => void;
@@ -56,7 +58,7 @@ interface PolicyStudioProps {
 
 export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidateRegoChange }) => {
   const queryClient = useQueryClient();
-  const [policyId, setPolicyId] = useState('pol_authz_core');
+  const [policyId, setPolicyId] = useState(DEFAULT_POLICY_ID);
   const [policyName, setPolicyName] = useState('Zero-Trust Gateway Ingress Policy');
   const [regoCode, setRegoCode] = useState<string>(DEFAULT_REGO_TEMPLATE);
   const [validationResult, setValidationResult] = useState<PolicyValidationResponse | null>(null);
@@ -123,17 +125,27 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
     },
   });
 
+  // Fresh Idempotency-Key per publish attempt; re-minted after every outcome
+  const publishKeyRef = useRef<string>(crypto.randomUUID());
+
   // Publish Mutation
   const publishMutation = useMutation({
     mutationFn: async () => {
       setPublishError(null);
+      // Save current editor content as draft first so published bytes match the editor
+      await apiClient.post(
+        '/control/v1/policies',
+        { policy_id: policyId, name: 'authz.rego', source_rego: regoCode },
+        { idempotencyKey: crypto.randomUUID() }
+      );
       return apiClient.post<PolicyPublishResponse>(
         `/control/v1/policies/${policyId}/publish`,
         { comment: publishComment || 'Broadcast via Policy Studio console' },
-        { ifMatch: currentETag }
+        { ifMatch: currentETag, idempotencyKey: publishKeyRef.current }
       );
     },
     onSuccess: (data) => {
+      publishKeyRef.current = crypto.randomUUID();
       setIsPublishModalOpen(false);
       setPublishComment('');
       setSuccessBanner(
@@ -143,9 +155,12 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
       queryClient.invalidateQueries({ queryKey: ['gateways'] });
     },
     onError: (err) => {
+      publishKeyRef.current = crypto.randomUUID();
       if (err instanceof ApiError) {
         if (err.status === 412) {
           setPublishError('Publication conflict: ETag mismatch. Another operator published a newer version.');
+        } else if (err.status === 422) {
+          setPublishError(err.message || 'Policy failed validation (422).');
         } else {
           setPublishError(err.message || 'Snapshot publication failed.');
         }
@@ -166,7 +181,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
           target_version_id: selectedRollbackVersion.version_id,
           comment: rollbackComment || `Monotonic rollback to historical v${selectedRollbackVersion.snapshot_version}`,
         },
-        { ifMatch: currentETag }
+        { ifMatch: currentETag, idempotencyKey: crypto.randomUUID() }
       );
     },
     onSuccess: (data) => {
