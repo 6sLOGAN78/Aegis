@@ -40,6 +40,28 @@ var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
 // skips empty jti, so such tokens must be denied before revocation checks.
 func missingJTI(c *identity.UserClaims) bool { return c == nil || c.ID == "" }
 
+// rejectMissingJTI writes the 401 TOKEN_MISSING_JTI denial and returns true when
+// the validated claims carry no jti. It must run before the user-listener
+// CheckRevocation call (D-09); cmd/gateway tests pin that ordering.
+func rejectMissingJTI(w http.ResponseWriter, ac *audit.AuditContext, claims *identity.UserClaims, reqID string) bool {
+	if !missingJTI(claims) {
+		return false
+	}
+	if ac != nil {
+		ac.SetDecision("deny", "TOKEN_MISSING_JTI")
+		ac.SetErrorCode("TOKEN_MISSING_JTI")
+	}
+	proxy.WriteProblemDetails(
+		w,
+		http.StatusUnauthorized,
+		"Unauthorized",
+		"Token is missing a jti claim",
+		"https://aegis.local/errors/unauthorized",
+		reqID,
+	)
+	return true
+}
+
 func main() {
 	cfg, err := config.LoadConfig()
 	if err != nil {
@@ -373,19 +395,7 @@ func main() {
 
 		// 2a. Fail closed on tokens without a jti (D-09): CheckRevocation skips
 		// empty jti, so a jti-less token would otherwise bypass revocation.
-		if missingJTI(claims) {
-			if ac != nil {
-				ac.SetDecision("deny", "TOKEN_MISSING_JTI")
-				ac.SetErrorCode("TOKEN_MISSING_JTI")
-			}
-			proxy.WriteProblemDetails(
-				w,
-				http.StatusUnauthorized,
-				"Unauthorized",
-				"Token is missing a jti claim",
-				"https://aegis.local/errors/unauthorized",
-				reqID,
-			)
+		if rejectMissingJTI(w, ac, claims, reqID) {
 			return
 		}
 
