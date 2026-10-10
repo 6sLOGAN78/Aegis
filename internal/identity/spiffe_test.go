@@ -145,3 +145,37 @@ func TestSPIFFE_MultipleURIs(t *testing.T) {
 	require.NoError(t, err)
 	assert.Equal(t, "spiffe://aegis.local/workload/orders", id)
 }
+
+func TestSPIFFE_ParseSPIFFEID(t *testing.T) {
+	long := "spiffe://aegis.local/" + string(make([]byte, 0)) + func() string {
+		b := make([]byte, 130)
+		for i := range b {
+			b[i] = 'a'
+		}
+		return string(b)
+	}()
+	ok := []struct{ in, want string }{
+		{"spiffe://aegis.local/workload/orders", "spiffe://aegis.local/workload/orders"},
+		{"spiffe://AEGIS.LOCAL/workload/orders", "spiffe://aegis.local/workload/orders"},
+	}
+	for _, c := range ok {
+		got, err := ParseSPIFFEID(c.in, "aegis.local")
+		require.NoError(t, err, c.in)
+		assert.Equal(t, c.want, got)
+	}
+	_, err := ParseSPIFFEID("spiffe://evil.local/workload/orders", "aegis.local")
+	assert.ErrorIs(t, err, ErrInvalidTrustDomain)
+
+	bad := []string{
+		"spiffe://aegis.local", "spiffe://aegis.local/", "spiffe://aegis.local/a?x=1",
+		"spiffe://aegis.local/a#f", "spiffe://aegis.local:8080/a", "spiffe://u@aegis.local/a",
+		"spiffe://aegis.local/a%zz", "spiffe://aegis.local/a/../b", "spiffe://aegis.local/a//b",
+		"spiffe://aegis.local/a/./b", "spiffe://aegis.local/a b", "spiffe://aegis.local/a%2541",
+		long, "https://aegis.local/a", "", "workload/orders",
+	}
+	for _, in := range bad {
+		_, err := ParseSPIFFEID(in, "aegis.local")
+		require.Error(t, err, in)
+		assert.ErrorIs(t, err, ErrMalformedSPIFFEURI, in)
+	}
+}
