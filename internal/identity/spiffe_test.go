@@ -4,6 +4,7 @@ import (
 	"crypto/x509"
 	"crypto/x509/pkix"
 	"net/url"
+	"strings"
 	"testing"
 
 	"github.com/stretchr/testify/assert"
@@ -41,7 +42,7 @@ func TestSPIFFE_ExtractValid(t *testing.T) {
 			name:        "case-insensitive scheme and domain",
 			uri:         "SPIFFE://AEGIS.LOCAL/workload/payments",
 			trustDomain: "aegis.local",
-			expectedID:  "spiffe://AEGIS.LOCAL/workload/payments",
+			expectedID:  "spiffe://aegis.local/workload/payments",
 		},
 		{
 			name:        "empty expected trust domain skips check",
@@ -177,5 +178,61 @@ func TestSPIFFE_ParseSPIFFEID(t *testing.T) {
 		_, err := ParseSPIFFEID(in, "aegis.local")
 		require.Error(t, err, in)
 		assert.ErrorIs(t, err, ErrMalformedSPIFFEURI, in)
+	}
+}
+
+// TestSPIFFE_ExtractRejectsNonCanonical guards WR-01: a SPIFFE URI SAN that
+// the control plane could never quarantine is rejected at authentication.
+func TestSPIFFE_ExtractRejectsNonCanonical(t *testing.T) {
+	for _, raw := range []string{
+		"spiffe://u@aegis.local/workload/orders",
+		"spiffe://aegis.local:8443/workload/orders",
+		"spiffe://aegis.local/workload/orders?x=1",
+		"spiffe://aegis.local/workload/orders#f",
+		"spiffe://aegis.local/workload/or%20ders",
+		"spiffe://aegis.local/workload/or%2Fders",
+		"spiffe://aegis.local/workload//orders",
+		"spiffe://aegis.local/workload/../admin",
+		"spiffe://aegis.local/" + strings.Repeat("a", 130),
+	} {
+		cert := &x509.Certificate{URIs: []*url.URL{parseURI(raw)}}
+		_, err := ExtractSPIFFEID(cert, "aegis.local")
+		require.Error(t, err, raw)
+		assert.ErrorIs(t, err, ErrMalformedSPIFFEURI, raw)
+	}
+}
+
+// TestSPIFFE_ExtractAndParseAgree guards WR-01/CR-01: the gateway key
+// (ExtractSPIFFEID on a peer cert) and the control plane's canonical form
+// (ParseSPIFFEID on the operator string) must be byte-identical, and both
+// must accept or reject the same ids.
+func TestSPIFFE_ExtractAndParseAgree(t *testing.T) {
+	for _, raw := range []string{
+		"spiffe://aegis.local/workload/orders",
+		"SPIFFE://aegis.local/workload/orders",
+		"Spiffe://AEGIS.LOCAL/workload/orders",
+		"spiffe://Aegis.Local/ns/gateway/sa/aegis-gateway",
+		"spiffe://aegis.local/service/payments_v2.1-x",
+		"spiffe://aegis.local/WorkLoad/Orders",
+		"spiffe://evil.local/workload/orders",
+		"spiffe://aegis.local",
+		"spiffe://aegis.local/",
+		"spiffe://u@aegis.local/workload/orders",
+		"spiffe://aegis.local:8443/workload/orders",
+		"spiffe://aegis.local/workload/orders?x=1",
+		"spiffe://aegis.local/workload/orders#f",
+		"spiffe://aegis.local/workload/or%2Fders",
+		"spiffe://aegis.local/a/./b",
+	} {
+		cert := &x509.Certificate{URIs: []*url.URL{parseURI(raw)}}
+		extracted, extErr := ExtractSPIFFEID(cert, "aegis.local")
+		parsed, parseErr := ParseSPIFFEID(raw, "aegis.local")
+		if parseErr != nil {
+			assert.Error(t, extErr, "parse rejected %q but extract accepted it as %q", raw, extracted)
+			continue
+		}
+		require.NoError(t, extErr, raw)
+		assert.Equal(t, parsed, extracted, raw)
+		assert.Equal(t, "quarantine:principal:"+parsed, "quarantine:principal:"+extracted, raw)
 	}
 }
