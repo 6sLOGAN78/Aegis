@@ -281,3 +281,117 @@ func TestControl_ClientDisconnectUnregistersCleanly(t *testing.T) {
 		return distServer.ConnectedClientsCount() == 0
 	}, 2*time.Second, 20*time.Millisecond)
 }
+
+func sendPong(t *testing.T, stream snapshotv1.SnapshotDistributionService_StreamSnapshotsClient, gw string, ver int64) {
+	t.Helper()
+	require.NoError(t, stream.Send(&snapshotv1.GatewayMessage{
+		GatewayId: gw,
+		Timestamp: timestamppb.Now(),
+		Payload: &snapshotv1.GatewayMessage_Pong{
+			Pong: &snapshotv1.HeartbeatPong{SequenceId: "1", ActiveVersion: ver},
+		},
+	}))
+}
+
+func TestControl_Pong_RecordsAck(t *testing.T) {
+	_, ackTracker, _, _, client, cleanup := setupTestControlPlane(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.StreamSnapshots(ctx)
+	require.NoError(t, err)
+	_, err = stream.Recv()
+	require.NoError(t, err)
+
+	sendPong(t, stream, "gw-pong", 1)
+
+	assert.Eventually(t, func() bool {
+		ack, ok := ackTracker.GetReplicaStatuses()["gw-pong"]
+		return ok && ack.ActiveVersion == 1 &&
+			ack.Status == snapshotv1.AckStatus_ACK_STATUS_ACTIVATED &&
+			time.Since(ack.AcknowledgedAt.AsTime()) < 5*time.Second
+	}, 2*time.Second, 20*time.Millisecond)
+}
+
+func TestControl_Pong_DoesNotMaskRejected(t *testing.T) {
+	_, ackTracker, _, _, client, cleanup := setupTestControlPlane(t)
+	defer cleanup()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := client.StreamSnapshots(ctx)
+	require.NoError(t, err)
+	_, err = stream.Recv()
+	require.NoError(t, err)
+
+	require.NoError(t, stream.Send(&snapshotv1.GatewayMessage{
+		GatewayId: "gw-rej",
+		Payload: &snapshotv1.GatewayMessage_Ack{Ack: &snapshotv1.SnapshotAck{
+			GatewayId:      "gw-rej",
+			ActiveVersion:  1,
+			Status:         snapshotv1.AckStatus_ACK_STATUS_REJECTED,
+			ErrorMessage:   "bad snapshot",
+			AcknowledgedAt: timestamppb.New(time.Now().Add(-30 * time.Second)),
+		}},
+	}))
+	require.Eventually(t, func() bool {
+		ack, ok := ackTracker.GetReplicaStatuses()["gw-rej"]
+		return ok && ack.Status == snapshotv1.AckStatus_ACK_STATUS_REJECTED
+	}, 2*time.Second, 20*time.Millisecond)
+
+	sendPong(t, stream, "gw-rej", 1)
+
+	// Wait until the Pong refreshed the heartbeat time, then check status preserved.
+	assert.Eventually(t, func() bool {
+		ack := ackTracker.GetReplicaStatuses()["gw-rej"]
+		return time.Since(ack.AcknowledgedAt.AsTime()) < 5*time.Second
+	}, 2*time.Second, 20*time.Millisecond)
+	ack := ackTracker.GetReplicaStatuses()["gw-rej"]
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, ack.Status)
+	assert.Equal(t, "bad snapshot", ack.ErrorMessage)
+}
+
+func TestControl_HeartbeatOnLease(t *testing.T) {
+	distServer, ackTracker, signer, verifier, _, cleanup := setupTestControlPlane(t)
+	defer cleanup()
+
+	lis := bufconn.Listen(1024 * 1024)
+	grpcServer := grpc.NewServer()
+	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
+	go func() { _ = grpcServer.Serve(lis) }()
+	defer grpcServer.Stop()
+
+	mgr := snapshot.NewManager(verifier)
+	sc := snapshot.NewStreamClient("bufnet", "gw-hb", mgr, verifier,
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(insecure.NewCredentials()),
+	)
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go func() { _ = sc.Start(ctx) }()
+	defer sc.Stop()
+
+	require.Eventually(t, func() bool {
+		a := mgr.Active()
+		_, ok := ackTracker.GetReplicaStatuses()["gw-hb"]
+		return a != nil && a.Version == 1 && ok
+	}, 3*time.Second, 20*time.Millisecond)
+
+	// Let the snapshot ack settle, then capture baseline.
+	time.Sleep(200 * time.Millisecond)
+	base := ackTracker.GetReplicaStatuses()["gw-hb"].AcknowledgedAt.AsTime()
+
+	for i := 0; i < 2; i++ {
+		lease, err := signer.SignLease(1, 10*time.Second)
+		require.NoError(t, err)
+		distServer.BroadcastLease(lease)
+		time.Sleep(100 * time.Millisecond)
+	}
+
+	assert.Eventually(t, func() bool {
+		ack := ackTracker.GetReplicaStatuses()["gw-hb"]
+		return ack.AcknowledgedAt.AsTime().After(base) &&
+			ack.Status == snapshotv1.AckStatus_ACK_STATUS_ACTIVATED && ack.ActiveVersion == 1
+	}, 3*time.Second, 20*time.Millisecond)
+}

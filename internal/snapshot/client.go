@@ -180,6 +180,8 @@ func (c *StreamClient) runStream(ctx context.Context, onFirstMessage func()) err
 	})
 
 	var receivedFirst bool
+	lastStatus := snapshotv1.AckStatus_ACK_STATUS_ACTIVATED
+	lastErr := ""
 
 	for {
 		select {
@@ -219,6 +221,7 @@ func (c *StreamClient) runStream(ctx context.Context, onFirstMessage func()) err
 				GatewayId:      c.gatewayID,
 				AcknowledgedAt: timestamppb.Now(),
 			}
+			lastStatus, lastErr = nextAckState(actErr)
 
 			if actErr != nil {
 				ack.Status = snapshotv1.AckStatus_ACK_STATUS_REJECTED
@@ -245,6 +248,15 @@ func (c *StreamClient) runStream(ctx context.Context, onFirstMessage func()) err
 			}
 			if err := c.verifier.VerifyLease(lease, expectedVer); err == nil {
 				c.manager.RecordLeaseRenewal()
+				// Heartbeat: ack each verified lease from this (the only) Send goroutine,
+				// echoing the last real snapshot outcome so REJECTED is never masked.
+				_ = stream.Send(&snapshotv1.GatewayMessage{
+					GatewayId: c.gatewayID,
+					Timestamp: timestamppb.Now(),
+					Payload: &snapshotv1.GatewayMessage_Ack{
+						Ack: buildHeartbeatAck(c.gatewayID, expectedVer, lastStatus, lastErr),
+					},
+				})
 			}
 
 		case *snapshotv1.ControlPlaneMessage_Ping:
@@ -275,4 +287,23 @@ func (c *StreamClient) Stop() {
 		c.stopped = true
 		close(c.stopCh)
 	}
+}
+
+// buildHeartbeatAck constructs the ack sent in response to a verified lease.
+func buildHeartbeatAck(gatewayID string, activeVersion int64, status snapshotv1.AckStatus, errMsg string) *snapshotv1.SnapshotAck {
+	return &snapshotv1.SnapshotAck{
+		GatewayId:      gatewayID,
+		ActiveVersion:  activeVersion,
+		Status:         status,
+		ErrorMessage:   errMsg,
+		AcknowledgedAt: timestamppb.Now(),
+	}
+}
+
+// nextAckState maps a snapshot activation result to the status/error echoed by heartbeats.
+func nextAckState(actErr error) (snapshotv1.AckStatus, string) {
+	if actErr != nil {
+		return snapshotv1.AckStatus_ACK_STATUS_REJECTED, actErr.Error()
+	}
+	return snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, ""
 }
