@@ -319,10 +319,15 @@ Plans:
 **Goal:** Dashboard author → validate → publish → swap works end to end, and the convergence view shows healthy gateways as converged. Covers B5 (periodic snapshot ack or control-plane Ping so gateways are not falsely "partitioned" after 60s), B6 (dashboard publish 404: save the draft and align the default policy id with the seeded one), publish-time Rego validation (CTRL-01), identity mappings at publish (CTRL-02), and OpenAPI drift / idempotency (OPS-01, OPS-02).
 **Requirements**: OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02
 **Depends on:** Phase 9
-**Plans:** 0 plans
+**Plans:** 6 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 10 to break down)
+- [ ] 10-01-PLAN.md — B5: gateway acks each verified lease, control plane handles Pong
+- [ ] 10-02-PLAN.md — CTRL-01/02: publish-time Rego validation, identity mappings loader and carry-forward, nil guards
+- [ ] 10-03-PLAN.md — B6: dashboard save-then-publish, mvp-authz default, idempotency keys, rebuild dist
+- [ ] 10-04-PLAN.md — CTRL-02: load mappings at startup, read-only compose mounts in 3 profiles
+- [ ] 10-05-PLAN.md — OPS-02: require Idempotency-Key per mutating route, update tests and scripts
+- [ ] 10-06-PLAN.md — OPS-01: OpenAPI drift test, spec fill-in, regenerate types
 
 ### Phase 11: Close gaps B8, B2: wire key rotation and DR quarantine reconstruction, fix Kubernetes manifests (REV-03, AUTH-01, CTRL-02)
 
