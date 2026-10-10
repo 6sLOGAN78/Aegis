@@ -367,7 +367,26 @@ func main() {
 
 		if ac != nil {
 			ac.SetPrincipal(claims.Subject, "user", claims.Roles)
+			ac.SetJTI(claims.ID)
 			ac.SetCanonicalPath(canonicalPath)
+		}
+
+		// 2a. Fail closed on tokens without a jti (D-09): CheckRevocation skips
+		// empty jti, so a jti-less token would otherwise bypass revocation.
+		if missingJTI(claims) {
+			if ac != nil {
+				ac.SetDecision("deny", "TOKEN_MISSING_JTI")
+				ac.SetErrorCode("TOKEN_MISSING_JTI")
+			}
+			proxy.WriteProblemDetails(
+				w,
+				http.StatusUnauthorized,
+				"Unauthorized",
+				"Token is missing a jti claim",
+				"https://aegis.local/errors/unauthorized",
+				reqID,
+			)
+			return
 		}
 
 		// 2b. Ephemeral Redis Token Revocation and Principal Quarantine Check (REV-03, REV-04, Invariant 1)
@@ -545,6 +564,7 @@ func main() {
 				RequestID:       reqID,
 				PrincipalID:     claims.Subject,
 				PrincipalKind:   "user",
+				JTI:             claims.ID,
 				PrincipalRoles:  claims.Roles,
 				ClientIP:        clientIP,
 				HTTPMethod:      r.Method,
