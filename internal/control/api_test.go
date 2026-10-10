@@ -8,6 +8,7 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"regexp"
 	"testing"
 	"time"
@@ -233,6 +234,81 @@ func TestControlAPI(t *testing.T) {
 		exists, err := h.rdb.Exists(t.Context(), "quarantine:principal:evil-user").Result()
 		require.NoError(t, err)
 		assert.Equal(t, int64(0), exists)
+	})
+
+	t.Run("Quarantine SPIFFE encoded and body forms", func(t *testing.T) {
+		const key = "quarantine:principal:spiffe://aegis.local/workload/orders"
+		do := func(method, target, body string) *httptest.ResponseRecorder {
+			var rd *bytes.Buffer
+			if body != "" {
+				rd = bytes.NewBufferString(body)
+			} else {
+				rd = bytes.NewBuffer(nil)
+			}
+			req := httptest.NewRequest(method, target, rd)
+			req.AddCookie(cookie)
+			req.Header.Set("X-CSRF-Token", csrfToken)
+			rec := httptest.NewRecorder()
+			handler.ServeHTTP(rec, req)
+			return rec
+		}
+		exists := func(k string) int64 {
+			n, err := h.rdb.Exists(t.Context(), k).Result()
+			require.NoError(t, err)
+			return n
+		}
+
+		// dashboard encodeURIComponent form
+		rec := do(http.MethodPost, "/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine", `{"reason":"x"}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(1), exists(key))
+
+		// delete via encoded path
+		rec = do(http.MethodDelete, "/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine", "")
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(0), exists(key))
+
+		// spiffe:%2F%2F form
+		rec = do(http.MethodPost, "/control/v1/principals/spiffe:%2F%2Faegis.local%2Fworkload%2Forders/quarantine", `{"reason":"x"}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(1), exists(key))
+		rec = do(http.MethodDelete, "/control/v1/principals/spiffe:%2F%2Faegis.local%2Fworkload%2Forders/quarantine", "")
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(0), exists(key))
+
+		// body form
+		rec = do(http.MethodPost, "/control/v1/quarantine", `{"principal_id":"spiffe://aegis.local/workload/orders","reason":"x"}`)
+		assert.Equal(t, http.StatusOK, rec.Code)
+		assert.Equal(t, int64(1), exists(key))
+		rec = do(http.MethodDelete, "/control/v1/principals/spiffe%3A%2F%2Faegis.local%2Fworkload%2Forders/quarantine", "")
+		assert.Equal(t, http.StatusOK, rec.Code)
+
+		// body form without principal_id
+		rec = do(http.MethodPost, "/control/v1/quarantine", `{"reason":"x"}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		// path and body ids differ
+		rec = do(http.MethodPost, "/control/v1/principals/evil-user/quarantine", `{"principal_id":"other-user","reason":"x"}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code)
+
+		keysBefore, err := h.rdb.Keys(t.Context(), "quarantine:principal:*").Result()
+		require.NoError(t, err)
+
+		// invalid ids
+		long := strings.Repeat("a", 129)
+		for _, target := range []string{
+			"/control/v1/principals/spiffe:%2F%2Fevil.local%2Fworkload%2Forders/quarantine",
+			"/control/v1/principals/a%2541/quarantine",
+			"/control/v1/principals/" + long + "/quarantine",
+		} {
+			rec = do(http.MethodPost, target, `{"reason":"x"}`)
+			assert.Equal(t, http.StatusBadRequest, rec.Code, target)
+		}
+		_, perr := canonicalPrincipalID("a%zz")
+		assert.Error(t, perr)
+		keysAfter, err := h.rdb.Keys(t.Context(), "quarantine:principal:*").Result()
+		require.NoError(t, err)
+		assert.Equal(t, keysBefore, keysAfter)
 	})
 
 	t.Run("Token JTI Revocation", func(t *testing.T) {

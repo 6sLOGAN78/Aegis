@@ -2,9 +2,13 @@ package control
 
 import (
 	"encoding/json"
+	"fmt"
 	"net/http"
+	"net/url"
+	"strings"
 	"time"
 
+	"aegis/internal/identity"
 	controlv1 "aegis/pkg/api/control/v1"
 
 	"github.com/go-chi/chi/v5"
@@ -16,20 +20,97 @@ type RevokeTokenRequest struct {
 	TTLSeconds int    `json:"ttl_seconds,omitempty"`
 }
 
-// HandleQuarantinePrincipal pushes an immediate principal block to Redis (<5s propagation).
-func (s *APIServer) HandleQuarantinePrincipal(w http.ResponseWriter, r *http.Request) {
-	principalID := chi.URLParam(r, "id")
-	if principalID == "" {
-		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "Principal ID is required")
-		return
-	}
+const (
+	quarantineTrustDomain = "aegis.local"
+	maxPrincipalIDLen     = 128
+)
 
+// canonicalPrincipalID decodes (once) and validates an operator-supplied
+// principal id so the Redis key matches what the gateway checks. SPIFFE ids
+// are strictly parsed and canonicalized; user ids pass through unchanged.
+func canonicalPrincipalID(raw string) (string, error) {
+	id, err := url.PathUnescape(raw)
+	if err != nil {
+		return "", fmt.Errorf("invalid principal id encoding")
+	}
+	if id == "" || len(id) > maxPrincipalIDLen {
+		return "", fmt.Errorf("principal id must be 1-%d bytes", maxPrincipalIDLen)
+	}
+	for _, c := range id {
+		if c < 0x20 || c == 0x7f {
+			return "", fmt.Errorf("principal id contains control characters")
+		}
+	}
+	if strings.Contains(id, "%") {
+		return "", fmt.Errorf("principal id contains invalid percent-encoding")
+	}
+	if strings.HasPrefix(id, "spiffe://") {
+		canon, err := identity.ParseSPIFFEID(id, quarantineTrustDomain)
+		if err != nil {
+			return "", fmt.Errorf("invalid SPIFFE principal id: %w", err)
+		}
+		return canon, nil
+	}
+	return id, nil
+}
+
+// pathPrincipalID returns the still-encoded {id} path parameter. chi returns
+// the escaped form only when the request has a RawPath; otherwise it has
+// already been decoded once, so re-escape it to keep exactly one decode.
+func pathPrincipalID(r *http.Request) string {
+	id := chi.URLParam(r, "id")
+	if id != "" && r.URL.RawPath == "" {
+		return url.PathEscape(id)
+	}
+	return id
+}
+
+// HandleQuarantinePrincipal pushes an immediate principal block to Redis (<5s propagation).
+// It serves both POST /principals/{id}/quarantine and the body form POST /quarantine.
+func (s *APIServer) HandleQuarantinePrincipal(w http.ResponseWriter, r *http.Request) {
 	var req controlv1.QuarantineRequest
 	if err := json.NewDecoder(r.Body).Decode(&req); err != nil {
 		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "Invalid quarantine request payload")
 		return
 	}
 
+	pathID := pathPrincipalID(r)
+	bodyID := ""
+	if req.PrincipalId != nil {
+		bodyID = *req.PrincipalId
+	}
+	if pathID == "" && bodyID == "" {
+		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "Principal ID is required")
+		return
+	}
+
+	var principalID string
+	if pathID != "" {
+		id, err := canonicalPrincipalID(pathID)
+		if err != nil {
+			writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		principalID = id
+	}
+	if bodyID != "" {
+		id, err := canonicalPrincipalID(url.PathEscape(bodyID))
+		if err != nil {
+			writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", err.Error())
+			return
+		}
+		if principalID != "" && principalID != id {
+			writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "Path principal ID and body principal_id differ")
+			return
+		}
+		principalID = id
+	}
+
+	s.quarantineCore(w, r, principalID, req)
+}
+
+// quarantineCore performs the Redis write and response for a validated principal id.
+func (s *APIServer) quarantineCore(w http.ResponseWriter, r *http.Request, principalID string, req controlv1.QuarantineRequest) {
 	if req.Reason == "" {
 		req.Reason = "ADMINISTRATIVE_QUARANTINE"
 	}
@@ -68,9 +149,14 @@ func (s *APIServer) HandleQuarantinePrincipal(w http.ResponseWriter, r *http.Req
 
 // HandleUnquarantinePrincipal removes an active quarantine block from Redis.
 func (s *APIServer) HandleUnquarantinePrincipal(w http.ResponseWriter, r *http.Request) {
-	principalID := chi.URLParam(r, "id")
-	if principalID == "" {
+	rawID := pathPrincipalID(r)
+	if rawID == "" {
 		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "Principal ID is required")
+		return
+	}
+	principalID, err := canonicalPrincipalID(rawID)
+	if err != nil {
+		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", err.Error())
 		return
 	}
 
@@ -152,4 +238,3 @@ func (s *APIServer) HandleListQuarantines(w http.ResponseWriter, r *http.Request
 		"quarantines": items,
 	})
 }
-
