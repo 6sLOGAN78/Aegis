@@ -319,14 +319,14 @@ Plans:
 **Goal:** Dashboard author → validate → publish → swap works end to end, and the convergence view shows healthy gateways as converged. Covers B5 (periodic snapshot ack or control-plane Ping so gateways are not falsely "partitioned" after 60s), B6 (dashboard publish 404: save the draft and align the default policy id with the seeded one), publish-time Rego validation (CTRL-01), identity mappings at publish (CTRL-02), and OpenAPI drift / idempotency (OPS-01, OPS-02).
 **Requirements**: OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02
 **Depends on:** Phase 9
-**Plans:** 6 plans
+**Plans:** 3/6 plans executed
 
 Plans:
 **Wave 1**
 
-- [ ] 10-01-PLAN.md — B5: gateway acks each verified lease, control plane handles Pong
-- [ ] 10-02-PLAN.md — CTRL-01/02: publish-time Rego validation, identity mappings loader and carry-forward, nil guards
-- [ ] 10-03-PLAN.md — B6: dashboard save-then-publish, mvp-authz default, idempotency keys, rebuild dist
+- [x] 10-01-PLAN.md — B5: gateway acks each verified lease, control plane handles Pong
+- [x] 10-02-PLAN.md — CTRL-01/02: publish-time Rego validation, identity mappings loader and carry-forward, nil guards
+- [x] 10-03-PLAN.md — B6: dashboard save-then-publish, mvp-authz default, idempotency keys, rebuild dist
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
