@@ -305,6 +305,108 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /control/v1/principals/quarantine:
+    get:
+      summary: List active principal quarantines
+      description: Returns all currently active principal quarantines from Redis.
+      operationId: listPrincipalQuarantines
+      responses:
+        '200':
+          description: Active quarantines
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /control/v1/quarantine:
+    get:
+      summary: List active principal quarantines
+      description: Returns all currently active principal quarantines from Redis.
+      operationId: listQuarantines
+      responses:
+        '200':
+          description: Active quarantines
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineListResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+    post:
+      summary: Quarantine a principal (id in body)
+      description: Body-form quarantine. Supply principal_id in the request body; this avoids path-encoding of SPIFFE IDs.
+      operationId: quarantinePrincipalByBody
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/QuarantineRequest'
+      responses:
+        '200':
+          description: Principal quarantined successfully
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/QuarantineRecord'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
+  /control/v1/revocations:
+    post:
+      summary: Revoke a token by JTI
+      description: Writes a token JTI to the Redis revocation blocklist.
+      operationId: revokeToken
+      parameters:
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/RevokeTokenRequest'
+      responses:
+        '200':
+          description: Token revoked
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/RevokeTokenResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+        '503':
+          $ref: '#/components/responses/ServiceUnavailable'
+
   /control/v1/principals/{id}/quarantine:
     post:
       summary: Quarantine a principal
@@ -314,6 +416,7 @@ paths:
         - name: id
           in: path
           required: true
+          description: Principal identifier. SPIFFE IDs (spiffe://...) MUST be sent percent-encoded (encodeURIComponent); unencoded slashes do not match the route and return 404.
           schema:
             type: string
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -348,6 +451,7 @@ paths:
         - name: id
           in: path
           required: true
+          description: Principal identifier. SPIFFE IDs (spiffe://...) MUST be sent percent-encoded (encodeURIComponent); unencoded slashes do not match the route and return 404.
           schema:
             type: string
         - $ref: '#/components/parameters/IdempotencyKey'
@@ -803,6 +907,9 @@ components:
         actor:
           type: string
           example: sec-ops-team
+        principal_id:
+          type: string
+          description: Principal to quarantine for the body-form POST /quarantine route.
 
     QuarantineRecord:
       type: object
@@ -828,6 +935,44 @@ components:
           format: date-time
         actor:
           type: string
+
+    QuarantineListResponse:
+      type: object
+      required:
+        - quarantines
+      properties:
+        quarantines:
+          type: array
+          items:
+            $ref: '#/components/schemas/QuarantineRecord'
+
+    RevokeTokenRequest:
+      type: object
+      required:
+        - jti
+      properties:
+        jti:
+          type: string
+        reason:
+          type: string
+        ttl_seconds:
+          type: integer
+
+    RevokeTokenResponse:
+      type: object
+      required:
+        - status
+        - jti
+        - revoked_at
+      properties:
+        status:
+          type: string
+          example: revoked
+        jti:
+          type: string
+        revoked_at:
+          type: string
+          format: date-time
 
     UnquarantineRequest:
       type: object
@@ -902,6 +1047,8 @@ components:
           type: integer
         duration_ms:
           type: integer
+        jti:
+          type: string
 
     AuditEventListResponse:
       type: object

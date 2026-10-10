@@ -82,6 +82,7 @@ type AuditEvent struct {
 	EventId         openapi_types.UUID       `json:"event_id"`
 	EventType       AuditEventEventType      `json:"event_type"`
 	HttpMethod      *string                  `json:"http_method,omitempty"`
+	Jti             *string                  `json:"jti,omitempty"`
 	PrincipalId     string                   `json:"principal_id"`
 	PrincipalKind   *AuditEventPrincipalKind `json:"principal_kind,omitempty"`
 	ReasonCode      string                   `json:"reason_code"`
@@ -215,6 +216,11 @@ type PolicyVersionListResponse struct {
 	Versions   []PolicyVersion `json:"versions"`
 }
 
+// QuarantineListResponse defines model for QuarantineListResponse.
+type QuarantineListResponse struct {
+	Quarantines []QuarantineRecord `json:"quarantines"`
+}
+
 // QuarantineRecord defines model for QuarantineRecord.
 type QuarantineRecord struct {
 	Actor         *string                `json:"actor,omitempty"`
@@ -232,7 +238,24 @@ type QuarantineRecordStatus string
 type QuarantineRequest struct {
 	Actor     *string    `json:"actor,omitempty"`
 	ExpiresAt *time.Time `json:"expires_at,omitempty"`
-	Reason    string     `json:"reason"`
+
+	// PrincipalId Principal to quarantine for the body-form POST /quarantine route.
+	PrincipalId *string `json:"principal_id,omitempty"`
+	Reason      string  `json:"reason"`
+}
+
+// RevokeTokenRequest defines model for RevokeTokenRequest.
+type RevokeTokenRequest struct {
+	Jti        string  `json:"jti"`
+	Reason     *string `json:"reason,omitempty"`
+	TtlSeconds *int    `json:"ttl_seconds,omitempty"`
+}
+
+// RevokeTokenResponse defines model for RevokeTokenResponse.
+type RevokeTokenResponse struct {
+	Jti       string    `json:"jti"`
+	RevokedAt time.Time `json:"revoked_at"`
+	Status    string    `json:"status"`
 }
 
 // Route defines model for Route.
@@ -399,6 +422,18 @@ type QuarantinePrincipalParams struct {
 	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
 }
 
+// QuarantinePrincipalByBodyParams defines parameters for QuarantinePrincipalByBody.
+type QuarantinePrincipalByBodyParams struct {
+	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
+// RevokeTokenParams defines parameters for RevokeToken.
+type RevokeTokenParams struct {
+	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
+	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+}
+
 // ListRoutesParams defines parameters for ListRoutes.
 type ListRoutesParams struct {
 	// Cursor Opaque pagination cursor.
@@ -434,6 +469,12 @@ type UnquarantinePrincipalJSONRequestBody = UnquarantineRequest
 
 // QuarantinePrincipalJSONRequestBody defines body for QuarantinePrincipal for application/json ContentType.
 type QuarantinePrincipalJSONRequestBody = QuarantineRequest
+
+// QuarantinePrincipalByBodyJSONRequestBody defines body for QuarantinePrincipalByBody for application/json ContentType.
+type QuarantinePrincipalByBodyJSONRequestBody = QuarantineRequest
+
+// RevokeTokenJSONRequestBody defines body for RevokeToken for application/json ContentType.
+type RevokeTokenJSONRequestBody = RevokeTokenRequest
 
 // CreateRouteJSONRequestBody defines body for CreateRoute for application/json ContentType.
 type CreateRouteJSONRequestBody = RouteCreateRequest
