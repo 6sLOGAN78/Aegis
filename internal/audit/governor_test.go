@@ -423,3 +423,37 @@ func TestGovernorConcurrent(t *testing.T) {
 	assert.Equal(t, admits.Load(), rec.Load()+sup.Load()+drop.Load())
 	assert.Equal(t, int64(workers*perWorker), admits.Load())
 }
+
+// TestGovernorRevokedJTIsNotCollapsed guards WR-02: two different revoked
+// tokens replayed by one principal on one route each get their own recorded
+// row and summary carrying their own jti.
+func TestGovernorRevokedJTIsNotCollapsed(t *testing.T) {
+	g := govNew(100)
+	mk := func(jti, req string) *CompletionEvent {
+		ev := govEvent("u1", "r1", "TOKEN_REVOKED")
+		ev.JTI = jti
+		ev.RequestID = req
+		return ev
+	}
+	assert.Equal(t, Record, g.Admit(mk("jti-a", "a1"), govT0).Disposition)
+	assert.Equal(t, Record, g.Admit(mk("jti-b", "b1"), govT0.Add(time.Second)).Disposition)
+	assert.Equal(t, Suppress, g.Admit(mk("jti-a", "a2"), govT0.Add(2*time.Second)).Disposition)
+	assert.Equal(t, Suppress, g.Admit(mk("jti-b", "b2"), govT0.Add(3*time.Second)).Disposition)
+
+	sums := g.Sweep(govT0.Add(govWindow + time.Second))
+	require.Len(t, sums, 2)
+	got := map[string]int{}
+	for _, s := range sums {
+		got[s.JTI] = s.SuppressedCount
+	}
+	assert.Equal(t, map[string]int{"jti-a": 1, "jti-b": 1}, got)
+
+	// Other identified reasons keep the (principal, route, reason) key.
+	g2 := govNew(100)
+	q1 := govEvent("u1", "r1", "PRINCIPAL_QUARANTINED")
+	q1.JTI = "jti-a"
+	q2 := govEvent("u1", "r1", "PRINCIPAL_QUARANTINED")
+	q2.JTI = "jti-b"
+	assert.Equal(t, Record, g2.Admit(q1, govT0).Disposition)
+	assert.Equal(t, Suppress, g2.Admit(q2, govT0).Disposition)
+}

@@ -228,8 +228,17 @@ func govKeyOutage(reason string) string {
 	return "\x00\x00" + clipString(reason, 64)
 }
 
+// govKeyIdentified keys the identified-class suppressor on (principal, route,
+// reason). For TOKEN_REVOKED the jti is part of the key, so each revoked token
+// gets its own first row and summary and a summary never claims the jti of a
+// different token (forensics: "which leaked token was replayed"). Cardinality
+// stays bounded by the revoked set, and MaxKeys/overflow still apply.
 func govKeyIdentified(ev *CompletionEvent) string {
-	return clipString(ev.PrincipalID, 128) + "\x00" + clipString(ev.RouteID, 64) + "\x00" + clipString(ev.ReasonCode, 64)
+	k := clipString(ev.PrincipalID, 128) + "\x00" + clipString(ev.RouteID, 64) + "\x00" + clipString(ev.ReasonCode, 64)
+	if ev.ReasonCode == "TOKEN_REVOKED" {
+		k += "\x00" + clipString(ev.JTI, 128)
+	}
+	return k
 }
 
 func (g *Governor) admitBucket(bucketKey, label string, now time.Time) Admission {
