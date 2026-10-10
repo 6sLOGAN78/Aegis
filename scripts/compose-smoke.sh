@@ -259,6 +259,18 @@ gw_probe() {
   echo "${code} ${rid}"
 }
 
+# gw_probe_one TOKEN PATH is gw_probe pinned to the single replica ${GW}. Suppression state
+# is per gateway process, so a repeat sent through round-robin HAProxy would reach another
+# replica and be recorded as a new first denial.
+gw_probe_one() {
+  local out code rid
+  out="$(dc exec -T "${GW}" curl -s -o /dev/null -D - -w '\n%{http_code}' \
+    -H "Authorization: Bearer $1" "http://127.0.0.1:8080$2" </dev/null 2>/dev/null | tr -d '\r' || true)"
+  code="$(printf '%s\n' "${out}" | tail -n 1)"
+  rid="$(printf '%s\n' "${out}" | awk 'tolower($1) == "x-request-id:" { v = $2 } END { print v }')"
+  echo "${code} ${rid}"
+}
+
 # valid_rid ID succeeds only for a UUID-shaped string (it is interpolated into SQL).
 valid_rid() {
   [[ "${1:-}" =~ ^[0-9a-fA-F]{8}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{4}-[0-9a-fA-F]{12}$ ]]
@@ -419,12 +431,12 @@ else
     sleep "${guard_wait}"
   fi
 
-  probe="$(gw_probe "${tok}" /api/admin/users)"
+  probe="$(gw_probe_one "${tok}" /api/admin/users)"
   code="${probe%% *}"
   DENY1_ID="${probe#* }"
   DENY1_CODE="${code}"
-  # Identical repeat immediately after the first denial: no sleep.
-  probe="$(gw_probe "${tok}" /api/admin/users)"
+  # Identical repeat immediately after the first denial, on the same replica: no sleep.
+  probe="$(gw_probe_one "${tok}" /api/admin/users)"
   DENY2_CODE="${probe%% *}"
   DENY2_ID="${probe#* }"
   if [ "${code}" = "403" ]; then
