@@ -66,6 +66,22 @@ func TestGatewayConvergence(t *testing.T) {
 		AcknowledgedAt: timestamppb.New(now.Add(-5 * time.Second)),
 	})
 
+	// 5. gw-idle-50s: version 5, heartbeat 50s ago (< 60s threshold) -> healthy
+	_ = h.distServer.AckTracker().RecordAck(context.Background(), &snapshotv1.SnapshotAck{
+		GatewayId:      "gw-idle-50s",
+		ActiveVersion:  5,
+		Status:         snapshotv1.AckStatus_ACK_STATUS_ACTIVATED,
+		AcknowledgedAt: timestamppb.New(now.Add(-50 * time.Second)),
+	})
+
+	// 6. gw-idle-70s: version 5, heartbeat 70s ago (> 60s threshold) -> partitioned
+	_ = h.distServer.AckTracker().RecordAck(context.Background(), &snapshotv1.SnapshotAck{
+		GatewayId:      "gw-idle-70s",
+		ActiveVersion:  5,
+		Status:         snapshotv1.AckStatus_ACK_STATUS_ACTIVATED,
+		AcknowledgedAt: timestamppb.New(now.Add(-70 * time.Second)),
+	})
+
 	// Also mock DB query to return empty or 1 row
 	ackRows := h.mockDB.NewRows([]string{
 		"gateway_id", "active_version", "status", "error_message", "lease_expires_at", "last_heartbeat_at", "connected_at",
@@ -83,7 +99,7 @@ func TestGatewayConvergence(t *testing.T) {
 	var resp controlv1.GatewayListResponse
 	err := json.Unmarshal(rec.Body.Bytes(), &resp)
 	require.NoError(t, err)
-	require.Len(t, resp.Gateways, 4)
+	require.Len(t, resp.Gateways, 6)
 
 	statusMap := make(map[string]controlv1.GatewayStatusStatus)
 	for _, gw := range resp.Gateways {
@@ -94,6 +110,8 @@ func TestGatewayConvergence(t *testing.T) {
 	assert.Equal(t, controlv1.Degraded, statusMap["gw-degraded"])
 	assert.Equal(t, controlv1.Partitioned, statusMap["gw-partitioned-stale"])
 	assert.Equal(t, controlv1.Partitioned, statusMap["gw-partitioned-rejected"])
+	assert.Equal(t, controlv1.Healthy, statusMap["gw-idle-50s"])
+	assert.Equal(t, controlv1.Partitioned, statusMap["gw-idle-70s"])
 }
 
 func TestConvergenceAndQuarantine(t *testing.T) {

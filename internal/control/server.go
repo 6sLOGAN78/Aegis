@@ -102,6 +102,21 @@ func (s *SnapshotDistributionServer) StreamSnapshots(stream snapshotv1.SnapshotD
 						_ = s.ackTracker.RecordAck(stream.Context(), ack)
 					}
 				}
+				if pong := req.GetPong(); pong != nil && s.ackTracker != nil && req.GatewayId != "" {
+					// A Pong is a liveness signal: refresh the heartbeat with server time,
+					// but never upgrade a previously REJECTED replica to ACTIVATED.
+					rec := &snapshotv1.SnapshotAck{
+						GatewayId:      req.GatewayId,
+						ActiveVersion:  pong.ActiveVersion,
+						Status:         snapshotv1.AckStatus_ACK_STATUS_ACTIVATED,
+						AcknowledgedAt: timestamppb.Now(),
+					}
+					if prior, ok := s.ackTracker.GetReplicaStatuses()[req.GatewayId]; ok && prior.Status == snapshotv1.AckStatus_ACK_STATUS_REJECTED {
+						rec.Status = snapshotv1.AckStatus_ACK_STATUS_REJECTED
+						rec.ErrorMessage = prior.ErrorMessage
+					}
+					_ = s.ackTracker.RecordAck(stream.Context(), rec)
+				}
 			}
 		}
 	}()
