@@ -332,4 +332,4 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 | 6. Production Hardening & Operational Runbooks | 3/3 | Complete | 2026-10-07 |
 | 7. Close gaps B1, B3, B4 (compose alignment) | 6/6 | Complete | 2026-10-09 |
 | 8. Close gap B7 (denials and completions to the audit spool) | 12/12 | Complete | 2026-10-09 |
-| 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 8/8 | Complete   | 2026-10-10 |
+| 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 8/8 | Complete    | 2026-10-10 |

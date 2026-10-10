@@ -20,7 +20,7 @@ Requirements for initial release. Each maps to roadmap phases.
 - [x] **AUTH-01**: User authentication validates short-lived signed JWT bearer tokens against pinned issuer, audience, and algorithm allowlist (rejecting `none` and symmetric keys)
 - [x] **AUTH-02**: Dedicated mTLS listener (`:8443`) terminates workload connections and extracts authenticated SPIFFE URI SAN identities (`spiffe://aegis.local/workload/...`)
 - [x] **AUTH-03**: Workload mTLS listener rejects user bearer credentials to prevent ambiguous principal selection
-- [ ] **AUTH-04**: Local development demo JWT issuer with seeded credentials (`developer`, `finance`, `application-admin`) and login throttling
+- [x] **AUTH-04**: Local development demo JWT issuer with seeded credentials (`developer`, `finance`, `application-admin`) and login throttling
 - [x] **AUTH-05**: Gateway mints and signs short-lived (<=15s) backend assertion JWTs (`X-Aegis-Assertion`) bound to target service, method, canonical path, and request ID
 
 ### Policy Engine & Authorization (POL)
@@ -43,7 +43,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **REV-01**: Redis-backed atomic token bucket rate limiting by principal and route (default 100 rps, burst 200)
 - [x] **REV-02**: Global ingress connection and request concurrency bounds protect unauthenticated traffic before identity resolution
-- [ ] **REV-03**: Ephemeral Redis token `jti` revocation and principal quarantine takes effect across all replicas within 5 seconds
+- [x] **REV-03**: Ephemeral Redis token `jti` revocation and principal quarantine takes effect across all replicas within 5 seconds
 - [x] **REV-04**: Revocation check timeout (200ms) fails closed (503) on Redis unavailability with no permissive fallback
 
 ### Audit & Durable Event Persistence (AUD)
@@ -61,7 +61,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Operator Dashboard & Management APIs (OPS)
 
-- [ ] **OPS-01**: REST JSON management endpoints (`/control/v1`) for routes, policies, simulation, quarantine, and audit log inspection
+- [x] **OPS-01**: REST JSON management endpoints (`/control/v1`) for routes, policies, simulation, quarantine, and audit log inspection
 - [ ] **OPS-02**: Optimistic concurrency (ETag/If-Match), idempotency keys, and RBAC permissions on management endpoints
 - [ ] **OPS-03**: React/TypeScript operator dashboard with audit stream, live Rego policy simulation, and replica convergence tracking
 - [x] **OPS-04**: Operator session security with HttpOnly cookies, CSRF protection, and Content Security Policy
