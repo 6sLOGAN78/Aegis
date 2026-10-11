@@ -41,6 +41,8 @@ export interface GatewayStatus {
 
 export interface GatewayListResponse {
   gateways: GatewayStatus[];
+  /** Gateways omitted from `gateways` because their heartbeat exceeded the stale threshold. */
+  hidden_stale_count?: number;
 }
 
 export interface PolicyDraft {

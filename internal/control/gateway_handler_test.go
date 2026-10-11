@@ -197,3 +197,47 @@ func TestConvergenceAndQuarantine(t *testing.T) {
 		assert.Equal(t, "1", val)
 	})
 }
+
+func TestGatewayListHidesStaleButCountsThem(t *testing.T) {
+	h := setupTestHarness(t)
+	defer h.mockDB.Close()
+
+	handler := h.server.Handler()
+	cookie, _ := loginOperator(t, handler, "admin", "admin-secret")
+
+	now := time.Now().UTC()
+	record := func(id string, status snapshotv1.AckStatus, age time.Duration) {
+		_ = h.distServer.AckTracker().RecordAck(context.Background(), &snapshotv1.SnapshotAck{
+			GatewayId:      id,
+			ActiveVersion:  1,
+			Status:         status,
+			AcknowledgedAt: timestamppb.New(now.Add(-age)),
+		})
+	}
+	record("gw-fresh", snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, 2*time.Second)
+	record("gw-stale-applied", snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, 20*time.Minute)
+	record("gw-rejected-recent", snapshotv1.AckStatus_ACK_STATUS_REJECTED, 20*time.Minute)
+
+	ackRows := h.mockDB.NewRows([]string{
+		"gateway_id", "active_version", "status", "error_message", "lease_expires_at", "last_heartbeat_at", "connected_at",
+	})
+	h.mockDB.ExpectQuery(regexp.QuoteMeta("SELECT gateway_id, active_version, status, error_message")).
+		WillReturnRows(ackRows)
+
+	req := httptest.NewRequest(http.MethodGet, "/control/v1/gateways", nil)
+	req.AddCookie(cookie)
+	rec := httptest.NewRecorder()
+	handler.ServeHTTP(rec, req)
+	require.Equal(t, http.StatusOK, rec.Code)
+
+	var resp controlv1.GatewayListResponse
+	require.NoError(t, json.Unmarshal(rec.Body.Bytes(), &resp))
+
+	ids := make([]string, 0, len(resp.Gateways))
+	for _, gw := range resp.Gateways {
+		ids = append(ids, gw.GatewayId)
+	}
+	assert.ElementsMatch(t, []string{"gw-fresh", "gw-rejected-recent"}, ids)
+	assert.Equal(t, 1, resp.HiddenStaleCount)
+	assert.Contains(t, rec.Body.String(), `"hidden_stale_count":1`)
+}

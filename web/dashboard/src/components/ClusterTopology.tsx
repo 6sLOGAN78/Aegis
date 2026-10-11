@@ -37,6 +37,7 @@ export const ClusterTopology: React.FC = () => {
   });
 
   const gateways = data?.gateways || [];
+  const hiddenStaleCount = data?.hidden_stale_count ?? 0;
 
   // Determine active control plane snapshot version (highest seen among healthy or any)
   const activeVersion = gateways.reduce((max, g) => (g.active_version > max ? g.active_version : max), 1);
@@ -124,6 +125,17 @@ export const ClusterTopology: React.FC = () => {
               <span className="text-sm font-semibold font-mono text-slate-200">
                 {convergedCount} / {totalCount} Replicas ({convergencePct}%)
               </span>
+              {hiddenStaleCount > 0 && (
+                <span
+                  className="inline-flex items-center space-x-1 mt-1 text-xs font-medium text-amber-400"
+                  title="Replicas whose last heartbeat is older than the stale threshold are hidden from the list and the convergence rate."
+                >
+                  <AlertTriangle className="w-3.5 h-3.5" />
+                  <span>
+                    {hiddenStaleCount} stale replica{hiddenStaleCount === 1 ? '' : 's'} hidden
+                  </span>
+                </span>
+              )}
             </div>
 
             <button
@@ -145,7 +157,9 @@ export const ClusterTopology: React.FC = () => {
               {totalCount === 0
                 ? '0 Connected'
                 : convergencePct === 100
-                ? 'Fully Synchronized'
+                ? hiddenStaleCount > 0
+                  ? `Listed Replicas Synchronized (${hiddenStaleCount} stale hidden)`
+                  : 'Fully Synchronized'
                 : 'Reconciliation In Progress'}
             </span>
           </div>

@@ -1066,11 +1066,20 @@ components:
       type: object
       required:
         - gateways
+        - hidden_stale_count
       properties:
         gateways:
           type: array
           items:
             $ref: '#/components/schemas/GatewayStatus'
+        hidden_stale_count:
+          type: integer
+          minimum: 0
+          description: >-
+            Number of gateway records omitted from `gateways` because their last
+            heartbeat is older than the stale threshold (AEGIS_GATEWAY_STALE_AFTER).
+            Surfaced so a long-partitioned replica never silently disappears from
+            the convergence view.
 
     QuarantineRequest:
       type: object

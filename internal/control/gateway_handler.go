@@ -122,10 +122,13 @@ func (s *APIServer) HandleListGateways(w http.ResponseWriter, r *http.Request) {
 
 	staleAfter := gatewayStaleAfter()
 
+	hiddenStale := 0
 	for _, rep := range combined {
 		// Stale records are hidden from the list (and thus the convergence
-		// denominator), not deleted from storage.
+		// denominator), not deleted from storage. They are counted in
+		// HiddenStaleCount so the operator always sees that replicas went silent.
 		if isStaleReplica(now, rep.lastHeartbeatAt, rep.statusString, staleAfter) {
+			hiddenStale++
 			continue
 		}
 		status := controlv1.Healthy
@@ -162,7 +165,8 @@ func (s *APIServer) HandleListGateways(w http.ResponseWriter, r *http.Request) {
 	})
 
 	resp := controlv1.GatewayListResponse{
-		Gateways: items,
+		Gateways:         items,
+		HiddenStaleCount: hiddenStale,
 	}
 
 	w.Header().Set("Content-Type", "application/json")

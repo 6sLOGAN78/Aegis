@@ -129,6 +129,9 @@ type ErrorResponse struct {
 // GatewayListResponse defines model for GatewayListResponse.
 type GatewayListResponse struct {
 	Gateways []GatewayStatus `json:"gateways"`
+
+	// HiddenStaleCount Number of gateway records omitted from `gateways` because their last heartbeat is older than the stale threshold (AEGIS_GATEWAY_STALE_AFTER). Surfaced so a long-partitioned replica never silently disappears from the convergence view.
+	HiddenStaleCount int `json:"hidden_stale_count"`
 }
 
 // GatewayStatus defines model for GatewayStatus.
