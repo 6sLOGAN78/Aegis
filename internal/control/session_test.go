@@ -194,3 +194,50 @@ func TestSessionAndCSRF(t *testing.T) {
 		assert.Equal(t, http.StatusOK, secOpsRec.Code)
 	})
 }
+
+func TestCookieSecureFlag(t *testing.T) {
+	cases := []struct {
+		name   string
+		secure bool
+	}{{"default secure", true}, {"insecure opt-out", false}}
+	for _, tc := range cases {
+		t.Run(tc.name, func(t *testing.T) {
+			sm := NewSessionManager()
+			auth := NewAuthHandler(sm)
+			if !tc.secure {
+				auth = auth.WithSecureCookie(false)
+			}
+
+			body := `{"username":"admin","password":"admin-secret"}`
+			req := httptest.NewRequest(http.MethodPost, "/control/v1/auth/login", bytes.NewBufferString(body))
+			rec := httptest.NewRecorder()
+			auth.HandleLogin(rec, req)
+			require.Equal(t, http.StatusOK, rec.Code)
+			cookies := rec.Result().Cookies()
+			require.Len(t, cookies, 1)
+			assert.Equal(t, tc.secure, cookies[0].Secure)
+			assert.True(t, cookies[0].HttpOnly)
+			assert.Equal(t, http.SameSiteStrictMode, cookies[0].SameSite)
+
+			lreq := httptest.NewRequest(http.MethodPost, "/control/v1/auth/logout", nil)
+			lrec := httptest.NewRecorder()
+			auth.HandleLogout(lrec, lreq)
+			lc := lrec.Result().Cookies()
+			require.Len(t, lc, 1)
+			assert.Equal(t, tc.secure, lc[0].Secure)
+			assert.True(t, lc[0].HttpOnly)
+			assert.Equal(t, http.SameSiteStrictMode, lc[0].SameSite)
+		})
+	}
+}
+
+func TestCookieSecureFromEnv(t *testing.T) {
+	cases := map[string]bool{
+		"": true, "true": true, "false": false, "FALSE": false,
+		" False ": false, "0": false, "garbage": true,
+	}
+	for val, want := range cases {
+		got := cookieSecureFromEnv(func(string) string { return val })
+		assert.Equal(t, want, got, "value %q", val)
+	}
+}
