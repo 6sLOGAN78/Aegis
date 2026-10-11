@@ -58,18 +58,31 @@ interface PolicyStudioProps {
   // Candidate Rego held by the parent; survives tab switches (PolicyStudio unmounts).
   candidateRego?: string;
   onCandidateRegoChange?: (rego: string) => void;
+  // Snapshot version the current edit session started from. Publish sends
+  // If-Match for THIS version (not the live latest) so a concurrent publish by
+  // another operator yields 412 instead of being silently overwritten.
+  baseVersion?: number;
+  onBaseVersionChange?: (version: number | undefined) => void;
 }
 
 export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   session,
   candidateRego,
   onCandidateRegoChange,
+  baseVersion: baseVersionProp,
+  onBaseVersionChange,
 }) => {
   const queryClient = useQueryClient();
   const [policyId, setPolicyId] = useState(DEFAULT_POLICY_ID);
   const [policyName, setPolicyName] = useState('Zero-Trust Gateway Ingress Policy');
   // Seed from the parent's candidate so a remount (tab switch) never discards unsaved edits.
   const [regoCode, setRegoCode] = useState<string>(candidateRego ?? DEFAULT_REGO_TEMPLATE);
+  // Edit-session base version; mirrored to the parent so it survives remounts.
+  const [baseVersion, setBaseVersionState] = useState<number | undefined>(baseVersionProp);
+  const setBaseVersion = (v: number | undefined) => {
+    setBaseVersionState(v);
+    if (onBaseVersionChange) onBaseVersionChange(v);
+  };
   const [validationResult, setValidationResult] = useState<PolicyValidationResponse | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -84,6 +97,8 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   const [selectedRollbackVersion, setSelectedRollbackVersion] = useState<PolicyVersion | null>(null);
   const [rollbackComment, setRollbackComment] = useState('');
   const [rollbackError, setRollbackError] = useState<string | null>(null);
+  // Version the rollback dialog was opened against (If-Match for rollback).
+  const [rollbackBaseVersion, setRollbackBaseVersion] = useState<number | null>(null);
 
   const isSecOps = session?.role === 'sec-ops';
 
@@ -96,7 +111,13 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
 
   const versions = versionsData?.versions || [];
   const latestVersion = versions.length > 0 ? versions[0].snapshot_version : 1;
+  // Live latest ETag (display only; refreshed by the 10s refetch).
   const currentETag = `"${latestVersion}"`;
+  // ETag sent on publish: the version this edit session is based on. Falls back
+  // to the live value only before any versions have loaded.
+  const editBaseVersion = baseVersion ?? latestVersion;
+  const editETag = `"${editBaseVersion}"`;
+  const hasNewerVersion = baseVersion !== undefined && latestVersion > baseVersion;
 
   const handleEditorBeforeMount: BeforeMount = (monaco) => {
     registerRegoLanguage(monaco);
@@ -112,18 +133,44 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   const hydratedForRef = useRef<string | null>(null);
   const userEditedRef = useRef(candidateRego !== undefined);
   useEffect(() => {
-    if (hydratedForRef.current === policyId || userEditedRef.current) return;
     const list = versionsData?.versions;
-    if (!list || list.length === 0) return;
+    if (!list) return;
+    if (hydratedForRef.current === policyId || userEditedRef.current) {
+      // An edit session that started before versions loaded gets its base
+      // pinned to the first version list it sees, never bumped by later refetches.
+      if (baseVersion === undefined) {
+        setBaseVersion(list.length > 0 ? list[0].snapshot_version : 1);
+      }
+      return;
+    }
+    if (list.length === 0) return;
     hydratedForRef.current = policyId;
     const source = list[0].source_rego;
     if (source) {
       setRegoCode(source);
       if (onCandidateRegoChange) onCandidateRegoChange(source);
+      setBaseVersion(list[0].snapshot_version);
     }
+    // baseVersion/setBaseVersion intentionally omitted: only versions/policyId drive hydration.
   }, [policyId, versionsData, onCandidateRegoChange]);
 
+  // Explicitly discard local edits and reload the latest stored source.
+  const handleReloadLatest = () => {
+    const list = versionsData?.versions;
+    if (!list || list.length === 0) return;
+    userEditedRef.current = false;
+    hydratedForRef.current = policyId;
+    const source = list[0].source_rego || DEFAULT_REGO_TEMPLATE;
+    setRegoCode(source);
+    if (onCandidateRegoChange) onCandidateRegoChange(source);
+    setBaseVersion(list[0].snapshot_version);
+  };
+
   const handleCodeChange = (value?: string) => {
+    if (!userEditedRef.current && baseVersion === undefined && versionsData) {
+      // First edit on an unhydrated (template) editor: pin the base now.
+      setBaseVersion(latestVersion);
+    }
     userEditedRef.current = true;
     const updated = value || '';
     setRegoCode(updated);
@@ -173,11 +220,13 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
       return apiClient.post<PolicyPublishResponse>(
         `/control/v1/policies/${policyId}/publish`,
         { comment: publishComment || 'Broadcast via Policy Studio console' },
-        { ifMatch: currentETag, idempotencyKey: publishKeyRef.current ?? newIdempotencyKey() }
+        { ifMatch: editETag, idempotencyKey: publishKeyRef.current ?? newIdempotencyKey() }
       );
     },
     onSuccess: (data) => {
       publishKeyRef.current = newIdempotencyKey();
+      // Editor content is now the published snapshot; rebase the session on it.
+      setBaseVersion(data.snapshot_version);
       setIsPublishModalOpen(false);
       setPublishComment('');
       setSuccessBanner(
@@ -190,7 +239,9 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
       publishKeyRef.current = newIdempotencyKey();
       if (err instanceof ApiError) {
         if (err.status === 412) {
-          setPublishError('Publication conflict: ETag mismatch. Another operator published a newer version.');
+          setPublishError(
+            'Publication conflict: ETag mismatch. Another operator published a newer version since your edit began. Review it (Load latest) before republishing.'
+          );
         } else if (err.status === 422) {
           setPublishError(err.message || 'Policy failed validation (422).');
         } else {
@@ -213,12 +264,13 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
           target_version_id: selectedRollbackVersion.version_id,
           comment: rollbackComment || `Monotonic rollback to historical v${selectedRollbackVersion.snapshot_version}`,
         },
-        { ifMatch: currentETag, idempotencyKey: newIdempotencyKey() }
+        { ifMatch: `"${rollbackBaseVersion ?? latestVersion}"`, idempotencyKey: newIdempotencyKey() }
       );
     },
     onSuccess: (data) => {
       setIsRollbackModalOpen(false);
       setSelectedRollbackVersion(null);
+      setRollbackBaseVersion(null);
       setRollbackComment('');
       setSuccessBanner(
         `Rollback broadcast complete: republished historical snapshot under monotonic v${data?.snapshot_version}.`
@@ -369,6 +421,27 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
               <span>Active Snapshot ETag:</span>
               <span className="font-mono text-cyan-400">{currentETag}</span>
             </div>
+            <div className="flex items-center justify-between text-xs text-slate-400">
+              <span>Editing Based On ETag:</span>
+              <span className="font-mono text-slate-200">{editETag}</span>
+            </div>
+            {hasNewerVersion && (
+              <div className="flex items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-2 rounded-lg text-amber-300 text-xs">
+                <span className="flex items-center space-x-1">
+                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
+                  <span>
+                    Newer version v{latestVersion} was published after your edit began (base v{baseVersion}).
+                    Publishing will be rejected until you reload.
+                  </span>
+                </span>
+                <button
+                  onClick={handleReloadLatest}
+                  className="shrink-0 text-amber-200 hover:text-white underline"
+                >
+                  Load latest
+                </button>
+              </div>
+            )}
           </div>
 
           {/* Syntax Validation Card */}
@@ -467,6 +540,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
                       <button
                         onClick={() => {
                           setSelectedRollbackVersion(ver);
+                          setRollbackBaseVersion(latestVersion);
                           setRollbackError(null);
                           setIsRollbackModalOpen(true);
                         }}
@@ -512,21 +586,21 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
                 <span className="text-[10px] uppercase font-semibold text-slate-500 tracking-wider">
                   Current Version
                 </span>
-                <span className="text-base text-slate-300 font-bold">v{latestVersion}</span>
+                <span className="text-base text-slate-300 font-bold">v{editBaseVersion}</span>
               </div>
               <div className="text-cyan-400 font-bold text-lg">→</div>
               <div className="flex flex-col text-right">
                 <span className="text-[10px] uppercase font-semibold text-cyan-400 tracking-wider">
                   Next Monotonic Version
                 </span>
-                <span className="text-base text-cyan-300 font-bold">v{latestVersion + 1}</span>
+                <span className="text-base text-cyan-300 font-bold">v{editBaseVersion + 1}</span>
               </div>
             </div>
 
             <div className="text-xs text-slate-400 space-y-2">
               <div className="flex justify-between">
                 <span>Optimistic Concurrency ETag:</span>
-                <span className="font-mono text-slate-200">{currentETag}</span>
+                <span className="font-mono text-slate-200">{editETag}</span>
               </div>
               <p className="text-slate-500 text-[11px]">
                 Upon confirmation, this configuration is digitally signed with the control plane Ed25519 key and broadcast to all gateway replicas over gRPC snapshot streams.
@@ -603,7 +677,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
 
             <div className="bg-rose-500/10 border border-rose-500/30 p-3 rounded-lg text-rose-300 text-xs">
               <span className="font-semibold">Invariant 9 Monotonicity Guard:</span> To ensure replicas never reject decreasing versions, this action will NOT decrement the version number. Historical configuration will be signed and published as monotonic version{' '}
-              <span className="font-mono font-bold text-rose-200">v{latestVersion + 1}</span>.
+              <span className="font-mono font-bold text-rose-200">v{(rollbackBaseVersion ?? latestVersion) + 1}</span>.
             </div>
 
             {rollbackError && (

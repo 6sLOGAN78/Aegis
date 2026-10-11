@@ -14,6 +14,9 @@ export const App: React.FC = () => {
   const [isLoginOpen, setIsLoginOpen] = useState(false);
   const [activeTab, setActiveTab] = useState<TabId>('studio');
   const [candidateRego, setCandidateRego] = useState<string | undefined>(undefined);
+  // Snapshot version the candidate edit session is based on (If-Match for publish).
+  // Lifted here with candidateRego so it survives PolicyStudio remounts.
+  const [candidateBaseVersion, setCandidateBaseVersion] = useState<number | undefined>(undefined);
 
   // Verify active session on mount
   useEffect(() => {
@@ -76,6 +79,8 @@ export const App: React.FC = () => {
             session={session}
             candidateRego={candidateRego}
             onCandidateRegoChange={setCandidateRego}
+            baseVersion={candidateBaseVersion}
+            onBaseVersionChange={setCandidateBaseVersion}
           />
         )}
 
