@@ -342,14 +342,14 @@ Plans:
 **Goal:** Rotation and DR code that today has only test callers runs in production. Covers B8: the gateway loads trusted keysets via AddTrustedKey/SetTrustedKeys (verifier.go) so signing keys rotate with zero downtime, and ReconstructQuarantines (store.go) runs at startup before readiness so quarantines survive a Redis loss. Also covers B2: the Kubernetes manifests run the current binaries (statefulset.yaml container port and probe paths match the real listeners and health endpoints, the audit spool uses a persistent volume instead of emptyDir, and configmap keys match the env vars the binaries read, e.g. AEGIS_WORKLOAD_ADDR). Full production K8S-01 (default-deny NetworkPolicies, topology spread) stays v2. Also covers CR-02 (accepted risk AR-01 in 10-SECURITY.md): the control-plane gRPC snapshot server (cmd/control-plane/main.go, `grpc.NewServer()` with no transport credentials) requires mTLS — server cert plus client-cert verification against the Aegis root CA (existing deployments/certs/gateway-server.*, gateway-client.*, root-ca.crt) — gateways dial with their client cert, and the GatewayId in Ack/Pong/heartbeats is bound to the authenticated client certificate identity (mismatch rejected), so an unauthenticated host can no longer spoof replica health, acks or staleness. Compose profiles, Kubernetes manifests and the smoke/integration tests are updated so all profiles run with the authenticated stream; a plaintext or wrong-CA client is rejected.
 **Requirements**: REV-03, AUTH-01, CTRL-02, CTRL-03, CTRL-05
 **Depends on:** Phase 10
-**Plans:** 15 plans
+**Plans:** 2/15 plans executed
 
 Plans:
 
 **Wave 1**
 
-- [ ] 11-01-PLAN.md — Foundations: gateway SPIFFE helpers, pki.LoadCA, keyfile, shared test PKI (A1/A2 spike), metrics
-- [ ] 11-02-PLAN.md — Durable security-state storage: migration 000005, repo, revocation marker/jti restore, governor reason
+- [x] 11-01-PLAN.md — Foundations: gateway SPIFFE helpers, pki.LoadCA, keyfile, shared test PKI (A1/A2 spike), metrics
+- [x] 11-02-PLAN.md — Durable security-state storage: migration 000005, repo, revocation marker/jti restore, governor reason
 
 **Wave 2** *(blocked on Wave 1 completion)*
 
