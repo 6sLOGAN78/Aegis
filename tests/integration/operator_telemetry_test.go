@@ -19,6 +19,7 @@ import (
 	"aegis/internal/snapshot"
 	"aegis/internal/storage"
 	"aegis/internal/telemetry"
+	"aegis/internal/testpki"
 	controlv1 "aegis/pkg/api/control/v1"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
@@ -29,8 +30,10 @@ import (
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
+	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/status"
 	"google.golang.org/grpc/test/bufconn"
+	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
 func TestOperatorAndTelemetryIntegration(t *testing.T) {
@@ -92,7 +95,8 @@ decision := {"allow": true, "reason_code": "RULE_AUTHORIZED"} if {
 
 	// Start in-memory gRPC distribution server via bufconn
 	lis := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
+	tpki := testpki.New(t)
+	grpcServer := grpc.NewServer(grpc.Creds(tpki.ServerCreds()))
 	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
 	go func() {
 		_ = grpcServer.Serve(lis)
@@ -117,7 +121,7 @@ decision := {"allow": true, "reason_code": "RULE_AUTHORIZED"} if {
 		snapManager,
 		verifier,
 		grpc.WithContextDialer(dialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(tpki.ClientCreds(gatewayID)),
 	)
 	go func() {
 		_ = streamClient.Start(streamCtx)
@@ -481,4 +485,51 @@ decision := {"allow": true, "reason_code": "RULE_AUTHORIZED"} if {
 		assert.NotContains(t, cpScrapeOutput, forbidden, "Control plane metrics must not contain PII or unparameterized tokens")
 		assert.NotContains(t, gwScrapeOutput, forbidden, "Gateway metrics must not contain PII or unparameterized tokens")
 	}
+}
+
+// TestOperatorTelemetrySpoofedGatewayRejected proves a client holding the
+// certificate for gateway-1 cannot inject state as gateway-2: the stream is
+// terminated with PermissionDenied and gateway-2 never appears in the replica
+// view that backs the operator gateway list.
+func TestOperatorTelemetrySpoofedGatewayRejected(t *testing.T) {
+	tpki := testpki.New(t)
+	tracker := control.NewAckTracker(nil)
+	dist := control.NewSnapshotDistributionServer(nil, tracker)
+
+	lis := bufconn.Listen(1024 * 1024)
+	srv := grpc.NewServer(grpc.Creds(tpki.ServerCreds()))
+	snapshotv1.RegisterSnapshotDistributionServiceServer(srv, dist)
+	go func() { _ = srv.Serve(lis) }()
+	defer func() {
+		srv.Stop()
+		_ = lis.Close()
+	}()
+
+	conn, err := grpc.DialContext(context.Background(), "bufnet",
+		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
+		grpc.WithTransportCredentials(tpki.ClientCreds("gateway-1")))
+	require.NoError(t, err)
+	defer conn.Close()
+
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+	stream, err := snapshotv1.NewSnapshotDistributionServiceClient(conn).StreamSnapshots(ctx)
+	require.NoError(t, err)
+
+	require.NoError(t, stream.Send(&snapshotv1.GatewayMessage{
+		GatewayId: "gateway-2",
+		Payload: &snapshotv1.GatewayMessage_Ack{Ack: &snapshotv1.SnapshotAck{
+			GatewayId:      "gateway-2",
+			ActiveVersion:  1,
+			Status:         snapshotv1.AckStatus_ACK_STATUS_ACTIVATED,
+			AcknowledgedAt: timestamppb.Now(),
+		}},
+	}))
+	_, err = stream.Recv()
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+
+	statuses := tracker.GetReplicaStatuses()
+	assert.NotContains(t, statuses, "gateway-2")
+	assert.Empty(t, statuses, "no replica state may be recorded for a spoofed stream")
 }

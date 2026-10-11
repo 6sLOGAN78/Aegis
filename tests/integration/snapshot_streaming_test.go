@@ -10,12 +10,12 @@ import (
 
 	"aegis/internal/control"
 	"aegis/internal/snapshot"
+	"aegis/internal/testpki"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -43,7 +43,7 @@ func TestSnapshotStreaming(t *testing.T) {
 			{
 				PackageName: "aegis.authz",
 				ModuleName:  "rules.rego",
-				SourceRego:  `package aegis.authz
+				SourceRego: `package aegis.authz
 default allow = false
 allow if { input.request.path == "/api/orders" }
 `,
@@ -57,7 +57,8 @@ allow if { input.request.path == "/api/orders" }
 	distServer := control.NewSnapshotDistributionServer(v1Env, ackTracker)
 
 	lis := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
+	tpki := testpki.New(t)
+	grpcServer := grpc.NewServer(grpc.Creds(tpki.ServerCreds()))
 	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
 
 	go func() {
@@ -82,7 +83,7 @@ allow if { input.request.path == "/api/orders" }
 		manager,
 		verifier,
 		grpc.WithContextDialer(dialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(tpki.ClientCreds("gw-replica-1")),
 	)
 
 	go func() {
@@ -131,7 +132,7 @@ allow if { input.request.path == "/api/orders" }
 			{
 				PackageName: "aegis.authz",
 				ModuleName:  "rules.rego",
-				SourceRego:  `package aegis.authz
+				SourceRego: `package aegis.authz
 default allow = false
 allow if { true }
 `,
