@@ -243,6 +243,9 @@ decision := {"allow": true, "reason_code": "RULE_AUTHORIZED"} if {
 		}
 		if method != http.MethodGet && method != http.MethodHead {
 			req.Header.Set("X-CSRF-Token", loginData.CSRFToken)
+			if req.Header.Get("Idempotency-Key") == "" {
+				req.Header.Set("Idempotency-Key", uuid.NewString())
+			}
 			if req.Header.Get("Content-Type") == "" {
 				req.Header.Set("Content-Type", "application/json")
 			}
