@@ -102,22 +102,26 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
     registerRegoLanguage(monaco);
   };
 
-  // One-time hydration of the editor from the latest stored policy source.
+  // Hydrate the editor from the latest stored policy source, once per policy ID.
   // If the parent already holds a candidate (remount after a tab switch), treat it
   // as unsaved operator work and never overwrite it with the server copy.
-  const hydratedRef = useRef(false);
+  // Changing the Policy Identifier re-hydrates for the new ID unless the operator
+  // has unsaved edits. Note: the versions endpoint currently returns the global
+  // snapshot history (snapshots are fleet-wide), so list[0] is the latest
+  // published snapshot source rather than a per-policy record.
+  const hydratedForRef = useRef<string | null>(null);
   const userEditedRef = useRef(candidateRego !== undefined);
   useEffect(() => {
-    if (hydratedRef.current || userEditedRef.current) return;
+    if (hydratedForRef.current === policyId || userEditedRef.current) return;
     const list = versionsData?.versions;
     if (!list || list.length === 0) return;
-    hydratedRef.current = true;
+    hydratedForRef.current = policyId;
     const source = list[0].source_rego;
     if (source) {
       setRegoCode(source);
       if (onCandidateRegoChange) onCandidateRegoChange(source);
     }
-  }, [versionsData, onCandidateRegoChange]);
+  }, [policyId, versionsData, onCandidateRegoChange]);
 
   const handleCodeChange = (value?: string) => {
     userEditedRef.current = true;

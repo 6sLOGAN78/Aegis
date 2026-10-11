@@ -68,6 +68,10 @@ func (s *APIServer) HandleCreatePolicyDraft(w http.ResponseWriter, r *http.Reque
 }
 
 // HandleGetPolicyVersions returns historical versions for a policy.
+//
+// Snapshots are fleet-wide, so this currently returns the global snapshot
+// history regardless of {id}; the id is only echoed back as PolicyId. Callers
+// must not treat versions[0].SourceRego as specific to the requested policy.
 func (s *APIServer) HandleGetPolicyVersions(w http.ResponseWriter, r *http.Request) {
 	id := chi.URLParam(r, "id")
 	if id == "" {
