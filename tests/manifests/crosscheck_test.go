@@ -5,10 +5,12 @@ package manifests
 
 import (
 	"bytes"
+	"encoding/base64"
 	"errors"
 	"io"
 	"io/fs"
 	"os"
+	"os/exec"
 	"path/filepath"
 	"regexp"
 	"sort"
@@ -530,4 +532,151 @@ func TestManifestOverlayPatchTargetsExist(t *testing.T) {
 			assert.Equal(t, kc[1], str(pc["name"]))
 		}
 	}
+}
+
+// ------------------------------------------------------ secrets and key material
+
+const secretsDir = "../../deployments/kubernetes/secrets"
+
+var createRe = regexp.MustCompile(`kubectl\s+(?:-n\s+\S+\s+)?create\s+(?:secret\s+generic|configmap)\s+(\S+)`)
+
+func scriptObjects(t *testing.T) map[string]bool {
+	t.Helper()
+	data, err := os.ReadFile(filepath.Join(secretsDir, "create-secrets.sh"))
+	require.NoError(t, err)
+	// Join backslash continuations so each kubectl command is one line.
+	flat := strings.ReplaceAll(string(data), "\\\n", " ")
+	out := map[string]bool{}
+	for _, m := range createRe.FindAllStringSubmatch(flat, -1) {
+		out[m[1]] = true
+	}
+	return out
+}
+
+// referencedObjects collects every Secret/ConfigMap name referenced by a workload.
+func referencedObjects(docs []manifestDoc) (secrets, configMaps map[string]bool) {
+	secrets, configMaps = map[string]bool{}, map[string]bool{}
+	for _, d := range docs {
+		ps := podSpec(d)
+		if ps == nil {
+			continue
+		}
+		for _, v := range list(ps["volumes"]) {
+			if s := str(dig(v, "secret", "secretName")); s != "" {
+				secrets[s] = true
+			}
+			if s := str(dig(v, "configMap", "name")); s != "" {
+				configMaps[s] = true
+			}
+		}
+		for _, c := range list(ps["containers"]) {
+			for _, e := range list(c["env"]) {
+				if s := str(dig(e, "valueFrom", "secretKeyRef", "name")); s != "" {
+					secrets[s] = true
+				}
+				if s := str(dig(e, "valueFrom", "configMapKeyRef", "name")); s != "" {
+					configMaps[s] = true
+				}
+			}
+			for _, ef := range list(c["envFrom"]) {
+				if s := str(dig(ef, "configMapRef", "name")); s != "" {
+					configMaps[s] = true
+				}
+				if s := str(dig(ef, "secretRef", "name")); s != "" {
+					secrets[s] = true
+				}
+			}
+		}
+	}
+	return
+}
+
+func TestManifestSecretRefsMatchCreationScript(t *testing.T) {
+	docs := baseDocs(t)
+	created := scriptObjects(t)
+	require.GreaterOrEqual(t, len(created), 11)
+
+	defined := map[string]bool{}
+	for _, d := range docs {
+		if d.kind() == "ConfigMap" {
+			defined[d.name()] = true
+		}
+	}
+	secrets, cms := referencedObjects(docs)
+	referenced := map[string]bool{}
+	for s := range secrets {
+		referenced[s] = true
+		assert.True(t, created[s], "Secret %s is referenced but not created by create-secrets.sh", s)
+	}
+	for c := range cms {
+		referenced[c] = true
+		assert.True(t, created[c] || defined[c], "ConfigMap %s is referenced but neither created nor defined", c)
+	}
+	for c := range created {
+		assert.True(t, referenced[c], "create-secrets.sh creates %s but no manifest references it", c)
+	}
+}
+
+var (
+	b64Re = regexp.MustCompile(`[A-Za-z0-9+/]{43}=|[A-Za-z0-9+/]{86}==`)
+)
+
+func TestManifestsContainNoKeyMaterial(t *testing.T) {
+	err := filepath.WalkDir(k8sRoot, func(p string, d fs.DirEntry, err error) error {
+		if err != nil {
+			return err
+		}
+		rel, _ := filepath.Rel(k8sRoot, p)
+		if d.IsDir() {
+			if rel == "secrets" {
+				return filepath.SkipDir
+			}
+			return nil
+		}
+		data, err := os.ReadFile(p)
+		if err != nil {
+			return err
+		}
+		assert.NotContains(t, string(data), "-----BEGIN", p)
+		for _, m := range b64Re.FindAllString(string(data), -1) {
+			raw, derr := base64.StdEncoding.DecodeString(m)
+			if derr == nil && (len(raw) == 32 || len(raw) == 64) {
+				t.Errorf("%s contains a base64 string decoding to %d bytes (key material?)", p, len(raw))
+			}
+		}
+		return nil
+	})
+	require.NoError(t, err)
+}
+
+func TestSecretsScriptSyntax(t *testing.T) {
+	script := filepath.Join(secretsDir, "create-secrets.sh")
+	if _, err := exec.LookPath("bash"); err != nil {
+		t.Skip("bash not available")
+	}
+	out, err := exec.Command("bash", "-n", script).CombinedOutput()
+	require.NoError(t, err, string(out))
+
+	data, err := os.ReadFile(script)
+	require.NoError(t, err)
+	s := string(data)
+	assert.Contains(t, s, "deployments/certs")
+	assert.Contains(t, s, "deployments/keys")
+	assert.Contains(t, s, "set -euo pipefail")
+	assert.Contains(t, s, "DEV KEYS ONLY")
+
+	flat := strings.ReplaceAll(s, "\\\n", " ")
+	creates := 0
+	for _, line := range strings.Split(flat, "\n") {
+		if strings.Contains(line, "kubectl -n") && strings.Contains(line, " create ") {
+			creates++
+			assert.Contains(t, line, "--dry-run=client -o yaml | kubectl apply -f -", line)
+		}
+		// The root CA private key must never be a --from-file source.
+		if strings.Contains(line, "--from-file") {
+			assert.NotContains(t, line, "root-ca.key", line)
+		}
+	}
+	assert.GreaterOrEqual(t, creates, 11)
+	assert.Contains(t, s, "root-ca\\.key", "guard against packaging the root CA key must exist")
 }
