@@ -32,6 +32,7 @@ import (
 
 	"github.com/google/uuid"
 	"github.com/redis/go-redis/v9"
+	"google.golang.org/grpc"
 )
 
 var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
@@ -87,7 +88,8 @@ func main() {
 		}
 	}
 
-	// Pinned Control Plane Ed25519 Public Key (CTRL-02, Invariant 4)
+	// Pinned Control Plane Ed25519 Public Key (CTRL-02, Invariant 4); single-key
+	// fallback used only when AEGIS_SNAPSHOT_KEYSET_DIR is not configured.
 	controlPlanePubKey := pubKey
 	if cpKeyB64 := os.Getenv("AEGIS_CONTROL_PLANE_PUBLIC_KEY"); cpKeyB64 != "" {
 		if b, err := base64.StdEncoding.DecodeString(cpKeyB64); err == nil && len(b) == ed25519.PublicKeySize {
@@ -99,17 +101,31 @@ func main() {
 
 	snapVerifier := snapshot.NewVerifier(controlPlanePubKey)
 	snapManager := snapshot.NewManager(snapVerifier)
+	tokenValidator := identity.NewTokenValidator(issuer, audience, pubKey)
+	metrics := telemetry.NewMetrics()
 
 	// Connect gRPC Snapshot Stream Client with randomized backoff and jitter
 	streamCtx, streamCancel := context.WithCancel(context.Background())
 	defer streamCancel()
 
-	gatewayID := os.Getenv("AEGIS_GATEWAY_ID")
-	if gatewayID == "" {
-		gatewayID = "gateway-" + uuid.NewString()[:8]
+	// Hot-reloadable JWT and snapshot trusted keys (AUTH-01, CTRL-02)
+	if err := setupKeysets(streamCtx, os.Getenv, tokenValidator, snapVerifier, metrics); err != nil {
+		log.Fatalf("Failed to set up trusted keysets: %v", err)
 	}
 
-	streamClient := snapshot.NewStreamClient(cfg.ControlPlaneGRPCAddr, gatewayID, snapManager, snapVerifier)
+	// Gateway id is bound to the control-plane client certificate (CTRL-03, CTRL-05)
+	identityEnv := func(k string) string {
+		if k == "AEGIS_CONTROL_PLANE_GRPC_ADDR" {
+			return cfg.ControlPlaneGRPCAddr
+		}
+		return os.Getenv(k)
+	}
+	gatewayID, streamCreds, err := resolveGatewayIdentity(identityEnv)
+	if err != nil {
+		log.Fatalf("Failed to resolve gateway identity: %v", err)
+	}
+
+	streamClient := snapshot.NewStreamClient(cfg.ControlPlaneGRPCAddr, gatewayID, snapManager, snapVerifier, grpc.WithTransportCredentials(streamCreds))
 	go func() {
 		if err := streamClient.Start(streamCtx); err != nil && !errors.Is(err, context.Canceled) {
 			log.Printf("Control plane stream client exited: %v", err)
@@ -129,7 +145,6 @@ func main() {
 		rateLimiter = ratelimit.NewRateLimiter(rdb)
 	}
 
-	tokenValidator := identity.NewTokenValidator(issuer, audience, pubKey)
 	auditLogger := audit.NewLogger(nil)
 
 	spoolCfg := audit.DiskSpoolConfig{
@@ -153,8 +168,6 @@ func main() {
 	if !strings.HasPrefix(metricsPort, ":") {
 		metricsPort = ":" + metricsPort
 	}
-	metrics := telemetry.NewMetrics()
-
 	// Audit pipeline: governs, durably commits and summarizes denials and
 	// completions on both listeners (B7). Settings come from validated config.
 	auditPipeline := audit.NewPipeline(diskSpool, metrics, audit.PipelineConfig{
