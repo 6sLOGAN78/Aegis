@@ -239,6 +239,8 @@ paths:
           $ref: '#/components/responses/Conflict'
         '412':
           $ref: '#/components/responses/PreconditionFailed'
+        '422':
+          $ref: '#/components/responses/UnprocessableEntity'
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
@@ -253,6 +255,131 @@ paths:
           required: true
           schema:
             type: string
+        - $ref: '#/components/parameters/IfMatch'
+        - $ref: '#/components/parameters/IdempotencyKey'
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicyRollbackRequest'
+      responses:
+        '200':
+          description: Rollback snapshot published
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicyPublishResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '404':
+          $ref: '#/components/responses/NotFound'
+        '409':
+          $ref: '#/components/responses/Conflict'
+        '412':
+          $ref: '#/components/responses/PreconditionFailed'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/auth/login:
+    post:
+      summary: Operator login
+      description: Authenticates an operator and issues a session cookie plus CSRF token. Public endpoint.
+      operationId: login
+      security: []
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/LoginRequest'
+      responses:
+        '200':
+          description: Session established
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/auth/logout:
+    post:
+      summary: Operator logout
+      description: Terminates the current operator session.
+      operationId: logout
+      responses:
+        '200':
+          description: Session terminated
+          content:
+            application/json:
+              schema:
+                type: object
+                properties:
+                  status:
+                    type: string
+                    example: logged_out
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+
+  /control/v1/auth/me:
+    get:
+      summary: Current operator session
+      description: Returns the authenticated operator session metadata.
+      operationId: getCurrentSession
+      responses:
+        '200':
+          description: Active session
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/LoginResponse'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+
+  /control/v1/policies/simulate:
+    post:
+      summary: Dry-run simulate candidate policy evaluation
+      description: Executes an in-memory test evaluation against candidate Rego code without a policy id.
+      operationId: simulateCandidatePolicy
+      requestBody:
+        required: true
+        content:
+          application/json:
+            schema:
+              $ref: '#/components/schemas/PolicySimulationRequest'
+      responses:
+        '200':
+          description: Simulation decision output
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/PolicySimulationResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
+  /control/v1/snapshots/rollback:
+    post:
+      summary: Roll back to a historical snapshot
+      description: Re-activates historical policy content by minting a strictly increasing snapshot version.
+      operationId: rollbackSnapshot
+      parameters:
         - $ref: '#/components/parameters/IfMatch'
         - $ref: '#/components/parameters/IdempotencyKey'
       requestBody:
@@ -533,6 +660,58 @@ paths:
         '429':
           $ref: '#/components/responses/TooManyRequests'
 
+  /control/v1/audit/events:
+    get:
+      summary: Query audit events (alias of /audit-events)
+      description: Queries pre-forward decisions and completion audit events from PostgreSQL with filtering.
+      operationId: listAuditEventsAlias
+      parameters:
+        - name: principal_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: service_id
+          in: query
+          required: false
+          schema:
+            type: string
+        - name: decision
+          in: query
+          required: false
+          schema:
+            type: string
+            enum: [allow, deny]
+        - name: from_timestamp
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - name: to_timestamp
+          in: query
+          required: false
+          schema:
+            type: string
+            format: date-time
+        - $ref: '#/components/parameters/Cursor'
+        - $ref: '#/components/parameters/Limit'
+      responses:
+        '200':
+          description: Paginated audit event records
+          content:
+            application/json:
+              schema:
+                $ref: '#/components/schemas/AuditEventListResponse'
+        '400':
+          $ref: '#/components/responses/BadRequest'
+        '401':
+          $ref: '#/components/responses/Unauthorized'
+        '403':
+          $ref: '#/components/responses/Forbidden'
+        '429':
+          $ref: '#/components/responses/TooManyRequests'
+
   /control/v1/audit-events/{id}:
     get:
       summary: Inspect single audit event
@@ -573,8 +752,8 @@ components:
     IdempotencyKey:
       name: Idempotency-Key
       in: header
-      required: false
-      description: Client-provided UUID to ensure idempotent execution.
+      required: true
+      description: Client-provided UUID required on mutating operations to ensure idempotent execution.
       schema:
         type: string
         format: uuid
@@ -1061,6 +1240,36 @@ components:
             $ref: '#/components/schemas/AuditEvent'
         next_cursor:
           type: string
+
+    LoginRequest:
+      type: object
+      required:
+        - username
+        - password
+      properties:
+        username:
+          type: string
+        password:
+          type: string
+          format: password
+
+    LoginResponse:
+      type: object
+      required:
+        - username
+        - role
+        - csrf_token
+        - expires_at
+      properties:
+        username:
+          type: string
+        role:
+          type: string
+        csrf_token:
+          type: string
+        expires_at:
+          type: string
+          format: date-time
 
     ErrorResponse:
       type: object
