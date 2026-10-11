@@ -3,10 +3,9 @@ package main
 import (
 	"context"
 	"crypto/ed25519"
-	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"flag"
+	"fmt"
 	"log"
 	"net"
 	"net/http"
@@ -18,17 +17,67 @@ import (
 	"time"
 
 	"aegis/internal/control"
+	"aegis/internal/keyfile"
 	"aegis/internal/revocation"
 	"aegis/internal/snapshot"
 	"aegis/internal/storage"
 	"aegis/internal/telemetry"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
+	"github.com/jackc/pgx/v5/pgxpool"
 	"github.com/redis/go-redis/v9"
 	"google.golang.org/grpc"
+	"google.golang.org/grpc/credentials"
 )
 
 var defaultDemoSeed = []byte("aegis-demo-issuer-secret-seed-32")
+
+// loadGRPCCredentials builds mTLS server credentials from
+// AEGIS_GRPC_TLS_CERT_PATH, AEGIS_GRPC_TLS_KEY_PATH and
+// AEGIS_GRPC_CLIENT_CA_PATH. Any missing or unreadable input is an error;
+// there is no plaintext fallback (D-14).
+func loadGRPCCredentials(getenv func(string) string) (credentials.TransportCredentials, error) {
+	creds, err := control.NewServerTransportCredentials(
+		getenv("AEGIS_GRPC_TLS_CERT_PATH"),
+		getenv("AEGIS_GRPC_TLS_KEY_PATH"),
+		getenv("AEGIS_GRPC_CLIENT_CA_PATH"),
+	)
+	if err != nil {
+		return nil, fmt.Errorf("gRPC mTLS credentials (AEGIS_GRPC_TLS_CERT_PATH, AEGIS_GRPC_TLS_KEY_PATH, AEGIS_GRPC_CLIENT_CA_PATH): %w", err)
+	}
+	return creds, nil
+}
+
+// loadSigningKey loads the snapshot signing key. A configured
+// AEGIS_SIGNING_KEY_PATH that cannot be loaded is an error (no fallback,
+// D-09). usedSeed is true only when the demo seed is used because nothing
+// was configured.
+func loadSigningKey(getenv func(string) string) (key ed25519.PrivateKey, usedSeed bool, err error) {
+	if keyPath := getenv("AEGIS_SIGNING_KEY_PATH"); keyPath != "" {
+		k, err := keyfile.LoadEd25519Private(keyPath)
+		if err != nil {
+			return nil, false, err
+		}
+		return k, false, nil
+	}
+	if seedStr := getenv("AEGIS_SIGNING_KEY_SEED"); seedStr != "" {
+		if seed := []byte(seedStr); len(seed) >= ed25519.SeedSize {
+			return ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]), false, nil
+		}
+	}
+	return ed25519.NewKeyFromSeed(defaultDemoSeed), true, nil
+}
+
+// requirePostgres connects to Postgres; failure is returned wrapped so the
+// caller can exit (D-22). There is no degraded mode.
+func requirePostgres[P any](ctx context.Context, connect func(context.Context) (P, error)) (P, error) {
+	p, err := connect(ctx)
+	if err != nil {
+		var zero P
+		return zero, fmt.Errorf("postgres connect: %w", err)
+	}
+	return p, nil
+}
 
 func main() {
 	var (
@@ -76,32 +125,12 @@ func main() {
 	}
 
 	// 2. Load or generate Ed25519 Signing Key (CTRL-02, Invariant 4)
-	var privKey ed25519.PrivateKey
-	if keyPath := os.Getenv("AEGIS_SIGNING_KEY_PATH"); keyPath != "" {
-		if data, err := os.ReadFile(keyPath); err == nil {
-			block, _ := pem.Decode(data)
-			if block != nil {
-				data = block.Bytes
-			}
-			if len(data) == ed25519.PrivateKeySize {
-				privKey = ed25519.PrivateKey(data)
-			} else if b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(data))); err == nil && len(b) == ed25519.PrivateKeySize {
-				privKey = ed25519.PrivateKey(b)
-			}
-		} else {
-			log.Printf("Warning: failed to read signing key from %s: %v", keyPath, err)
-		}
+	privKey, usedSeed, err := loadSigningKey(os.Getenv)
+	if err != nil {
+		log.Fatalf("Failed to load signing key: %v", err)
 	}
-	if privKey == nil {
-		if seedStr := os.Getenv("AEGIS_SIGNING_KEY_SEED"); seedStr != "" {
-			seed := []byte(seedStr)
-			if len(seed) >= 32 {
-				privKey = ed25519.NewKeyFromSeed(seed[:32])
-			}
-		}
-	}
-	if privKey == nil {
-		privKey = ed25519.NewKeyFromSeed(defaultDemoSeed)
+	if usedSeed {
+		log.Printf("Warning: using demo signing seed (AEGIS_SIGNING_KEY_PATH not set); never use in production")
 	}
 
 	keyID := os.Getenv("AEGIS_SIGNING_KEY_ID")
@@ -159,19 +188,20 @@ func main() {
 	var policyRepo *storage.PolicyRepo
 	var auditRepo *storage.AuditRepo
 
-	pool, err := storage.NewPool(dbCtx, poolCfg)
+	pool, err := requirePostgres(dbCtx, func(ctx context.Context) (*pgxpool.Pool, error) {
+		return storage.NewPool(ctx, poolCfg)
+	})
 	if err != nil {
-		log.Printf("Notice: PostgreSQL unavailable (%s:%d): %v (running with in-memory state)", poolCfg.Host, poolCfg.Port, err)
-	} else {
-		log.Printf("Connected to PostgreSQL database %q at %s:%d", poolCfg.Database, poolCfg.Host, poolCfg.Port)
-		if err := storage.RunMigrationsWithPool(dbCtx, pool); err != nil {
-			log.Printf("Warning: failed to run migrations: %v", err)
-		}
-		snapshotRepo = storage.NewSnapshotRepo(pool)
-		routeRepo = storage.NewRouteRepo(pool)
-		policyRepo = storage.NewPolicyRepo(pool)
-		auditRepo = storage.NewAuditRepo(pool)
+		log.Fatalf("PostgreSQL is required (%s:%d): %v", poolCfg.Host, poolCfg.Port, err)
 	}
+	log.Printf("Connected to PostgreSQL database %q at %s:%d", poolCfg.Database, poolCfg.Host, poolCfg.Port)
+	if err := storage.RunMigrationsWithPool(dbCtx, pool); err != nil {
+		log.Fatalf("failed to run migrations: %v", err)
+	}
+	snapshotRepo = storage.NewSnapshotRepo(pool)
+	routeRepo = storage.NewRouteRepo(pool)
+	policyRepo = storage.NewPolicyRepo(pool)
+	auditRepo = storage.NewAuditRepo(pool)
 
 	// 6. Retrieve latest snapshot from database or synthesize bootstrap snapshot v1
 	var latestSnapshot *snapshotv1.SnapshotEnvelope
@@ -312,9 +342,7 @@ decision := {
 	leaseGen.Stop()
 	grpcServer.GracefulStop()
 
-	if pool != nil {
-		pool.Close()
-	}
+	pool.Close()
 	if rdb != nil {
 		_ = rdb.Close()
 	}
