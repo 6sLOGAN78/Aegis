@@ -1,6 +1,11 @@
 package snapshot
 
 import (
+	"context"
+	"crypto/ed25519"
+	"crypto/rand"
+	"crypto/sha256"
+	"encoding/hex"
 	"errors"
 	"math"
 	"sync"
@@ -11,6 +16,7 @@ import (
 
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
+	"google.golang.org/protobuf/proto"
 )
 
 // TestStreamClientJitterBackoff_Bounds verifies that CalculateFullJitterBackoff
@@ -109,4 +115,82 @@ func TestHeartbeat_NoAckOnInvalidLease(t *testing.T) {
 	v := NewVerifier()
 	err := v.VerifyLease(&snapshotv1.FreshnessLease{}, 1)
 	assert.Error(t, err)
+}
+
+func signedSnapshotForTest(t *testing.T, priv ed25519.PrivateKey, version int64, upstream string) *snapshotv1.SnapshotEnvelope {
+	t.Helper()
+	payload := &snapshotv1.SnapshotPayload{
+		Version: version,
+		Routes: []*snapshotv1.RouteDefinition{{
+			RouteId:              "orders.list",
+			ServiceId:            "orders",
+			HttpMethod:           "GET",
+			PathTemplate:         "/api/orders",
+			UpstreamUrl:          upstream,
+			UpstreamSpiffeId:     "spiffe://aegis.local/service/orders",
+			RequiresWorkloadMtls: true,
+			RateLimit:            &snapshotv1.RateLimitPolicy{RequestsPerSecond: 100, Burst: 200},
+			Timeout:              &snapshotv1.TimeoutPolicy{RequestTimeoutMs: 15000, UpstreamTimeoutMs: 5000},
+		}},
+		IdentityMappings: []*snapshotv1.IdentityMapping{{Role: "admin", Permissions: []string{"*"}}},
+	}
+	b, err := proto.Marshal(payload)
+	require.NoError(t, err)
+	sum := sha256.Sum256(b)
+	shaHex := hex.EncodeToString(sum[:])
+	return &snapshotv1.SnapshotEnvelope{
+		Version:       version,
+		PayloadSha256: shaHex,
+		Signature:     ed25519.Sign(priv, []byte(shaHex)),
+		Payload:       b,
+	}
+}
+
+func newRedeliveryClient(t *testing.T) (*StreamClient, ed25519.PrivateKey) {
+	t.Helper()
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	v := NewVerifier(pub)
+	return NewStreamClient("127.0.0.1:0", "gw-test", NewManager(v), v), priv
+}
+
+func TestSnapshotRedelivery_ActiveVersionStaysActivated(t *testing.T) {
+	c, priv := newRedeliveryClient(t)
+	ctx := context.Background()
+	env := signedSnapshotForTest(t, priv, 5, "https://orders:8081")
+	require.NoError(t, c.manager.ValidateAndActivate(ctx, env))
+
+	ack, status, msg := c.processSnapshot(ctx, env, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, "")
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, ack.Status)
+	assert.Equal(t, int64(5), ack.ActiveVersion)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, status)
+	assert.Empty(t, msg)
+
+	hb := buildHeartbeatAck("gw-test", 5, status, msg)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, hb.Status)
+}
+
+func TestSnapshotRedelivery_OlderStillRejected(t *testing.T) {
+	c, priv := newRedeliveryClient(t)
+	ctx := context.Background()
+	require.NoError(t, c.manager.ValidateAndActivate(ctx, signedSnapshotForTest(t, priv, 5, "https://orders:8081")))
+
+	older := signedSnapshotForTest(t, priv, 4, "https://orders:8081")
+	ack, status, msg := c.processSnapshot(ctx, older, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, "")
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, ack.Status)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, status)
+	assert.NotEmpty(t, msg)
+	hb := buildHeartbeatAck("gw-test", 5, status, msg)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, hb.Status)
+}
+
+func TestSnapshotRedelivery_SameVersionDifferentHashRejected(t *testing.T) {
+	c, priv := newRedeliveryClient(t)
+	ctx := context.Background()
+	require.NoError(t, c.manager.ValidateAndActivate(ctx, signedSnapshotForTest(t, priv, 5, "https://orders:8081")))
+
+	other := signedSnapshotForTest(t, priv, 5, "https://orders:9999")
+	ack, status, _ := c.processSnapshot(ctx, other, snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, "")
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, ack.Status)
+	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, status)
 }

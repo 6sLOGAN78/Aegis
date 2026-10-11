@@ -16,6 +16,7 @@ import (
 // ActiveState encapsulates the immutable snapshot configuration currently active on the gateway hot path.
 type ActiveState struct {
 	Version          int64
+	PayloadSha256    string
 	Router           *proxy.Router
 	PolicyEngine     *policy.Engine
 	IdentityMappings map[string][]string
@@ -139,6 +140,7 @@ func (m *Manager) ValidateAndActivate(ctx context.Context, env *snapshotv1.Snaps
 	// 6. Lock-free atomic swap (Invariant 9)
 	nextState := &ActiveState{
 		Version:          env.Version,
+		PayloadSha256:    env.PayloadSha256,
 		Router:           router,
 		PolicyEngine:     engine,
 		IdentityMappings: mappings,
