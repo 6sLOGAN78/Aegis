@@ -1,4 +1,5 @@
-import React, { useRef, useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
+import '../utils/monaco-setup';
 import Editor, { type BeforeMount } from '@monaco-editor/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import {
@@ -94,7 +95,23 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
     registerRegoLanguage(monaco);
   };
 
+  // One-time hydration of the editor from the latest stored policy source.
+  const hydratedRef = useRef(false);
+  const userEditedRef = useRef(false);
+  useEffect(() => {
+    if (hydratedRef.current || userEditedRef.current) return;
+    const list = versionsData?.versions;
+    if (!list || list.length === 0) return;
+    hydratedRef.current = true;
+    const source = list[0].source_rego;
+    if (source) {
+      setRegoCode(source);
+      if (onCandidateRegoChange) onCandidateRegoChange(source);
+    }
+  }, [versionsData, onCandidateRegoChange]);
+
   const handleCodeChange = (value?: string) => {
+    userEditedRef.current = true;
     const updated = value || '';
     setRegoCode(updated);
     if (onCandidateRegoChange) {
