@@ -1,6 +1,8 @@
 package control
 
 import (
+	"context"
+	"errors"
 	"log"
 	"net/http"
 	"os"
@@ -30,6 +32,8 @@ type APIServer struct {
 	auditRepo    *storage.AuditRepo
 	revStore     *revocation.Store
 	signer       *snapshot.Signer
+	secRepo      SecurityStateRepository
+	secState     *SecurityState
 
 	identityMappings []*snapshotv1.IdentityMapping
 
@@ -91,6 +95,42 @@ func NewAPIServer(
 	return server
 }
 
+// SetSecurityRepo enables Postgres-first write-through for quarantine and revocation handlers.
+func (s *APIServer) SetSecurityRepo(repo SecurityStateRepository) { s.secRepo = repo }
+
+// SetSecurityState wires the SecurityState service used by /readyz.
+func (s *APIServer) SetSecurityState(ss *SecurityState) { s.secState = ss }
+
+func (s *APIServer) handleLivez(w http.ResponseWriter, _ *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("OK\n"))
+}
+
+// handleReadyz reports 200 only when Postgres is reachable and the Redis security-state marker exists.
+// The body is a closed enum; error strings are never echoed.
+func (s *APIServer) handleReadyz(w http.ResponseWriter, r *http.Request) {
+	w.Header().Set("Content-Type", "text/plain; charset=utf-8")
+	if s.secState == nil {
+		w.WriteHeader(http.StatusOK)
+		_, _ = w.Write([]byte("READY\n"))
+		return
+	}
+	ctx, cancel := context.WithTimeout(r.Context(), time.Second)
+	defer cancel()
+	if err := s.secState.Ready(ctx); err != nil {
+		w.WriteHeader(http.StatusServiceUnavailable)
+		if errors.Is(err, revocation.ErrSecurityStateMissing) {
+			_, _ = w.Write([]byte("SECURITY_STATE_MISSING\n"))
+		} else {
+			_, _ = w.Write([]byte("DEPENDENCY_FAILURE\n"))
+		}
+		return
+	}
+	w.WriteHeader(http.StatusOK)
+	_, _ = w.Write([]byte("READY\n"))
+}
+
 // SecurityHeadersMiddleware injects defense-in-depth security headers and strict CSP.
 func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
@@ -109,6 +149,10 @@ func SecurityHeadersMiddleware(next http.Handler) http.Handler {
 
 // routes registers all management endpoints under /control/v1 and dashboard SPA routes.
 func (s *APIServer) routes() {
+	// Unauthenticated probes, registered before auth and the SPA catch-all (D-26).
+	s.router.Get("/livez", s.handleLivez)
+	s.router.Get("/readyz", s.handleReadyz)
+
 	RegisterSPARoutes(s.router)
 
 	s.router.Route("/control/v1", func(r chi.Router) {
