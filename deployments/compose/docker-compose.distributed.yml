@@ -74,6 +74,8 @@ services:
       - "9092:9092"
     environment:
       - AEGIS_PORT=8084
+      # Demo profile serves plain HTTP on 8084; do not use in production.
+      - AEGIS_COOKIE_SECURE=false
       - AEGIS_GRPC_PORT=9090
       - AEGIS_METRICS_PORT=9092
       - AEGIS_REDIS_ADDR=redis:6379
