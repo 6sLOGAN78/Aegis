@@ -123,6 +123,37 @@ func TestRequirePostgresFailureIsError(t *testing.T) {
 	}
 }
 
+func TestMainWiring(t *testing.T) {
+	b, err := os.ReadFile("main.go")
+	if err != nil {
+		t.Fatal(err)
+	}
+	src := string(b)
+	if strings.Contains(src, "grpc.NewServer()") {
+		t.Fatal("bare grpc.NewServer() forbidden; mTLS creds required")
+	}
+	for _, want := range []string{
+		"grpc.Creds(", "NewSecurityState(", "SetSecurityState(", "SetSecurityRepo(",
+		"go securityState.Run(", "distServer.SetMetrics(", "WithPinger(", "WithSecurityStateMetrics(",
+	} {
+		if !strings.Contains(src, want) {
+			t.Fatalf("main.go missing %q", want)
+		}
+	}
+	recon := strings.Index(src, ".Reconstruct(")
+	if recon < 0 {
+		t.Fatal("Reconstruct call missing")
+	}
+	for _, l := range []string{"ListenAndServe(", ".Serve("} {
+		if i := strings.Index(src, l); i < 0 || i < recon {
+			t.Fatalf("%s must appear after Reconstruct (recon=%d, idx=%d)", l, recon, i)
+		}
+	}
+	if !strings.Contains(src, "log.Fatalf(\"security state reconstruction failed") {
+		t.Fatal("Reconstruct failure must be fatal")
+	}
+}
+
 func TestMainHasNoInMemoryFallback(t *testing.T) {
 	src, err := os.ReadFile("main.go")
 	if err != nil {

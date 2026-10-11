@@ -143,6 +143,7 @@ func main() {
 	redisAddr := os.Getenv("AEGIS_REDIS_ADDR")
 	if redisAddr == "" {
 		redisAddr = "localhost:6379"
+		log.Printf("AEGIS_REDIS_ADDR not set; defaulting to %s", redisAddr)
 	}
 	redisPassword := os.Getenv("AEGIS_REDIS_PASSWORD")
 	rdb := redis.NewClient(&redis.Options{
@@ -257,6 +258,7 @@ decision := {
 	// 7. Initialize Acknowledgment Tracker and Distribution Server
 	ackTracker := control.NewAckTracker(snapshotRepo)
 	distServer := control.NewSnapshotDistributionServer(latestSnapshot, ackTracker)
+	distServer.SetMetrics(metrics)
 
 	// 8. Launch 10-Second Freshness Lease Generator Loop (CTRL-04, Invariant 1)
 	leaseGen := control.NewLeaseGenerator(distServer, signer, 10*time.Second, 15*time.Second)
@@ -284,6 +286,33 @@ decision := {
 		signer,
 	)
 
+	// Fail fast on missing mTLS material before anything is served (D-14).
+	grpcCreds, err := loadGRPCCredentials(os.Getenv)
+	if err != nil {
+		log.Fatalf("Failed to load gRPC mTLS credentials: %v", err)
+	}
+
+	// Durable security state (D-04, D-26): repo + SecurityState wired into the
+	// API (readiness gate), reconstructed synchronously before any listener
+	// starts, then kept healed by a background loop tied to process lifetime.
+	secRepo := storage.NewSecurityStateRepo(pool)
+	securityState := control.NewSecurityState(secRepo, revStore,
+		control.WithPinger(pool.Ping),
+		control.WithSecurityStateMetrics(metrics),
+	)
+	apiServer.SetSecurityRepo(secRepo)
+	apiServer.SetSecurityState(securityState)
+
+	runCtx, runCancel := context.WithCancel(context.Background())
+	defer runCancel()
+	reconCtx, reconCancel := context.WithTimeout(runCtx, 30*time.Second)
+	if err := securityState.Reconstruct(reconCtx); err != nil {
+		reconCancel()
+		log.Fatalf("security state reconstruction failed (failing closed): %v", err)
+	}
+	reconCancel()
+	go securityState.Run(runCtx)
+
 	if mappingsPath := os.Getenv("AEGIS_IDENTITY_MAPPINGS_FILE"); mappingsPath != "" {
 		mappings, err := control.LoadIdentityMappings(mappingsPath)
 		if err != nil {
@@ -309,13 +338,13 @@ decision := {
 		}
 	}()
 
-	// 10. Start gRPC Distribution Server
+	// 10. Start gRPC Distribution Server (mTLS only, D-14)
 	lis, err := net.Listen("tcp", grpcPort)
 	if err != nil {
 		log.Fatalf("Failed to bind gRPC listener on %s: %v", grpcPort, err)
 	}
 
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.Creds(grpcCreds))
 	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
 
 	go func() {
@@ -338,6 +367,7 @@ decision := {
 	_ = apiSrv.Shutdown(shutdownCtx)
 	_ = metricsServer.Shutdown(shutdownCtx)
 
+	runCancel()
 	leaseCancel()
 	leaseGen.Stop()
 	grpcServer.GracefulStop()
