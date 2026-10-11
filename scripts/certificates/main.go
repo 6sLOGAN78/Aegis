@@ -4,6 +4,7 @@ import (
 	"crypto/ecdsa"
 	"crypto/ed25519"
 	"crypto/rand"
+	"crypto/tls"
 	"encoding/base64"
 	"flag"
 	"fmt"
@@ -12,8 +13,15 @@ import (
 	"os"
 	"path/filepath"
 
+	"aegis/internal/identity"
 	"aegis/internal/pki"
 )
+
+// cpClientIDs are the gateway ids that receive control-plane client certs.
+var cpClientIDs = []string{
+	"gateway", "gateway-1", "gateway-2", "gateway-3",
+	"aegis-gateway-0", "aegis-gateway-1", "aegis-gateway-2",
+}
 
 func writeCertFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
@@ -23,9 +31,208 @@ func writeKeyFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0600)
 }
 
+// writeTLSPair writes <name>.crt (0644) and <name>.key (0600) into dir.
+func writeTLSPair(dir, name string, c tls.Certificate) error {
+	keyPEM, err := pki.EncodeKeyPEM(c.PrivateKey.(*ecdsa.PrivateKey))
+	if err != nil {
+		return fmt.Errorf("encode %s key: %w", name, err)
+	}
+	if err := writeCertFile(filepath.Join(dir, name+".crt"), pki.EncodeCertPEM(c.Certificate[0])); err != nil {
+		return fmt.Errorf("write %s.crt: %w", name, err)
+	}
+	if err := writeKeyFile(filepath.Join(dir, name+".key"), keyPEM); err != nil {
+		return fmt.Errorf("write %s.key: %w", name, err)
+	}
+	return nil
+}
+
+// writeEd25519 generates a fresh Ed25519 keypair; the private key (64 bytes)
+// and public key (32 bytes) are written base64 + newline.
+func writeEd25519(path, pubPath string) error {
+	pub, priv, err := ed25519.GenerateKey(rand.Reader)
+	if err != nil {
+		return fmt.Errorf("generate ed25519 key: %w", err)
+	}
+	if err := writeKeyFile(path, []byte(base64.StdEncoding.EncodeToString(priv)+"\n")); err != nil {
+		return err
+	}
+	return writeCertFile(pubPath, []byte(base64.StdEncoding.EncodeToString(pub)+"\n"))
+}
+
+func fileExists(p string) bool {
+	_, err := os.Stat(p)
+	return err == nil
+}
+
+func loadOrCreateCA(outDir string) (*pki.CA, error) {
+	crtPath := filepath.Join(outDir, "root-ca.crt")
+	keyPath := filepath.Join(outDir, "root-ca.key")
+	if fileExists(crtPath) && fileExists(keyPath) {
+		crt, err := os.ReadFile(crtPath)
+		if err != nil {
+			return nil, err
+		}
+		key, err := os.ReadFile(keyPath)
+		if err != nil {
+			return nil, err
+		}
+		ca, err := pki.LoadCA(crt, key)
+		if err != nil {
+			return nil, fmt.Errorf("load existing root CA: %w", err)
+		}
+		fmt.Println("  [=] Reusing existing Root CA (root-ca.crt, root-ca.key)")
+		return ca, nil
+	}
+	ca, err := pki.NewCA("Aegis Root CA")
+	if err != nil {
+		return nil, fmt.Errorf("create root CA: %w", err)
+	}
+	keyPEM, err := pki.EncodeKeyPEM(ca.PrivateKey)
+	if err != nil {
+		return nil, err
+	}
+	if err := writeCertFile(crtPath, pki.EncodeCertPEM(ca.Certificate.Raw)); err != nil {
+		return nil, err
+	}
+	if err := writeKeyFile(keyPath, keyPEM); err != nil {
+		return nil, err
+	}
+	fmt.Println("  [+] Generated Root CA (root-ca.crt, root-ca.key)")
+	return ca, nil
+}
+
+func run(outDir, keysDir string) error {
+	if err := os.MkdirAll(outDir, 0755); err != nil {
+		return fmt.Errorf("create output directory %s: %w", outDir, err)
+	}
+	fmt.Printf("Generating development PKI and assertion keys into %s\n", outDir)
+
+	ca, err := loadOrCreateCA(outDir)
+	if err != nil {
+		return err
+	}
+	loopback := []net.IP{net.ParseIP("127.0.0.1")}
+
+	// Gateway server cert.
+	c, err := ca.IssueServerCert("gateway", []string{"gateway", "localhost"}, loopback)
+	if err != nil {
+		return fmt.Errorf("issue gateway server cert: %w", err)
+	}
+	if err := writeTLSPair(outDir, "gateway-server", c); err != nil {
+		return err
+	}
+	fmt.Println("  [+] Generated Gateway server cert (gateway-server.crt, gateway-server.key)")
+
+	// Gateway client cert (SPIFFE).
+	c, err = ca.IssueWorkloadCert("spiffe://aegis.local/ns/gateway/sa/aegis-gateway")
+	if err != nil {
+		return fmt.Errorf("issue gateway client cert: %w", err)
+	}
+	if err := writeTLSPair(outDir, "gateway-client", c); err != nil {
+		return err
+	}
+	fmt.Println("  [+] Generated Gateway client cert (gateway-client.crt, gateway-client.key)")
+
+	// Control-plane server cert.
+	c, err = ca.IssueServerCert("control-plane", []string{
+		"control-plane", "aegis-control-plane", "aegis-control-plane.aegis-system.svc", "localhost",
+	}, loopback)
+	if err != nil {
+		return fmt.Errorf("issue control-plane server cert: %w", err)
+	}
+	if err := writeTLSPair(outDir, "control-plane-server", c); err != nil {
+		return err
+	}
+	fmt.Println("  [+] Generated Control-plane server cert (control-plane-server.crt, control-plane-server.key)")
+
+	// Per-gateway control-plane client certs.
+	for _, id := range cpClientIDs {
+		c, err = ca.IssueWorkloadCert(identity.GatewaySPIFFEID(id))
+		if err != nil {
+			return fmt.Errorf("issue cp-client cert for %s: %w", id, err)
+		}
+		name := "cp-client-" + id
+		if err := writeTLSPair(outDir, name, c); err != nil {
+			return err
+		}
+		fmt.Printf("  [+] Generated control-plane client cert for %s (%s.crt, %s.key)\n", id, name, name)
+	}
+
+	// Workload orders cert.
+	c, err = ca.IssueWorkloadCert("spiffe://aegis.local/workload/orders")
+	if err != nil {
+		return fmt.Errorf("issue orders workload cert: %w", err)
+	}
+	if err := writeTLSPair(outDir, "workload-orders", c); err != nil {
+		return err
+	}
+	fmt.Println("  [+] Generated Workload Orders cert (workload-orders.crt, workload-orders.key)")
+
+	// Backend service server certs.
+	for _, svc := range []string{"orders", "payments", "admin"} {
+		c, err = ca.IssueServerCert(svc, []string{svc, "localhost"}, loopback)
+		if err != nil {
+			return fmt.Errorf("issue server cert for %s: %w", svc, err)
+		}
+		if err := writeTLSPair(outDir, svc, c); err != nil {
+			return err
+		}
+		fmt.Printf("  [+] Generated %s server cert (%s.crt, %s.key)\n", svc, svc, svc)
+	}
+
+	// Assertion key pair.
+	if err := writeEd25519(filepath.Join(outDir, "assertion-ed25519.key"), filepath.Join(outDir, "assertion-ed25519.pub")); err != nil {
+		return err
+	}
+	fmt.Println("  [+] Generated Ed25519 Assertion Key Pair (assertion-ed25519.key, assertion-ed25519.pub)")
+
+	if keysDir != "" {
+		if err := writeKeys(keysDir); err != nil {
+			return err
+		}
+	}
+	fmt.Println("Certificate generation completed successfully.")
+	return nil
+}
+
+// writeKeys writes separate JWT and snapshot signing keypairs plus keyset
+// directories. Existing files are never overwritten.
+func writeKeys(keysDir string) error {
+	for _, d := range []string{"keyset-jwt", "keyset-snapshot"} {
+		if err := os.MkdirAll(filepath.Join(keysDir, d), 0755); err != nil {
+			return err
+		}
+	}
+	pairs := []struct{ key, pub string }{
+		{"jwt-current.key", "keyset-jwt/current.pub"},
+		{"snapshot-current.key", "keyset-snapshot/current.pub"},
+	}
+	for _, p := range pairs {
+		k, pb := filepath.Join(keysDir, p.key), filepath.Join(keysDir, p.pub)
+		if fileExists(k) || fileExists(pb) {
+			fmt.Printf("  [=] Keeping existing %s\n", p.key)
+			continue
+		}
+		if err := writeEd25519(k, pb); err != nil {
+			return err
+		}
+		fmt.Printf("  [+] Generated %s and %s\n", p.key, p.pub)
+	}
+	return nil
+}
+
 func main() {
 	outDirFlag := flag.String("out", "", "Output directory for certificates and keys")
+	keysDirFlag := flag.String("keys-dir", "", "Optional directory for JWT/snapshot signing keys and keysets")
+	keypairFlag := flag.String("keypair", "", "Write a fresh Ed25519 keypair to <prefix>.key and <prefix>.pub and exit")
 	flag.Parse()
+
+	if *keypairFlag != "" {
+		if err := writeEd25519(*keypairFlag+".key", *keypairFlag+".pub"); err != nil {
+			log.Fatalf("Failed to write keypair: %v", err)
+		}
+		return
+	}
 
 	outDir := *outDirFlag
 	if outDir == "" {
@@ -34,119 +241,7 @@ func main() {
 	if outDir == "" {
 		outDir = "deployments/certs"
 	}
-
-	if err := os.MkdirAll(outDir, 0755); err != nil {
-		log.Fatalf("Failed to create output directory %s: %v", outDir, err)
+	if err := run(outDir, *keysDirFlag); err != nil {
+		log.Fatalf("Certificate generation failed: %v", err)
 	}
-
-	fmt.Printf("Generating development PKI and assertion keys into %s\n", outDir)
-
-	// 1. Root CA
-	ca, err := pki.NewCA("Aegis Root CA")
-	if err != nil {
-		log.Fatalf("Failed to create Root CA: %v", err)
-	}
-	caCertPEM := pki.EncodeCertPEM(ca.Certificate.Raw)
-	caKeyPEM, err := pki.EncodeKeyPEM(ca.PrivateKey)
-	if err != nil {
-		log.Fatalf("Failed to encode CA key PEM: %v", err)
-	}
-	if err := writeCertFile(filepath.Join(outDir, "root-ca.crt"), caCertPEM); err != nil {
-		log.Fatalf("Failed to write root-ca.crt: %v", err)
-	}
-	if err := writeKeyFile(filepath.Join(outDir, "root-ca.key"), caKeyPEM); err != nil {
-		log.Fatalf("Failed to write root-ca.key: %v", err)
-	}
-	fmt.Println("  [+] Generated Root CA (root-ca.crt, root-ca.key)")
-
-	// 2. Gateway Server Certificate
-	gwServerCert, err := ca.IssueServerCert("gateway", []string{"gateway", "localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
-	if err != nil {
-		log.Fatalf("Failed to issue gateway server certificate: %v", err)
-	}
-	gwServerKeyPEM, err := pki.EncodeKeyPEM(gwServerCert.PrivateKey.(*ecdsa.PrivateKey))
-	if err != nil {
-		log.Fatalf("Failed to encode gateway server key PEM: %v", err)
-	}
-	if err := writeCertFile(filepath.Join(outDir, "gateway-server.crt"), pki.EncodeCertPEM(gwServerCert.Certificate[0])); err != nil {
-		log.Fatalf("Failed to write gateway-server.crt: %v", err)
-	}
-	if err := writeKeyFile(filepath.Join(outDir, "gateway-server.key"), gwServerKeyPEM); err != nil {
-		log.Fatalf("Failed to write gateway-server.key: %v", err)
-	}
-	fmt.Println("  [+] Generated Gateway server cert (gateway-server.crt, gateway-server.key)")
-
-	// 3. Gateway Client Certificate (SPIFFE)
-	gatewaySPIFFE := "spiffe://aegis.local/ns/gateway/sa/aegis-gateway"
-	gwClientCert, err := ca.IssueWorkloadCert(gatewaySPIFFE)
-	if err != nil {
-		log.Fatalf("Failed to issue gateway client certificate: %v", err)
-	}
-	gwClientKeyPEM, err := pki.EncodeKeyPEM(gwClientCert.PrivateKey.(*ecdsa.PrivateKey))
-	if err != nil {
-		log.Fatalf("Failed to encode gateway client key PEM: %v", err)
-	}
-	if err := writeCertFile(filepath.Join(outDir, "gateway-client.crt"), pki.EncodeCertPEM(gwClientCert.Certificate[0])); err != nil {
-		log.Fatalf("Failed to write gateway-client.crt: %v", err)
-	}
-	if err := writeKeyFile(filepath.Join(outDir, "gateway-client.key"), gwClientKeyPEM); err != nil {
-		log.Fatalf("Failed to write gateway-client.key: %v", err)
-	}
-	fmt.Println("  [+] Generated Gateway client cert (gateway-client.crt, gateway-client.key)")
-
-	// 4. Workload Orders Certificate (SPIFFE)
-	ordersSPIFFE := "spiffe://aegis.local/workload/orders"
-	ordersClientCert, err := ca.IssueWorkloadCert(ordersSPIFFE)
-	if err != nil {
-		log.Fatalf("Failed to issue orders workload certificate: %v", err)
-	}
-	ordersClientKeyPEM, err := pki.EncodeKeyPEM(ordersClientCert.PrivateKey.(*ecdsa.PrivateKey))
-	if err != nil {
-		log.Fatalf("Failed to encode orders workload key PEM: %v", err)
-	}
-	if err := writeCertFile(filepath.Join(outDir, "workload-orders.crt"), pki.EncodeCertPEM(ordersClientCert.Certificate[0])); err != nil {
-		log.Fatalf("Failed to write workload-orders.crt: %v", err)
-	}
-	if err := writeKeyFile(filepath.Join(outDir, "workload-orders.key"), ordersClientKeyPEM); err != nil {
-		log.Fatalf("Failed to write workload-orders.key: %v", err)
-	}
-	fmt.Println("  [+] Generated Workload Orders cert (workload-orders.crt, workload-orders.key)")
-
-	// 5. Backend Microservices Server Certificates
-	services := []string{"orders", "payments", "admin"}
-	for _, svc := range services {
-		svcCert, err := ca.IssueServerCert(svc, []string{svc, "localhost"}, []net.IP{net.ParseIP("127.0.0.1")})
-		if err != nil {
-			log.Fatalf("Failed to issue server certificate for %s: %v", svc, err)
-		}
-		svcKeyPEM, err := pki.EncodeKeyPEM(svcCert.PrivateKey.(*ecdsa.PrivateKey))
-		if err != nil {
-			log.Fatalf("Failed to encode key PEM for %s: %v", svc, err)
-		}
-		if err := writeCertFile(filepath.Join(outDir, svc+".crt"), pki.EncodeCertPEM(svcCert.Certificate[0])); err != nil {
-			log.Fatalf("Failed to write %s.crt: %v", svc, err)
-		}
-		if err := writeKeyFile(filepath.Join(outDir, svc+".key"), svcKeyPEM); err != nil {
-			log.Fatalf("Failed to write %s.key: %v", svc, err)
-		}
-		fmt.Printf("  [+] Generated %s server cert (%s.crt, %s.key)\n", svc, svc, svc)
-	}
-
-	// 6. Ed25519 Gateway Assertion Key Pair
-	pubKey, privKey, err := ed25519.GenerateKey(rand.Reader)
-	if err != nil {
-		log.Fatalf("Failed to generate Ed25519 assertion key pair: %v", err)
-	}
-	privKeyB64 := base64.StdEncoding.EncodeToString(privKey)
-	pubKeyB64 := base64.StdEncoding.EncodeToString(pubKey)
-
-	if err := writeKeyFile(filepath.Join(outDir, "assertion-ed25519.key"), []byte(privKeyB64+"\n")); err != nil {
-		log.Fatalf("Failed to write assertion-ed25519.key: %v", err)
-	}
-	if err := writeCertFile(filepath.Join(outDir, "assertion-ed25519.pub"), []byte(pubKeyB64+"\n")); err != nil {
-		log.Fatalf("Failed to write assertion-ed25519.pub: %v", err)
-	}
-	fmt.Println("  [+] Generated Ed25519 Assertion Key Pair (assertion-ed25519.key, assertion-ed25519.pub)")
-
-	fmt.Println("Certificate generation completed successfully.")
 }
