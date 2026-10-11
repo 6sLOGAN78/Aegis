@@ -110,3 +110,15 @@ func TestSecurityState_ChunkedRestore(t *testing.T) {
 	v, _ := mr.Get("quarantine:principal:p0")
 	assert.Equal(t, "DISASTER_RECOVERY_RECONSTRUCTED", v)
 }
+
+func TestSecurityState_ListRevokedJTIsReportsRemainingTTL(t *testing.T) {
+	store, _ := setupMarkerStore(t)
+	ctx := context.Background()
+
+	require.NoError(t, store.RevokeJTI(ctx, "keep", 5*time.Minute))
+	list, err := store.ListRevokedJTIs(ctx)
+	require.NoError(t, err)
+	require.Len(t, list, 1)
+	assert.Equal(t, "keep", list[0].JTI)
+	assert.Equal(t, 5*time.Minute, list[0].TTL)
+}

@@ -272,10 +272,17 @@ func (s *Store) ListRevokedJTIs(ctx context.Context) ([]RevokedJTI, error) {
 	for i, key := range keys {
 		ttlCmds[i] = pipe.TTL(ctx, key)
 	}
-	_, _ = pipe.Exec(ctx)
+	// A failed TTL read must not surface as TTL 0: restore floors that to 1s and would silently un-revoke.
+	if _, err := pipe.Exec(ctx); err != nil {
+		return nil, fmt.Errorf("failed to read revoked jti TTLs: %w", err)
+	}
 	out := make([]RevokedJTI, 0, len(keys))
 	for i, key := range keys {
-		out = append(out, RevokedJTI{JTI: strings.TrimPrefix(key, prefix), TTL: ttlCmds[i].Val()})
+		ttl := ttlCmds[i].Val()
+		if ttl == -2 {
+			continue // key expired between SCAN and TTL
+		}
+		out = append(out, RevokedJTI{JTI: strings.TrimPrefix(key, prefix), TTL: ttl})
 	}
 	return out, nil
 }
