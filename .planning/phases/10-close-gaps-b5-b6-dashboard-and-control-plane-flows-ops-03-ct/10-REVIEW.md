@@ -1,207 +1,163 @@
 ---
 phase: 10-close-gaps-b5-b6-dashboard-and-control-plane-flows-ops-03-ct
-reviewed: 2026-10-11T06:21:57Z
+reviewed: 2026-10-11T10:25:31Z
 depth: standard
-files_reviewed: 27
+scope: gap-closure plans 10-09, 10-10, 10-11 (diff 00873946bb08dcba8f07980005c16a326e26d5c5..HEAD)
+supersedes: prior 10-REVIEW.md covering plans 10-01..10-08 (27 files, reviewed 2026-10-11T06:21:57Z), which is preserved in git history
+files_reviewed: 11
 files_reviewed_list:
-  - cmd/control-plane/main.go
   - deployments/compose/docker-compose.distributed.yml
-  - deployments/compose/docker-compose.hardened.yml
   - deployments/compose/docker-compose.mvp.yml
-  - deployments/compose/seed/seed.sh
   - internal/control/api.go
-  - internal/control/api_test.go
-  - internal/control/control_test.go
-  - internal/control/gateway_handler_test.go
-  - internal/control/idempotency.go
-  - internal/control/idempotency_required_test.go
-  - internal/control/identity_mappings.go
-  - internal/control/identity_mappings_test.go
-  - internal/control/policy_handler.go
-  - internal/control/publish_handler.go
-  - internal/control/publish_handler_test.go
-  - internal/control/server.go
-  - internal/snapshot/client.go
-  - internal/snapshot/client_test.go
-  - internal/snapshot/manager.go
-  - scripts/compose-smoke.sh
-  - tests/compose/compose_test.go
-  - tests/compose/smoke_script_test.go
-  - tests/integration/operator_telemetry_test.go
-  - web/dashboard/src/api/idempotency.ts
-  - web/dashboard/src/components/EmergencyQuarantine.tsx
+  - internal/control/auth.go
+  - internal/control/gateway_handler.go
+  - internal/control/gateway_handler_stale_test.go
+  - internal/control/session_test.go
+  - web/dashboard/package.json
   - web/dashboard/src/components/PolicyStudio.tsx
+  - web/dashboard/src/utils/monaco-setup.ts
+  - web/dashboard/vite.config.ts
 findings:
-  critical: 1
-  warning: 9
-  info: 9
-  total: 19
+  critical: 0
+  warning: 5
+  info: 6
+  total: 11
 status: issues_found
 ---
 
-# Phase 10: Code Review Report (re-review after gap closure 10-07 / 10-08)
+# Phase 10: Code Review Report (Gap Closure 10-09 / 10-10 / 10-11)
 
-**Reviewed:** 2026-10-11T06:21:57Z
+**Reviewed:** 2026-10-11T10:25:31Z
 **Depth:** standard
-**Files Reviewed:** 27
+**Files Reviewed:** 11
 **Status:** issues_found
-
-## Narrative Findings (AI reviewer)
 
 ## Summary
 
-Scope: `git diff 55016e4..HEAD` over the listed files. This re-review checks the two gap-closure plans and re-checks every finding from the prior review.
+This review covers only the gap-closure diff. The earlier review of plans 10-01..10-08 is in git history.
 
-`go build ./...` and `go vet` are clean. `go test ./internal/snapshot/ ./internal/control/` passes.
+- **10-09 (AEGIS_COOKIE_SECURE):** This change is correct and fails secure. Only `false` or `0` turns the flag off. The env value is trimmed and matched case-insensitively. Unset or unrecognised values keep `Secure: true`. The server logs a warning when the flag is off. Login and logout use the same flag, and the tests cover both. Only minor configuration notes remain.
+- **10-10 (stale gateway hiding):** The filter works as written. However, it hides gateways that have been partitioned for a long time from the convergence denominator, so the dashboard reports convergence while part of the fleet is missing. The REJECTED exemption also means a decommissioned rejected gateway is never hidden, which leaves the original ghost-gateway gap partly open. Invalid env values are ignored without any log message.
+- **10-11 (local Monaco and editor hydration):** The bundling is sound. `tsc -b` passes, the built `dist/` has no `jsdelivr` reference, and `editor.worker` is emitted as a same-origin asset, which the `worker-src 'self' blob:` CSP allows. The hydration logic has two state bugs. It overwrites the parent's unsaved candidate Rego when the Studio tab remounts, and it never re-hydrates when the policy ID changes.
 
-### Prior-finding disposition
+Targeted Go tests pass: `go test ./internal/control/ -run 'Gateway|Stale|Cookie|Session'`.
 
-| Prior ID | Status | Evidence |
-|---|---|---|
-| CR-01 snapshot re-delivery sets REJECTED | **RESOLVED** | `internal/snapshot/client.go:299-316`: `processSnapshot` treats `Version == active.Version && PayloadSha256 == active.PayloadSha256` as an idempotent ACTIVATED confirm and keeps the previous status. `manager.go` now stores `PayloadSha256` in the only `ActiveState` constructor (`manager.go:141`). The CP bootstrap payload is deterministic (no timestamps in `SnapshotPayload`), so an in-memory CP restart re-delivers the same sha. Older versions and same-version-different-hash are still rejected, and unit tests cover both. Remaining nits are IN-07, IN-08 and IN-09. |
-| CR-02 unauthenticated gRPC stream | **STILL PRESENT (BLOCKER)** | `cmd/control-plane/main.go:288` is still `grpc.NewServer()` with no creds. `server.go:92-120` still trusts the client-supplied `GatewayId`. |
-| CR-03 `crypto.randomUUID` on non-secure origins | **RESOLVED** | `web/dashboard/src/api/idempotency.ts` falls back to `crypto.getRandomValues` and sets the v4 and variant bits correctly. No raw `crypto.randomUUID()` call is left in `src/` outside the helper. `PolicyStudio.tsx:130-131` uses a lazy ref initializer, so render no longer throws. The rebuilt `dist/assets/index-*.js` contains the guarded helper, with both `randomUUID` occurrences inside the guard. A minor nit remains (IN-10). |
-| WR-01 Pong TOCTOU / dead branch | STILL PRESENT | `server.go:105-119` is unchanged. |
-| WR-02 client-supplied `AcknowledgedAt` | STILL PRESENT | `server.go:98` only fills the timestamp when it is nil. |
-| WR-03 lease version mismatch suppresses heartbeat | STILL PRESENT, and wider than first reported | See WR-03 below. Because of this, the "echo REJECTED in heartbeats" path cannot be reached for the main rejection case. |
-| WR-04 idempotency cache unscoped, runs before RBAC | STILL PRESENT | `api.go:108` |
-| WR-05 5xx cached for 24h | STILL PRESENT | `idempotency.go:189-190` |
-| WR-06 save-then-publish TOCTOU | STILL PRESENT | `PolicyStudio.tsx:136-147` |
-| WR-07 mappings not authoritative on rollback/bootstrap | STILL PRESENT | `TestPublish_IdentityMappings_Rollback` now locks in historical-mapping restore, and nothing tests the configured-mappings case. The bootstrap is still built before the mappings load (`main.go:191` vs `main.go:257`). |
-| WR-08 smoke idle check fails on mvp/hardened `--stop-check` | STILL PRESENT | Only `docker-compose.distributed.yml` sets `AEGIS_GATEWAY_ID`. |
-| WR-09 concurrent publish gets 500 not 412 | STILL PRESENT | `publish_handler.go:48` vs `:147` |
-| IN-01 `test_` substring trigger | STILL PRESENT | `publish_handler.go:78` |
-| IN-02 hard-coded module name / unencoded `policyId` | STILL PRESENT | `PolicyStudio.tsx:140, 144` |
-| IN-03 whitespace roles/perms accepted | STILL PRESENT | `identity_mappings.go:31-41` |
-| IN-04 OpenAPI 503 undocumented | NOT RE-REVIEWED | `api/openapi/control-v1.yaml` is outside this review's file scope. |
-| IN-05 double-click publish | **RESOLVED** | The publish confirm button is `disabled={publishMutation.isPending}` (`PolicyStudio.tsx:534`). |
-| IN-06 silent empty mappings | STILL PRESENT | `publish_handler.go:26-33` |
-
-## Critical Issues
-
-### CR-02: Snapshot gRPC stream is unauthenticated; any client can spoof any gateway's ack/heartbeat state and receive snapshots that carry RBAC mappings (UNRESOLVED from prior review)
-
-**File:** `cmd/control-plane/main.go:288`, `internal/control/server.go:92-120`
-**Issue:** `grpc.NewServer()` has no TLS or mTLS credentials, and the gateway dials with `insecure.NewCredentials()` by default (`internal/snapshot/client.go:136-138`). The server takes `ack.GatewayId` and `req.GatewayId` as given. Any host on the compose network that can reach `control-plane:9090` can:
-- report a dead or rejected replica as healthy by sending `Ack{GatewayId:"gateway-2", Status:ACTIVATED, AcknowledgedAt:<future>}` (made worse by WR-02);
-- mark healthy replicas REJECTED or partitioned;
-- grow the gateway ack table without limit through `RecordGatewayAck`;
-- subscribe and read every signed snapshot, which now includes `IdentityMappings` (role-to-permission RBAC).
-
-Nothing in 10-07 or 10-08 touched this. Plaintext transport also allows on-path tampering with leases. The signature check rejects forged leases, but an attacker can drop them, which forces gateways to fail closed.
-**Fix:** Serve gRPC with mTLS, and take the gateway identity from the verified peer certificate:
-```go
-creds := credentials.NewTLS(&tls.Config{ClientAuth: tls.RequireAndVerifyClientCert, ClientCAs: pool, Certificates: []tls.Certificate{cpCert}, MinVersion: tls.VersionTLS13})
-grpcServer := grpc.NewServer(grpc.Creds(creds))
-// in StreamSnapshots Recv goroutine:
-p, _ := peer.FromContext(stream.Context())
-gwID, err := gatewayIDFromSPIFFE(p)   // URI SAN of verified leaf
-if err != nil || (req.GatewayId != "" && req.GatewayId != gwID) { return status.Error(codes.PermissionDenied, "gateway id mismatch") }
-ack.GatewayId = gwID
-```
-Interim mitigation until mTLS ships: pin the stream to the first `GatewayId` it sends and drop any message that claims a different ID. Record the remaining exposure as tracked security debt.
+## Narrative Findings (AI reviewer)
 
 ## Warnings
 
-### WR-01: Pong "never upgrade REJECTED" guard is a non-atomic read-then-write, and no real gateway can reach it
+### WR-01: Remount hydration overwrites the parent's unsaved candidate Rego when switching tabs
 
-**File:** `internal/control/server.go:105-119`
-**Issue:** The code is unchanged from the prior review. `GetReplicaStatuses()` (RLock, copy, unlock) and `RecordAck()` (write lock) are separate critical sections. A REJECTED ack recorded between the two calls gets overwritten with ACTIVATED. The server never sends `ControlPlaneMessage_Ping` in production, so only unsolicited Pongs (see CR-02) reach this branch.
-**Fix:** Delete the Pong branch until the server sends Pings, or move the guard into one `AckTracker.RecordHeartbeat` method that does the check and the write under `a.mu.Lock()`.
+**File:** `web/dashboard/src/components/PolicyStudio.tsx:98-111` (with `web/dashboard/src/App.tsx:73-82`)
+**Issue:** `App.tsx` renders `PolicyStudio` only while `activeTab === 'studio'`, so switching tabs unmounts it. `hydratedRef` and `userEditedRef` are component refs, so they reset on every mount. The flow:
+1. The operator edits the policy. `App.candidateRego` now holds the edits.
+2. The operator switches to the Simulator tab and back. `PolicyStudio` remounts.
+3. react-query returns the cached `versionsData` synchronously, so the effect runs right away.
+4. The effect calls `setRegoCode(server source)` and `onCandidateRegoChange(server source)`.
 
-### WR-02: Server keeps the client-supplied `AcknowledgedAt`, so gateway clock skew or a spoofed timestamp decides liveness
+The operator's unsaved draft in `App` is replaced without warning, and the Simulator now tests the published policy instead of the candidate. Before this change, the editor reset to the template on remount but the parent's candidate survived. Now both copies are lost.
+**Fix:** Lift the editor text to `App` (or seed from it) and skip hydration when a candidate already exists.
+```tsx
+// App.tsx
+<PolicyStudio session={session} candidateRego={candidateRego} onCandidateRegoChange={setCandidateRego} />
 
-**File:** `internal/control/server.go:98-100`
-**Issue:** `AcknowledgedAt` is replaced only when it is nil. `HandleListGateways` uses it as the last heartbeat. A gateway clock running more than 60s fast keeps a dead replica "healthy" for that much longer. A clock running more than 60s slow shows a live replica as partitioned. A future timestamp (CR-02) hides a dead replica indefinitely.
-**Fix:** In the Recv goroutine, always set `ack.AcknowledgedAt = timestamppb.Now()`. If the gateway's own timestamp is needed, store it in a separate column.
-
-### WR-03: Lease/version coupling means the REJECTED heartbeat echo can't be reached for a rejected publish, and a lagging gateway goes partitioned (and fails closed) instead of degraded
-
-**File:** `internal/snapshot/client.go:227-245`; `internal/snapshot/verifier.go:118-121`
-**Issue:** The CP signs every lease for its active version N+1. If a gateway rejects N+1 (for example, the Rego fails to compile on the gateway) or misses the broadcast (`BroadcastSnapshot` drops the message when the channel is full), it stays on N. Then `VerifyLease(lease N+1, expected N)` fails on every tick. As a result:
-1. No heartbeat is sent, so the `buildHeartbeatAck(..., lastStatus=REJECTED, ...)` path that 10-01 added (and `TestHeartbeat_PreservesRejected` covers only at the helper level) never runs for the most important rejection case.
-2. `RecordLeaseRenewal()` is never called, so the gateway's lease expires and it fails closed even though it holds a valid signed N.
-3. After 60s the CP shows the replica as partitioned, not REJECTED or degraded. Nothing triggers a resync.
-
-Heartbeats now echo REJECTED only when the rejected snapshot is not the CP's active one, which is rare.
-**Fix:** Split `VerifyLease` into a signature-and-expiry check and a separate version comparison. On a lease that is validly signed but has a different version, send a heartbeat with the gateway's real `ActiveVersion` and the preserved `lastStatus`. Also call `GetActiveSnapshot` to resync if the gateway is behind. Decide explicitly, and document, whether a version-lagging gateway should keep renewing its lease.
-
-### WR-04: Idempotency cache is not scoped to session/method/route and runs before `RequireRole`
-
-**File:** `internal/control/api.go:108`; `internal/control/idempotency.go:136-170`
-**Issue:** `pr.Use(IdempotencyMiddleware)` runs before the per-route `RequireRole` and `RequireIdempotencyKey`. The cache key is the raw header value. If a lower-privileged session replays a known key K, possibly against a different endpoint, it gets the cached response back with `Idempotent-Replay: true`, and `RequireRole` never runs for that request. Every mutation now has to send a key, so keys show up routinely in logs and HAR captures.
-**Fix:** Build the cache key as `sessionUserID + "|" + method + "|" + chi.RouteContext(r).RoutePattern() + "|" + key`. Store a hash of the request body and return 422 when the same key arrives with a different body. Apply the middleware per route, after `RequireRole`.
-
-### WR-05: Idempotency middleware caches 5xx responses for 24h
-
-**File:** `internal/control/idempotency.go:189-190`
-**Issue:** The comment says "successful or expected client error", but every status gets cached. Publish returns 503 (validator or storage unavailable) and 500 (persist failure). A retry with the same key replays that transient failure for 24h. `seed.sh` (`cp_call`) and PolicyStudio work around it by minting a new key on every attempt, which removes the retry-safety that idempotency keys are supposed to give.
-**Fix:**
-```go
-if statusCode >= 500 { s.Release(key) } else { s.Complete(key, statusCode, buf.Header(), buf.body.Bytes()) }
-completed = true
+// PolicyStudio.tsx
+const [regoCode, setRegoCode] = useState<string>(candidateRego ?? DEFAULT_REGO_TEMPLATE);
+const userEditedRef = useRef(candidateRego !== undefined);
 ```
 
-### WR-06: Policy Studio save-draft-then-publish is a TOCTOU; another operator's bytes can be signed
+### WR-02: Hydration is not tied to `policyId`, so the editor keeps policy A's source while publishing as policy B
 
-**File:** `web/dashboard/src/components/PolicyStudio.tsx:136-147`; `internal/control/publish_handler.go:61`
-**Issue:** The draft upsert and the publish are two separate requests, and publish re-reads the draft from the DB. If another sec-ops user saves the same `policy_id` between the two requests, that user's Rego gets signed and broadcast. When publish fails (412 or 422), the shared draft has still been overwritten.
-**Fix:** Send `expected_source_sha256` (or a draft revision) in the publish body and return 409 when it doesn't match, or make publish accept the source and persist it atomically.
+**File:** `web/dashboard/src/components/PolicyStudio.tsx:98-108, 340`
+**Issue:** The Policy Identifier field is editable (`setPolicyId`, line 340), and the versions query key includes `policyId`. But `hydratedRef` is set to `true` after the first load and never reset. If the operator changes the policy ID, the editor keeps the first policy's source. `publishMutation` then saves that source as the draft for the new `policy_id` and publishes it with the new policy's ETag. The new hydration feature presents the editor as "the latest stored policy", which makes this mismatch easy to miss. On the server side, `HandleGetPolicyVersions` (`internal/control/policy_handler.go:71-100`) ignores `id` and returns global snapshots, so `list[0].source_rego` is not specific to any policy anyway.
+**Fix:** Track hydration per policy, and only re-hydrate when the operator has no unsaved edits:
+```tsx
+const hydratedForRef = useRef<string | null>(null);
+useEffect(() => {
+  if (hydratedForRef.current === policyId || userEditedRef.current) return;
+  const list = versionsData?.versions;
+  if (!list || list.length === 0) return;
+  hydratedForRef.current = policyId;
+  ...
+}, [policyId, versionsData, onCandidateRegoChange]);
+```
+Also filter versions by `policy_id` on the server, or document that the endpoint is global.
 
-### WR-07: Configured identity mappings are not authoritative for bootstrap or rollback
+### WR-03: Long-partitioned gateways disappear from the convergence denominator (observability fails open)
 
-**File:** `cmd/control-plane/main.go:191-218, 257-266`; `internal/control/rollback.go:66-76`; `internal/control/publish_handler_test.go:190-230`
-**Issue:** The mappings file is loaded after the bootstrap v1 snapshot is signed, so v1 never carries the configured mappings. Gateways run with no role mappings until the first publish. Rollback re-signs the historical payload as it was, so rolling back to a pre-mappings snapshot removes all RBAC even when `AEGIS_IDENTITY_MAPPINGS_FILE` is set. `TestPublish_IdentityMappings_Rollback` checks historical restore only with no configured mappings, so the behavior that conflicts with "config is authoritative" (`publish_handler.go:17-18`) is untested.
-**Fix:** Load the mappings before building the bootstrap and include them in `initialPayload`. Pass a mappings resolver into `RollbackEngine` and override `payload.IdentityMappings` when mappings are configured. Add a test where configured mappings differ from the historical ones.
+**File:** `internal/control/gateway_handler.go:124-130`
+**Issue:** If a gateway stops sending heartbeats for more than 15 minutes (crash, network partition, fail-closed data plane denying all traffic), it is removed from the list. `ClusterTopology.tsx:45` computes `converged / total` from that list, so a fleet with one dead replica out of three shows "2 / 2 Replicas (100%)" with a green bar. A replica that went silent is the most important partition signal, and this change hides it after 15 minutes. Nothing tells the operator that records were hidden.
+**Fix:** Do not drop these records without a trace. Return them in a separate field (for example `stale_gateways` or a `hidden_stale_count`) and show "N stale replicas hidden" in the topology view. At minimum, increment a metric or log once when a gateway moves from partitioned to stale.
 
-### WR-08: Smoke idle-health check fails every time on mvp/hardened with `--stop-check`
+### WR-04: REJECTED gateways are never stale, so decommissioned rejecters stay as ghosts forever
 
-**File:** `scripts/compose-smoke.sh:945-958`; `deployments/compose/docker-compose.mvp.yml`, `deployments/compose/docker-compose.hardened.yml` (gateway service env)
-**Issue:** Only the distributed profile pins `AEGIS_GATEWAY_ID`. In mvp and hardened, the gateway generates `gateway-<rand>` at each start. The GRACE `dc stop`/`dc up` cycle registers a new ID, and the old one stays in the AckTracker and DB with a frozen heartbeat. After `sleep 65` the old ID shows partitioned, and `all(.gateways[]; .status == "healthy")` fails. Leftover rows on a persistent `postgres_data` volume cause the same failure.
-**Fix:** Add `AEGIS_GATEWAY_ID=gateway-1` to the gateway in both files, and assert it in `tests/compose/compose_test.go`. Also either age out replicas with no heartbeat for more than N minutes in `HandleListGateways`, or limit the assertion to the IDs of running services.
+**File:** `internal/control/gateway_handler.go:46-51`
+**Issue:** `isStaleReplica` always returns false for `ACK_STATUS_REJECTED`. The Pong handler (`server.go:114-117`) also keeps REJECTED sticky. Take a gateway that rejects a bad snapshot and is then removed from the fleet:
+- Its `gateway_acks` row stays REJECTED.
+- The in-memory `AckTracker` entry is never evicted.
+- No endpoint deletes either record.
 
-### WR-09: Concurrent publishes: the slower request gets 500 instead of 412
+It stays "partitioned" indefinitely, and convergence never reaches 100%. This is the ghost-gateway problem 10-10 was meant to fix, and it still exists for one status. The exemption is reasonable for recent failures, but it should have an upper bound.
+**Fix:** Give REJECTED records a longer but finite cutoff (for example `rejectedStaleAfter = 24h` or `4 * staleAfter`). Alternatively, add an authenticated sec-ops endpoint that deletes a gateway's ack row and its `AckTracker` entry.
 
-**File:** `internal/control/publish_handler.go:40-50, 145-151`
-**Issue:** The If-Match check reads the active version without a lock. Rego validation and the unit-test run then sit between that check and `SaveSnapshot`. Two publishes with the same ETag both compute N+1, and the second fails on the `snapshots.version` primary key with a generic 500. That breaks the OPS-02 412 contract.
-**Fix:** Serialize check-to-broadcast with a mutex on `APIServer` (or use a DB CAS), and map unique-violation `23505` to `412 PRECONDITION_FAILED`.
+### WR-05: Invalid or too-small `AEGIS_GATEWAY_STALE_AFTER` is silently replaced with 15m
+
+**File:** `internal/control/gateway_handler.go:33-43`
+**Issue:** If an operator sets `AEGIS_GATEWAY_STALE_AFTER=1m` (or a typo like `5min`), the value is silently replaced with 15m, which is a much looser threshold than they asked for. The value is re-read and re-parsed on every request with no log, so the misconfiguration can't be seen. The 10-09 cookie change logs its override at startup. This one should do the same.
+**Fix:** Parse the value once when `NewAPIServer` builds the server, store it on `APIServer`, and log once if it is rejected:
+```go
+if err != nil || d <= gatewayPartitionAfter {
+    log.Printf("WARNING: AEGIS_GATEWAY_STALE_AFTER=%q invalid or <= %s; using %s", v, gatewayPartitionAfter, defaultGatewayStaleAfter)
+    return defaultGatewayStaleAfter
+}
+```
+A value of 60s or less could also be clamped to `gatewayPartitionAfter + 1s` rather than jumping to 15m.
 
 ## Info
 
-### IN-01: `strings.Contains(source, "test_")` is a weak trigger for running Rego tests
-**File:** `internal/control/publish_handler.go:78`
-**Issue:** Identifiers like `latest_version` trigger a test run, and test rules ship inside the production snapshot. **Fix:** Parse the module and look for rules named `test_*`, or keep tests in a separate module that is not published.
+### IN-01: Staleness relies on the timestamp the gateway reports
 
-### IN-02: Hard-coded module name and unencoded `policyId` in URLs
-**File:** `web/dashboard/src/components/PolicyStudio.tsx:140, 144, 183`
-**Fix:** Use `encodeURIComponent(policyId)`. Wire the policy name input into the request or remove it.
+**File:** `internal/control/gateway_handler.go:87-97, 127`
+**Issue:** For in-memory entries, `lastHeartbeatAt` comes from `ack.AcknowledgedAt`. `server.go:98-100` only fills this with server time when the gateway leaves it empty. A gateway whose clock runs ahead (or that lies) has `now.Sub(lastHb)` negative and is never stale or partitioned. The persisted path uses DB `NOW()`, so the two sources disagree.
+**Fix:** Always overwrite `AcknowledgedAt` with server time on receipt, or clamp future timestamps to `now`.
 
-### IN-03: `LoadIdentityMappings` accepts whitespace-only roles and permissions; duplicate JSON keys are silently last-wins
-**File:** `internal/control/identity_mappings.go:31-41`
-**Fix:** Apply `strings.TrimSpace` before the empty checks. Consider a `json.Decoder` token walk to reject duplicate keys.
+### IN-02: No handler-level test for the stale filter
 
-### IN-06: `resolveIdentityMappings` drops the unmarshal error and signs empty mappings
-**File:** `internal/control/publish_handler.go:26-33`
-**Fix:** Log the error, and refuse to publish when the mappings resolve to empty but the previous snapshot had them.
+**File:** `internal/control/gateway_handler_stale_test.go`
+**Issue:** The tests cover `gatewayStaleAfter` and `isStaleReplica` on their own. Nothing checks that `HandleListGateways` actually leaves out a 20-minute-old APPLIED record while keeping a 20-minute-old REJECTED one. That loop is where a regression (for example, moving the `continue`) would happen.
+**Fix:** Add a case to `gateway_handler_test.go` that seeds the `AckTracker` with an old `AcknowledgedAt`, then asserts which IDs are present and checks `len(resp.Gateways)`.
 
-### IN-07 (new, 10-07): Re-delivery short-circuit acks ACTIVATED based on unverified header fields
-**File:** `internal/snapshot/client.go:310-315`
-**Issue:** The fast path compares the envelope's claimed `PayloadSha256` header with the active one. It does not recompute the digest or check the signature. Gateway state doesn't change, so this can't swap config. But over the plaintext stream (CR-02), an on-path attacker can send an envelope with the right header and junk payload and get an ACTIVATED ack echoed back. **Fix:** Also require `bytes.Equal(snap.Signature, activeSig)`, which means storing the signature in `ActiveState`, or recompute `sha256(snap.Payload)` before taking the fast path.
+### IN-03: Cookie Secure setting is read from the environment inside `NewAPIServer`
 
-### IN-08 (new, 10-07): Per-stream status reset and unconditional ACTIVATED presence ack briefly hide a prior REJECTED
-**File:** `internal/snapshot/client.go:164-184`
-**Issue:** `lastStatus` is local to `runStream`, and the initial presence ack always sends ACTIVATED. After a reconnect, a gateway that was REJECTED shows ACTIVATED on the CP until the re-delivered snapshot is processed again. That window is usually short, but it is unbounded if the CP has no active snapshot. **Fix:** Store `lastStatus` and `lastErr` on `StreamClient` (under `mu`) so they survive reconnects, and send them in the presence ack.
+**File:** `internal/control/api.go:63-66`
+**Issue:** `cookieSecureFromEnv(os.Getenv)` is called inside the constructor instead of being passed in through config. This hidden environment coupling makes `NewAPIServer` harder to test. It also differs from how other settings are wired in `cmd/control-plane/main.go`. The fail-secure default and the warning log are correct.
+**Fix:** Add a `CookieSecure bool` option to `NewAPIServer` and read the environment in `main.go`.
 
-### IN-09 (new, 10-07): CR-01 fix has only unit-level coverage
-**File:** `internal/snapshot/client_test.go:156-196`
-**Issue:** The tests call `processSnapshot` directly. Nothing runs a real `StreamSnapshots` reconnect against the same `Manager` and checks that the CP-side `AckTracker` status stays ACTIVATED, which was the scenario the prior review asked for. A later refactor of `runStream` (for example, calling `ValidateAndActivate` directly again) would not be caught. **Fix:** Add a bufconn test in `internal/control/control_test.go` that starts a `StreamClient`, cancels the stream, reconnects, and asserts `GetReplicaStatuses()[gw].Status == ACTIVATED`.
+### IN-04: The hardened profile still serves the dashboard over plain HTTP with Secure cookies
 
-### IN-10 (new, 10-08): `typeof crypto` guard is applied only halfway
-**File:** `web/dashboard/src/api/idempotency.ts:6-9`
-**Issue:** The guard allows for `crypto` being undefined, but the fallback calls `crypto.getRandomValues` anyway and throws a `ReferenceError` in that case. Every supported browser defines `crypto`, so this has no practical impact, but the guard suggests a safety it doesn't provide. Nothing tests the fallback branch. **Fix:** Drop the `typeof crypto` check, or throw a clear error. Add a vitest case that stubs `crypto.randomUUID = undefined` and checks the v4 format (`/^[0-9a-f]{8}-[0-9a-f]{4}-4[0-9a-f]{3}-[89ab][0-9a-f]{3}-[0-9a-f]{12}$/`).
+**File:** `deployments/compose/docker-compose.hardened.yml:38` (context for the 10-09 compose changes)
+**Issue:** mvp and distributed opt out with `AEGIS_COOKIE_SECURE=false`. The hardened profile keeps the secure default but serves `http://...:8084` with no TLS. Login only works through `localhost`/`127.0.0.1`, which browsers treat as a secure context. From another host the session cookie is dropped without error. This behaviour is correct, but it is not documented.
+**Fix:** Either put the hardened control plane behind TLS, or add a comment saying the hardened dashboard needs HTTPS or localhost access.
+
+### IN-05: The Vite CDN-strip plugin is fragile and hard-codes the base path
+
+**File:** `web/dashboard/vite.config.ts:15-20`
+**Issue:**
+- The replacement target `/dashboard/monaco-local/vs` duplicates `base: '/dashboard/'` and points to a path that does not exist.
+- The plugin does nothing if `@monaco-editor/loader` switches CDN host or quoting style. For example, with backticks, `[^'"]*` would consume past the end of the string.
+- `transform` hooks do not run on dev-mode `optimizeDeps` pre-bundles, so the dev bundle still contains the jsdelivr string.
+
+Today's production build is clean; I checked `dist/assets` and found no `jsdelivr`.
+**Fix:** Add a `generateBundle` / `closeBundle` check that fails the build if any chunk contains `cdn.jsdelivr.net` (or any `https://` monaco URL). Derive the replacement from `config.base`.
+
+### IN-06: `getWorker` ignores the language label
+
+**File:** `web/dashboard/src/utils/monaco-setup.ts:8-10`
+**Issue:** `import * as monaco from 'monaco-editor'` pulls in every language contribution. The build emits `css.worker` and the others. `getWorker` returns the base editor worker for every label. Rego uses Monarch only, so this is harmless today. If anyone later opens a JSON/TS/CSS model, its language service will run in the wrong worker and fail without an error.
+**Fix:** Import `monaco-editor/esm/vs/editor/editor.api` plus only the needed contributions. Alternatively, switch on `label` in `getWorker` and throw for anything other than `editorWorkerService`.
 
 ---
 
-_Reviewed: 2026-10-11T06:21:57Z_
+_Reviewed: 2026-10-11T10:25:31Z_
 _Reviewer: Claude (gsd-code-reviewer)_
 _Depth: standard_
