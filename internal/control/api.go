@@ -113,10 +113,10 @@ func (s *APIServer) routes() {
 
 			// Route catalog management
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/routes", s.HandleListRoutes)
-			pr.With(RequireRole("sec-ops")).Post("/routes", s.HandleCreateRoute)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/routes", s.HandleCreateRoute)
 
 			// Policy drafts & version inspection
-			pr.With(RequireRole("sec-ops")).Post("/policies", s.HandleCreatePolicyDraft)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/policies", s.HandleCreatePolicyDraft)
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/policies/{id}/versions", s.HandleGetPolicyVersions)
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Post("/policies/{id}/validate", s.HandleValidatePolicy)
 
@@ -125,9 +125,9 @@ func (s *APIServer) routes() {
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Post("/policies/{id}/simulate", s.HandleSimulatePolicy)
 
 			// Monotonic publishing and rollback (sec-ops only)
-			pr.With(RequireRole("sec-ops")).Post("/policies/{id}/publish", s.HandlePublishPolicy)
-			pr.With(RequireRole("sec-ops")).Post("/policies/{id}/rollback", s.HandleRollbackPolicy)
-			pr.With(RequireRole("sec-ops")).Post("/snapshots/rollback", s.HandleRollbackPolicy)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/policies/{id}/publish", s.HandlePublishPolicy)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/policies/{id}/rollback", s.HandleRollbackPolicy)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/snapshots/rollback", s.HandleRollbackPolicy)
 
 			// Gateway convergence topology
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/gateways", s.HandleListGateways)
@@ -135,10 +135,10 @@ func (s *APIServer) routes() {
 			// Emergency incident response (quarantine & token revocation)
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/principals/quarantine", s.HandleListQuarantines)
 			pr.With(RequireRole("sec-ops", "auditor", "viewer")).Get("/quarantine", s.HandleListQuarantines)
-			pr.With(RequireRole("sec-ops")).Post("/principals/{id}/quarantine", s.HandleQuarantinePrincipal)
-			pr.With(RequireRole("sec-ops")).Delete("/principals/{id}/quarantine", s.HandleUnquarantinePrincipal)
-			pr.With(RequireRole("sec-ops")).Post("/quarantine", s.HandleQuarantinePrincipal)
-			pr.With(RequireRole("sec-ops")).Post("/revocations", s.HandleRevokeToken)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/principals/{id}/quarantine", s.HandleQuarantinePrincipal)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Delete("/principals/{id}/quarantine", s.HandleUnquarantinePrincipal)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/quarantine", s.HandleQuarantinePrincipal)
+			pr.With(RequireRole("sec-ops"), RequireIdempotencyKey).Post("/revocations", s.HandleRevokeToken)
 
 			// Durable audit inspection (sec-ops and auditor)
 			pr.With(RequireRole("sec-ops", "auditor")).Get("/audit-events", s.HandleListAuditEvents)

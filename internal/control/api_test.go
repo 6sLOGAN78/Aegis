@@ -189,6 +189,7 @@ func TestControlAPI(t *testing.T) {
 			"requires_workload_mtls": true
 		}`
 		postReq := httptest.NewRequest(http.MethodPost, "/control/v1/routes", bytes.NewBufferString(createBody))
+		postReq.Header.Set("Idempotency-Key", uuid.NewString())
 		postReq.AddCookie(cookie)
 		postReq.Header.Set("X-CSRF-Token", csrfToken)
 		postRec := httptest.NewRecorder()
@@ -202,6 +203,7 @@ func TestControlAPI(t *testing.T) {
 		// Quarantine principal
 		qBody := `{"reason":"Credential leaked on pastebin"}`
 		qReq := httptest.NewRequest(http.MethodPost, "/control/v1/principals/evil-user/quarantine", bytes.NewBufferString(qBody))
+		qReq.Header.Set("Idempotency-Key", uuid.NewString())
 		qReq.AddCookie(cookie)
 		qReq.Header.Set("X-CSRF-Token", csrfToken)
 		qRec := httptest.NewRecorder()
@@ -223,6 +225,7 @@ func TestControlAPI(t *testing.T) {
 
 		// Unquarantine
 		unqReq := httptest.NewRequest(http.MethodDelete, "/control/v1/principals/evil-user/quarantine", nil)
+		unqReq.Header.Set("Idempotency-Key", uuid.NewString())
 		unqReq.AddCookie(cookie)
 		unqReq.Header.Set("X-CSRF-Token", csrfToken)
 		unqRec := httptest.NewRecorder()
@@ -246,6 +249,7 @@ func TestControlAPI(t *testing.T) {
 				rd = bytes.NewBuffer(nil)
 			}
 			req := httptest.NewRequest(method, target, rd)
+			req.Header.Set("Idempotency-Key", uuid.NewString())
 			req.AddCookie(cookie)
 			req.Header.Set("X-CSRF-Token", csrfToken)
 			rec := httptest.NewRecorder()
@@ -338,6 +342,7 @@ func TestControlAPI(t *testing.T) {
 	t.Run("Token JTI Revocation", func(t *testing.T) {
 		revBody := `{"jti":"compromised-jti-999","reason":"Compromised bearer token","ttl_seconds":3600}`
 		revReq := httptest.NewRequest(http.MethodPost, "/control/v1/revocations", bytes.NewBufferString(revBody))
+		revReq.Header.Set("Idempotency-Key", uuid.NewString())
 		revReq.AddCookie(cookie)
 		revReq.Header.Set("X-CSRF-Token", csrfToken)
 		revRec := httptest.NewRecorder()
@@ -414,6 +419,7 @@ test_guest_denied if {
 		}`, candidateRego)
 
 		draftReq := httptest.NewRequest(http.MethodPost, "/control/v1/policies", bytes.NewBufferString(draftBody))
+		draftReq.Header.Set("Idempotency-Key", uuid.NewString())
 		draftReq.AddCookie(cookie)
 		draftReq.Header.Set("X-CSRF-Token", csrfToken)
 		draftRec := httptest.NewRecorder()
@@ -498,6 +504,7 @@ test_guest_denied if {
 
 		// 1. Missing If-Match -> 412
 		pubReqNoIfMatch := httptest.NewRequest(http.MethodPost, "/control/v1/policies/policy-authz/publish", bytes.NewBufferString(`{}`))
+		pubReqNoIfMatch.Header.Set("Idempotency-Key", uuid.NewString())
 		pubReqNoIfMatch.AddCookie(cookie)
 		pubReqNoIfMatch.Header.Set("X-CSRF-Token", csrfToken)
 		pubRecNoIfMatch := httptest.NewRecorder()
@@ -506,6 +513,7 @@ test_guest_denied if {
 
 		// 2. Mismatched If-Match -> 412
 		pubReqMismatch := httptest.NewRequest(http.MethodPost, "/control/v1/policies/policy-authz/publish", bytes.NewBufferString(`{}`))
+		pubReqMismatch.Header.Set("Idempotency-Key", uuid.NewString())
 		pubReqMismatch.AddCookie(cookie)
 		pubReqMismatch.Header.Set("X-CSRF-Token", csrfToken)
 		pubReqMismatch.Header.Set("If-Match", `"99"`)
@@ -541,6 +549,7 @@ test_guest_denied if {
 			WillReturnResult(pgxmock.NewResult("UPDATE", 1))
 
 		pubReq := httptest.NewRequest(http.MethodPost, "/control/v1/policies/policy-authz/publish", bytes.NewBufferString(`{}`))
+		pubReq.Header.Set("Idempotency-Key", uuid.NewString())
 		pubReq.AddCookie(cookie)
 		pubReq.Header.Set("X-CSRF-Token", csrfToken)
 		pubReq.Header.Set("If-Match", `"0"`)
@@ -599,6 +608,7 @@ test_guest_denied if {
 
 		rbBody := `{"target_version_id":"1","comment":"Rollback due to regression"}`
 		rbReq := httptest.NewRequest(http.MethodPost, "/control/v1/policies/policy-authz/rollback", bytes.NewBufferString(rbBody))
+		rbReq.Header.Set("Idempotency-Key", uuid.NewString())
 		rbReq.AddCookie(cookie)
 		rbReq.Header.Set("X-CSRF-Token", csrfToken)
 		rbReq.Header.Set("If-Match", `"1"`)

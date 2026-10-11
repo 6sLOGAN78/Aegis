@@ -13,6 +13,7 @@ import (
 	controlv1 "aegis/pkg/api/control/v1"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
+	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -124,6 +125,7 @@ func TestConvergenceAndQuarantine(t *testing.T) {
 	t.Run("Quarantine Principal and Verify Redis", func(t *testing.T) {
 		body := `{"reason":"Compromised API Key Detected"}`
 		req := httptest.NewRequest(http.MethodPost, "/control/v1/principals/bad-actor-42/quarantine", bytes.NewBufferString(body))
+		req.Header.Set("Idempotency-Key", uuid.NewString())
 		req.AddCookie(cookie)
 		req.Header.Set("X-CSRF-Token", csrfToken)
 		rec := httptest.NewRecorder()
@@ -160,6 +162,7 @@ func TestConvergenceAndQuarantine(t *testing.T) {
 
 	t.Run("Remove Quarantine Block", func(t *testing.T) {
 		req := httptest.NewRequest(http.MethodDelete, "/control/v1/principals/bad-actor-42/quarantine", nil)
+		req.Header.Set("Idempotency-Key", uuid.NewString())
 		req.AddCookie(cookie)
 		req.Header.Set("X-CSRF-Token", csrfToken)
 		rec := httptest.NewRecorder()
@@ -180,6 +183,7 @@ func TestConvergenceAndQuarantine(t *testing.T) {
 	t.Run("Revoke Token JTI", func(t *testing.T) {
 		body := `{"jti":"tok-evil-token-99","reason":"Compromised OAuth Token","ttl_seconds":3600}`
 		req := httptest.NewRequest(http.MethodPost, "/control/v1/revocations", bytes.NewBufferString(body))
+		req.Header.Set("Idempotency-Key", uuid.NewString())
 		req.AddCookie(cookie)
 		req.Header.Set("X-CSRF-Token", csrfToken)
 		rec := httptest.NewRecorder()

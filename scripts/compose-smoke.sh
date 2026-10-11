@@ -150,17 +150,20 @@ op_login() {
 
 # cp_call METHOD PATH [JSON_BODY] prints the HTTP status code only.
 cp_call() {
-  local method="$1" path="$2" data="${3:-}"
+  local method="$1" path="$2" data="${3:-}" idem
+  idem="$(cat /proc/sys/kernel/random/uuid 2>/dev/null || uuidgen)"
   if [ -n "${data}" ]; then
     dc exec -T control-plane curl -s -o /dev/null -w '%{http_code}' -X "${method}" \
       -H "Cookie: aegis_session=${SESSION}" \
       -H "X-CSRF-Token: ${CSRF}" \
+      -H "Idempotency-Key: ${idem}" \
       -H 'Content-Type: application/json' \
       -d "${data}" "${CP_URL}${path}" 2>/dev/null || true
   else
     dc exec -T control-plane curl -s -o /dev/null -w '%{http_code}' -X "${method}" \
       -H "Cookie: aegis_session=${SESSION}" \
       -H "X-CSRF-Token: ${CSRF}" \
+      -H "Idempotency-Key: ${idem}" \
       "${CP_URL}${path}" 2>/dev/null || true
   fi
 }
@@ -937,6 +940,21 @@ if [ "${STOP_CHECK}" = "true" ]; then
     fail "GRACE ${GW}" "exit code ${exit_code:-unknown}; 137 means SIGKILL so stop_grace_period was too short"
   fi
   dc up -d --wait "${GW}" >/dev/null 2>&1 || fail "GRACE ${GW}" "did not become healthy again after restart"
+fi
+
+echo "=== GATEWAYS: replicas remain healthy after 60s idle (no publish) ==="
+if op_login; then
+  sleep 65
+  gw_json="$(dc exec -T control-plane curl -s \
+    -H "Cookie: aegis_session=${SESSION}" \
+    "${CP_URL}/control/v1/gateways" 2>/dev/null || true)"
+  if printf '%s' "${gw_json}" | jq -e '(.gateways | length) > 0 and all(.gateways[]; .status == "healthy")' >/dev/null 2>&1; then
+    pass "GATEWAYS all replicas healthy after 60s idle"
+  else
+    fail "GATEWAYS idle health" "expected every replica healthy (none degraded or partitioned): ${gw_json:-no response}"
+  fi
+else
+  fail "GATEWAYS operator login" "could not obtain session for idle health check"
 fi
 
 echo "=== Summary: ${FAILS} hard failure(s) ==="

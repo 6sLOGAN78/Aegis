@@ -119,6 +119,19 @@ func (r *responseBuffer) Write(b []byte) (int, error) {
 	return r.body.Write(b)
 }
 
+// RequireIdempotencyKey rejects requests lacking an Idempotency-Key header.
+// It is applied per route on state-changing mutations; IdempotencyMiddleware
+// itself still passes through when the header is absent.
+func RequireIdempotencyKey(next http.Handler) http.Handler {
+	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
+		if r.Header.Get("Idempotency-Key") == "" {
+			writeErrorResponse(w, r, http.StatusBadRequest, "IDEMPOTENCY_KEY_REQUIRED", "Idempotency-Key header is required")
+			return
+		}
+		next.ServeHTTP(w, r)
+	})
+}
+
 // IdempotencyMiddleware wraps an http.Handler with idempotency locking and response caching.
 func (s *IdempotencyStore) IdempotencyMiddleware(next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
