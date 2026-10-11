@@ -13,6 +13,8 @@ import (
 	"sync"
 	"time"
 
+	"aegis/internal/keyfile"
+
 	"github.com/golang-jwt/jwt/v5"
 	"github.com/google/uuid"
 )
@@ -205,6 +207,20 @@ func (s *IssuerServer) Routes() http.Handler {
 	return mux
 }
 
+// loadIssuerKey loads the signing key from AEGIS_ISSUER_PRIVATE_KEY_PATH. A
+// configured but invalid path is an error (fail closed). When unset it returns
+// the insecure deterministic dev key with warn=true.
+func loadIssuerKey(getenv func(string) string) (key ed25519.PrivateKey, warn bool, err error) {
+	if path := getenv("AEGIS_ISSUER_PRIVATE_KEY_PATH"); path != "" {
+		k, err := keyfile.LoadEd25519Private(path)
+		if err != nil {
+			return nil, false, err
+		}
+		return k, false, nil
+	}
+	return ed25519.NewKeyFromSeed(DefaultDeterministicSeed), true, nil
+}
+
 func main() {
 	port := os.Getenv("PORT")
 	if port == "" {
@@ -212,7 +228,13 @@ func main() {
 	}
 
 	loadSeedPasswords()
-	privKey := ed25519.NewKeyFromSeed(DefaultDeterministicSeed)
+	privKey, warn, err := loadIssuerKey(os.Getenv)
+	if err != nil {
+		log.Fatalf("Demo JWT Issuer: cannot load signing key: %v", err)
+	}
+	if warn {
+		log.Printf("Warning: AEGIS_ISSUER_PRIVATE_KEY_PATH unset; using insecure demo seed; dev only")
+	}
 	server := NewIssuerServer(privKey, "aegis-issuer", "aegis-gateway")
 
 	log.Printf("Demo JWT Issuer starting on :%s", port)
