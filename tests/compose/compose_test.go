@@ -55,6 +55,15 @@ var gatewayAllowlist = map[string]bool{
 	"AEGIS_DRAIN_TIMEOUT":              true,
 	"AEGIS_UPSTREAM_SCHEME":            true,
 
+	// Phase 11: keyset directories and authenticated control-plane stream.
+	"AEGIS_JWT_KEYSET_DIR":         true,
+	"AEGIS_SNAPSHOT_KEYSET_DIR":    true,
+	"AEGIS_KEYSET_RELOAD_INTERVAL": true,
+	"AEGIS_CP_CLIENT_CERT_PATH":    true,
+	"AEGIS_CP_CLIENT_KEY_PATH":     true,
+	"AEGIS_CP_CA_PATH":             true,
+	"AEGIS_CP_SERVER_NAME":         true,
+
 	// Audit pipeline and spool settings (phase 08).
 	"AEGIS_SPOOL_SEGMENT_BYTES":             true,
 	"AEGIS_SPOOL_HARD_LIMIT_RATIO":          true,
@@ -155,7 +164,12 @@ func volumeMounts(svc service) []mount {
 	var out []mount
 	vols, _ := svc["volumes"].([]interface{})
 	for _, v := range vols {
-		parts := strings.Split(fmt.Sprint(v), ":")
+		// Protect the ":-" default operator of ${VAR:-default} from the split.
+		raw := strings.ReplaceAll(fmt.Sprint(v), ":-", "\x00")
+		parts := strings.Split(raw, ":")
+		for i := range parts {
+			parts[i] = strings.ReplaceAll(parts[i], "\x00", ":-")
+		}
 		if len(parts) < 2 {
 			continue
 		}
@@ -556,6 +570,125 @@ func TestControlPlaneMountsIdentityMappings(t *testing.T) {
 				}
 			}
 			assert.True(t, found, "%s: control-plane must mount seed_roles.json", profile)
+		})
+	}
+}
+
+const keysDirPrefix = "${AEGIS_KEYS_DIR:-../keys}"
+
+func mountByTarget(svc service, target string) (mount, bool) {
+	for _, m := range volumeMounts(svc) {
+		if m.target == target {
+			return m, true
+		}
+	}
+	return mount{}, false
+}
+
+func gatewayCertID(env map[string]string) string {
+	if id := env["AEGIS_GATEWAY_ID"]; id != "" {
+		return id
+	}
+	return "gateway"
+}
+
+func TestControlPlaneMTLSWiring(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			cp, ok := services["control-plane"]
+			require.True(t, ok, "%s: control-plane missing", profile)
+			env := envMap(cp)
+			for _, k := range []string{"AEGIS_GRPC_TLS_CERT_PATH", "AEGIS_GRPC_TLS_KEY_PATH", "AEGIS_GRPC_CLIENT_CA_PATH", "AEGIS_SIGNING_KEY_PATH"} {
+				assert.NotEmpty(t, env[k], "%s control-plane: %s must be set (T-11-12-01)", profile, k)
+			}
+			assert.NotContains(t, env, "AEGIS_SIGNING_KEY_SEED", "%s control-plane: seed-derived signing key is removed", profile)
+			m, ok := mountByTarget(cp, "/certs")
+			if assert.True(t, ok, "%s control-plane: must mount ../certs at /certs", profile) {
+				assert.Equal(t, "../certs", m.source)
+				assert.True(t, m.readOnly)
+			}
+		})
+	}
+}
+
+func TestGatewayCPClientCertMatchesGatewayID(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			for _, name := range gatewayNames(services) {
+				env := envMap(services[name])
+				for _, k := range []string{"AEGIS_CP_CLIENT_CERT_PATH", "AEGIS_CP_CLIENT_KEY_PATH", "AEGIS_CP_CA_PATH", "AEGIS_CP_SERVER_NAME"} {
+					assert.NotEmpty(t, env[k], "%s/%s: %s must be set", profile, name, k)
+				}
+				id := gatewayCertID(env)
+				assert.Equal(t, "cp-client-"+id+".crt", filepath.Base(env["AEGIS_CP_CLIENT_CERT_PATH"]), "%s/%s: cert must match gateway id (T-11-12-02)", profile, name)
+				assert.Equal(t, "cp-client-"+id+".key", filepath.Base(env["AEGIS_CP_CLIENT_KEY_PATH"]), "%s/%s: key must match gateway id", profile, name)
+				if profile == "distributed" {
+					assert.Equal(t, name, env["AEGIS_GATEWAY_ID"], "%s/%s: AEGIS_GATEWAY_ID must equal service name", profile, name)
+				}
+			}
+		})
+	}
+}
+
+func TestGatewayKeysetDirsMounted(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			for _, name := range gatewayNames(services) {
+				svc := services[name]
+				env := envMap(svc)
+				for envKey, target := range map[string]string{"AEGIS_JWT_KEYSET_DIR": "/keysets/jwt", "AEGIS_SNAPSHOT_KEYSET_DIR": "/keysets/snapshot"} {
+					assert.Equal(t, target, env[envKey], "%s/%s: %s", profile, name, envKey)
+					m, ok := mountByTarget(svc, target)
+					if assert.True(t, ok, "%s/%s: keyset dir %s must be mounted", profile, name, target) {
+						assert.True(t, m.readOnly)
+						assert.False(t, strings.HasSuffix(m.source, ".pub"), "%s/%s: single-file mount %s", profile, name, m.source)
+					}
+				}
+				assert.NotEmpty(t, env["AEGIS_KEYSET_RELOAD_INTERVAL"], "%s/%s: reload interval", profile, name)
+				for _, m := range volumeMounts(svc) {
+					assert.False(t, strings.HasPrefix(m.target, "/keys/"), "%s/%s: gateway must not mount private keys (T-11-12-04)", profile, name)
+				}
+			}
+		})
+	}
+}
+
+func TestSigningKeysSeparated(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			issuer, cp := services["demo-issuer"], services["control-plane"]
+			ik := envMap(issuer)["AEGIS_ISSUER_PRIVATE_KEY_PATH"]
+			ck := envMap(cp)["AEGIS_SIGNING_KEY_PATH"]
+			require.NotEmpty(t, ik, "%s: issuer private key path", profile)
+			require.NotEmpty(t, ck, "%s: control-plane signing key path", profile)
+			assert.NotEqual(t, ik, ck, "%s: JWT and snapshot keys must differ (D-09)", profile)
+			im, iok := mountByTarget(issuer, ik)
+			cm, cok := mountByTarget(cp, ck)
+			require.True(t, iok, "%s: issuer must mount %s", profile, ik)
+			require.True(t, cok, "%s: control-plane must mount %s", profile, ck)
+			assert.NotEqual(t, im.source, cm.source, "%s: key sources must differ", profile)
+		})
+	}
+}
+
+func TestKeysDirOverridable(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			var checked int
+			for name, svc := range services {
+				for _, m := range volumeMounts(svc) {
+					if strings.HasPrefix(m.target, "/keys/") || strings.HasPrefix(m.target, "/keysets/") {
+						checked++
+						assert.True(t, strings.HasPrefix(m.source, keysDirPrefix), "%s/%s: %s must use %s (T-11-12-05)", profile, name, m.source, keysDirPrefix)
+					}
+				}
+			}
+			assert.Positive(t, checked, "%s: no key mounts found", profile)
 		})
 	}
 }

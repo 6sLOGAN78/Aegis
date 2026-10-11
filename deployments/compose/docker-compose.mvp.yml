@@ -41,6 +41,10 @@ services:
       # Demo profile serves plain HTTP on 8084; do not use in production.
       - AEGIS_COOKIE_SECURE=false
       - AEGIS_GRPC_PORT=9090
+      - AEGIS_GRPC_TLS_CERT_PATH=/certs/control-plane-server.crt
+      - AEGIS_GRPC_TLS_KEY_PATH=/certs/control-plane-server.key
+      - AEGIS_GRPC_CLIENT_CA_PATH=/certs/root-ca.crt
+      - AEGIS_SIGNING_KEY_PATH=/keys/snapshot-current.key
       - AEGIS_REDIS_ADDR=redis:6379
       - AEGIS_DB_HOST=postgres
       - AEGIS_DB_PORT=5432
@@ -51,6 +55,8 @@ services:
       - AEGIS_IDENTITY_MAPPINGS_FILE=/etc/aegis/seed_roles.json
     volumes:
       - ../../policies/data/seed_roles.json:/etc/aegis/seed_roles.json:ro
+      - ../certs:/certs:ro
+      - ${AEGIS_KEYS_DIR:-../keys}/snapshot-current.key:/keys/snapshot-current.key:ro
     healthcheck:
       # No -f: a 401 from the unauthenticated probe still proves the server is up.
       test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8084/control/v1/auth/me"]
@@ -111,10 +117,19 @@ services:
       - AEGIS_UPSTREAM_SCHEME=https
       - AEGIS_ISSUER=aegis-issuer
       - AEGIS_AUDIENCE=aegis-gateway
+      - AEGIS_CP_CLIENT_CERT_PATH=/certs/cp-client-gateway.crt
+      - AEGIS_CP_CLIENT_KEY_PATH=/certs/cp-client-gateway.key
+      - AEGIS_CP_CA_PATH=/certs/root-ca.crt
+      - AEGIS_CP_SERVER_NAME=control-plane
+      - AEGIS_JWT_KEYSET_DIR=/keysets/jwt
+      - AEGIS_SNAPSHOT_KEYSET_DIR=/keysets/snapshot
+      - AEGIS_KEYSET_RELOAD_INTERVAL=2s
       - AEGIS_SPOOL_SEGMENT_BYTES=${AEGIS_SPOOL_SEGMENT_BYTES:-16777216}
       - AEGIS_AUDIT_SUPPRESS_WINDOW=${AEGIS_AUDIT_SUPPRESS_WINDOW:-60s}
     volumes:
       - ../certs:/certs:ro
+      - ${AEGIS_KEYS_DIR:-../keys}/keyset-jwt:/keysets/jwt:ro
+      - ${AEGIS_KEYS_DIR:-../keys}/keyset-snapshot:/keysets/snapshot:ro
       - aegis_wal_spool:/var/log/aegis/wal
     # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
     stop_grace_period: 45s
@@ -178,9 +193,12 @@ services:
       - "8085:8085"
     environment:
       - PORT=8085
+      - AEGIS_ISSUER_PRIVATE_KEY_PATH=/keys/jwt-current.key
       - AEGIS_DEMO_PASSWORD_DEVELOPER=${AEGIS_DEMO_PASSWORD_DEVELOPER:-demo-developer-pass}
       - AEGIS_DEMO_PASSWORD_FINANCE=${AEGIS_DEMO_PASSWORD_FINANCE:-demo-finance-pass}
       - AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN=${AEGIS_DEMO_PASSWORD_APPLICATION_ADMIN:-demo-admin-pass}
+    volumes:
+      - ${AEGIS_KEYS_DIR:-../keys}/jwt-current.key:/keys/jwt-current.key:ro
     networks:
       - aegis-internal
 
