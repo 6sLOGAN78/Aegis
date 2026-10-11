@@ -16,6 +16,7 @@ import {
   FileCode,
 } from 'lucide-react';
 import { apiClient, ApiError } from '../api/client';
+import { newIdempotencyKey } from '../api/idempotency';
 import { registerRegoLanguage, regoLanguageId } from '../utils/rego-monarch';
 import type {
   PolicyValidationResponse,
@@ -126,7 +127,8 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
   });
 
   // Fresh Idempotency-Key per publish attempt; re-minted after every outcome
-  const publishKeyRef = useRef<string>(crypto.randomUUID());
+  const publishKeyRef = useRef<string | null>(null);
+  if (publishKeyRef.current === null) publishKeyRef.current = newIdempotencyKey();
 
   // Publish Mutation
   const publishMutation = useMutation({
@@ -136,16 +138,16 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
       await apiClient.post(
         '/control/v1/policies',
         { policy_id: policyId, name: 'authz.rego', source_rego: regoCode },
-        { idempotencyKey: crypto.randomUUID() }
+        { idempotencyKey: newIdempotencyKey() }
       );
       return apiClient.post<PolicyPublishResponse>(
         `/control/v1/policies/${policyId}/publish`,
         { comment: publishComment || 'Broadcast via Policy Studio console' },
-        { ifMatch: currentETag, idempotencyKey: publishKeyRef.current }
+        { ifMatch: currentETag, idempotencyKey: publishKeyRef.current ?? newIdempotencyKey() }
       );
     },
     onSuccess: (data) => {
-      publishKeyRef.current = crypto.randomUUID();
+      publishKeyRef.current = newIdempotencyKey();
       setIsPublishModalOpen(false);
       setPublishComment('');
       setSuccessBanner(
@@ -155,7 +157,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
       queryClient.invalidateQueries({ queryKey: ['gateways'] });
     },
     onError: (err) => {
-      publishKeyRef.current = crypto.randomUUID();
+      publishKeyRef.current = newIdempotencyKey();
       if (err instanceof ApiError) {
         if (err.status === 412) {
           setPublishError('Publication conflict: ETag mismatch. Another operator published a newer version.');
@@ -181,7 +183,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
           target_version_id: selectedRollbackVersion.version_id,
           comment: rollbackComment || `Monotonic rollback to historical v${selectedRollbackVersion.snapshot_version}`,
         },
-        { ifMatch: currentETag, idempotencyKey: crypto.randomUUID() }
+        { ifMatch: currentETag, idempotencyKey: newIdempotencyKey() }
       );
     },
     onSuccess: (data) => {

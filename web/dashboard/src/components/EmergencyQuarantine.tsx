@@ -11,6 +11,7 @@ import {
   Lock,
 } from 'lucide-react';
 import { apiClient } from '../api/client';
+import { newIdempotencyKey } from '../api/idempotency';
 import type { QuarantineRecord, SessionInfo } from '../api/types';
 
 interface EmergencyQuarantineProps {
@@ -70,7 +71,7 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
           reason: quarantineReason.trim(),
           expires_at: expiresAt,
         },
-        { idempotencyKey: crypto.randomUUID() }
+        { idempotencyKey: newIdempotencyKey() }
       );
     },
     onSuccess: (data) => {
@@ -93,7 +94,7 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
       return apiClient.post<{ status: string; jti: string }>('/control/v1/revocations', {
         jti: jti.trim(),
         reason: revokeReason.trim() || 'ADMINISTRATIVE_TOKEN_REVOCATION',
-      }, { idempotencyKey: crypto.randomUUID() });
+      }, { idempotencyKey: newIdempotencyKey() });
     },
     onSuccess: (data) => {
       setSuccessBanner(`Token JTI "${data.jti}" successfully revoked cluster-wide.`);
@@ -112,7 +113,7 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
       setErrorBanner(null);
       setSuccessBanner(null);
       return apiClient.delete(`/control/v1/principals/${encodeURIComponent(id)}/quarantine`, {
-        idempotencyKey: crypto.randomUUID(),
+        idempotencyKey: newIdempotencyKey(),
       });
     },
     onSuccess: (_, id) => {
