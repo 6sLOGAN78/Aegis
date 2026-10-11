@@ -73,6 +73,20 @@ func TestSmokeScriptHonestHeader(t *testing.T) {
 	assert.Equal(t, 1, traps, "exactly one trap cleanup EXIT line")
 }
 
+func TestScriptsSendIdempotencyKeys(t *testing.T) {
+	_, smoke := readSmokeScript(t)
+	seedData, err := os.ReadFile(filepath.Join("..", "..", "deployments", "compose", "seed", "seed.sh"))
+	require.NoError(t, err)
+	seed := string(seedData)
+
+	assert.GreaterOrEqual(t, strings.Count(smoke, "Idempotency-Key"), 2, "compose-smoke.sh must key both curl branches")
+	assert.GreaterOrEqual(t, strings.Count(seed, "Idempotency-Key"), 2, "seed.sh must key both curl branches")
+	assert.Contains(t, seed, "kernel/random/uuid", "seed.sh must mint a fresh key per cp_call")
+	assert.Contains(t, smoke, "=== GATEWAYS", "smoke must assert gateways stay healthy after idle")
+	assert.Contains(t, smoke, "sleep 65")
+	assert.Contains(t, smoke, "partitioned")
+}
+
 func TestSmokeScriptNoCredentialEcho(t *testing.T) {
 	_, script := readSmokeScript(t)
 	printing := regexp.MustCompile(`^\s*(echo|printf)\b`)

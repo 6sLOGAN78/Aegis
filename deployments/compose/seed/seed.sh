@@ -83,11 +83,15 @@ cp_call() {
   _path="$2"
   _body="$3"
   shift 3
+  # Fresh Idempotency-Key per invocation (busybox-safe); a retry (e.g. the 412
+  # publish retry) therefore never replays a cached response.
+  _idem="$(cat /proc/sys/kernel/random/uuid)"
   if [ -n "$_body" ]; then
     curl -s --max-time 15 -X "$_method" \
       -D "$WORK/resp.h" -o "$WORK/resp.b" -w '%{http_code}' \
       -H "Cookie: aegis_session=$SID" \
       -H "X-CSRF-Token: $CSRF" \
+      -H "Idempotency-Key: $_idem" \
       -H "Content-Type: application/json" \
       "$@" \
       --data-binary "@$_body" \
@@ -97,6 +101,7 @@ cp_call() {
       -D "$WORK/resp.h" -o "$WORK/resp.b" -w '%{http_code}' \
       -H "Cookie: aegis_session=$SID" \
       -H "X-CSRF-Token: $CSRF" \
+      -H "Idempotency-Key: $_idem" \
       "$@" \
       "$AEGIS_CP_URL$_path"
   fi
