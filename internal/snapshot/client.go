@@ -215,24 +215,8 @@ func (c *StreamClient) runStream(ctx context.Context, onFirstMessage func()) err
 
 		switch p := msg.Payload.(type) {
 		case *snapshotv1.ControlPlaneMessage_Snapshot:
-			snap := p.Snapshot
-			actErr := c.manager.ValidateAndActivate(ctx, snap)
-			ack := &snapshotv1.SnapshotAck{
-				GatewayId:      c.gatewayID,
-				AcknowledgedAt: timestamppb.Now(),
-			}
-			lastStatus, lastErr = nextAckState(actErr)
-
-			if actErr != nil {
-				ack.Status = snapshotv1.AckStatus_ACK_STATUS_REJECTED
-				ack.ErrorMessage = actErr.Error()
-				if active := c.manager.Active(); active != nil {
-					ack.ActiveVersion = active.Version
-				}
-			} else {
-				ack.Status = snapshotv1.AckStatus_ACK_STATUS_ACTIVATED
-				ack.ActiveVersion = snap.Version
-			}
+			var ack *snapshotv1.SnapshotAck
+			ack, lastStatus, lastErr = c.processSnapshot(ctx, p.Snapshot, lastStatus, lastErr)
 
 			_ = stream.Send(&snapshotv1.GatewayMessage{
 				GatewayId: c.gatewayID,
@@ -306,4 +290,41 @@ func nextAckState(actErr error) (snapshotv1.AckStatus, string) {
 		return snapshotv1.AckStatus_ACK_STATUS_REJECTED, actErr.Error()
 	}
 	return snapshotv1.AckStatus_ACK_STATUS_ACTIVATED, ""
+}
+
+// processSnapshot handles one pushed snapshot and returns the ack to send plus the
+// status/error echoed by subsequent heartbeats. Re-delivery of the already-active
+// snapshot (same Version AND PayloadSha256, as happens on stream reconnect) is an
+// idempotent ACTIVATED confirm that skips verification and leaves prior status untouched.
+func (c *StreamClient) processSnapshot(
+	ctx context.Context,
+	snap *snapshotv1.SnapshotEnvelope,
+	prevStatus snapshotv1.AckStatus,
+	prevErr string,
+) (*snapshotv1.SnapshotAck, snapshotv1.AckStatus, string) {
+	ack := &snapshotv1.SnapshotAck{
+		GatewayId:      c.gatewayID,
+		AcknowledgedAt: timestamppb.Now(),
+	}
+
+	if active := c.manager.Active(); snap != nil && active != nil &&
+		snap.Version == active.Version && snap.PayloadSha256 == active.PayloadSha256 {
+		ack.Status = snapshotv1.AckStatus_ACK_STATUS_ACTIVATED
+		ack.ActiveVersion = active.Version
+		return ack, prevStatus, prevErr
+	}
+
+	actErr := c.manager.ValidateAndActivate(ctx, snap)
+	status, errMsg := nextAckState(actErr)
+	if actErr != nil {
+		ack.Status = snapshotv1.AckStatus_ACK_STATUS_REJECTED
+		ack.ErrorMessage = actErr.Error()
+		if active := c.manager.Active(); active != nil {
+			ack.ActiveVersion = active.Version
+		}
+	} else {
+		ack.Status = snapshotv1.AckStatus_ACK_STATUS_ACTIVATED
+		ack.ActiveVersion = snap.Version
+	}
+	return ack, status, errMsg
 }
