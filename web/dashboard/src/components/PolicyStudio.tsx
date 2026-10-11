@@ -55,14 +55,21 @@ export const DEFAULT_POLICY_ID = 'mvp-authz';
 
 interface PolicyStudioProps {
   session: SessionInfo | null;
+  // Candidate Rego held by the parent; survives tab switches (PolicyStudio unmounts).
+  candidateRego?: string;
   onCandidateRegoChange?: (rego: string) => void;
 }
 
-export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidateRegoChange }) => {
+export const PolicyStudio: React.FC<PolicyStudioProps> = ({
+  session,
+  candidateRego,
+  onCandidateRegoChange,
+}) => {
   const queryClient = useQueryClient();
   const [policyId, setPolicyId] = useState(DEFAULT_POLICY_ID);
   const [policyName, setPolicyName] = useState('Zero-Trust Gateway Ingress Policy');
-  const [regoCode, setRegoCode] = useState<string>(DEFAULT_REGO_TEMPLATE);
+  // Seed from the parent's candidate so a remount (tab switch) never discards unsaved edits.
+  const [regoCode, setRegoCode] = useState<string>(candidateRego ?? DEFAULT_REGO_TEMPLATE);
   const [validationResult, setValidationResult] = useState<PolicyValidationResponse | null>(null);
   const [validationError, setValidationError] = useState<string | null>(null);
 
@@ -96,8 +103,10 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({ session, onCandidate
   };
 
   // One-time hydration of the editor from the latest stored policy source.
+  // If the parent already holds a candidate (remount after a tab switch), treat it
+  // as unsaved operator work and never overwrite it with the server copy.
   const hydratedRef = useRef(false);
-  const userEditedRef = useRef(false);
+  const userEditedRef = useRef(candidateRego !== undefined);
   useEffect(() => {
     if (hydratedRef.current || userEditedRef.current) return;
     const list = versionsData?.versions;

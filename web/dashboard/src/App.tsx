@@ -74,6 +74,7 @@ export const App: React.FC = () => {
         {activeTab === 'studio' && (
           <PolicyStudio
             session={session}
+            candidateRego={candidateRego}
             onCandidateRegoChange={setCandidateRego}
           />
         )}
