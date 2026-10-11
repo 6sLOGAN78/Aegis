@@ -197,12 +197,18 @@ func (s *Store) ListQuarantined(ctx context.Context) ([]QuarantinedPrincipal, er
 		getCmds[i] = pipe.Get(ctx, key)
 		ttlCmds[i] = pipe.TTL(ctx, key)
 	}
-	_, _ = pipe.Exec(ctx)
+	// redis.Nil only means a key expired after SCAN; any other error must surface rather than read as TTL 0.
+	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
+		return nil, fmt.Errorf("failed to read quarantine state: %w", err)
+	}
 
 	for i, key := range keys {
 		principalID := strings.TrimPrefix(key, "quarantine:principal:")
 		reason := getCmds[i].Val()
 		ttl := ttlCmds[i].Val()
+		if ttl == -2 {
+			continue // key expired between SCAN and TTL
+		}
 		results = append(results, QuarantinedPrincipal{
 			PrincipalID: principalID,
 			Reason:      reason,
