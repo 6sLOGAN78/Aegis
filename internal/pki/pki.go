@@ -65,6 +65,32 @@ func NewCA(commonName string) (*CA, error) {
 	return &CA{Certificate: cert, PrivateKey: privKey, CertPool: pool}, nil
 }
 
+// LoadCA is the exact inverse of NewCA/EncodeCertPEM/EncodeKeyPEM.
+func LoadCA(certPEM, keyPEM []byte) (*CA, error) {
+	certBlock, _ := pem.Decode(certPEM)
+	if certBlock == nil {
+		return nil, fmt.Errorf("failed to decode CA certificate PEM")
+	}
+	cert, err := x509.ParseCertificate(certBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CA certificate: %w", err)
+	}
+	if !cert.IsCA {
+		return nil, fmt.Errorf("certificate is not a CA")
+	}
+	keyBlock, _ := pem.Decode(keyPEM)
+	if keyBlock == nil {
+		return nil, fmt.Errorf("failed to decode CA key PEM")
+	}
+	key, err := x509.ParseECPrivateKey(keyBlock.Bytes)
+	if err != nil {
+		return nil, fmt.Errorf("failed to parse CA private key: %w", err)
+	}
+	pool := x509.NewCertPool()
+	pool.AddCert(cert)
+	return &CA{Certificate: cert, PrivateKey: key, CertPool: pool}, nil
+}
+
 // IssueWorkloadCert issues an X.509 client certificate with a SPIFFE URI SAN.
 func (ca *CA) IssueWorkloadCert(spiffeURIStr string) (tls.Certificate, error) {
 	spiffeURI, err := url.Parse(spiffeURIStr)
