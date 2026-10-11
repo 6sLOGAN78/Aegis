@@ -35,12 +35,31 @@ type LoginResponse struct {
 
 // AuthHandler handles operator session creation, status inspection, and revocation.
 type AuthHandler struct {
-	sessionMgr *SessionManager
+	sessionMgr   *SessionManager
+	secureCookie bool
 }
 
-// NewAuthHandler constructs an AuthHandler.
+// NewAuthHandler constructs an AuthHandler. Session cookies are Secure by default (fail-secure).
 func NewAuthHandler(sessionMgr *SessionManager) *AuthHandler {
-	return &AuthHandler{sessionMgr: sessionMgr}
+	return &AuthHandler{sessionMgr: sessionMgr, secureCookie: true}
+}
+
+// WithSecureCookie sets the Secure attribute on session cookies and returns the handler.
+func (h *AuthHandler) WithSecureCookie(secure bool) *AuthHandler {
+	h.secureCookie = secure
+	return h
+}
+
+// cookieSecureFromEnv reports whether session cookies should be Secure.
+// Only AEGIS_COOKIE_SECURE of "false" or "0" (trimmed, case-insensitive) disables it;
+// unset, empty, or unrecognised values stay secure.
+func cookieSecureFromEnv(getenv func(string) string) bool {
+	switch strings.ToLower(strings.TrimSpace(getenv("AEGIS_COOKIE_SECURE"))) {
+	case "false", "0":
+		return false
+	default:
+		return true
+	}
 }
 
 // HandleLogin authenticates an operator, establishes a session, and sets an HttpOnly cookie.
@@ -76,7 +95,7 @@ func (h *AuthHandler) HandleLogin(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   true,
+		Secure:   h.secureCookie,
 		Expires:  sess.ExpiresAt,
 		MaxAge:   int(time.Until(sess.ExpiresAt).Seconds()),
 	}
@@ -103,7 +122,7 @@ func (h *AuthHandler) HandleLogout(w http.ResponseWriter, r *http.Request) {
 		Path:     "/",
 		HttpOnly: true,
 		SameSite: http.SameSiteStrictMode,
-		Secure:   true,
+		Secure:   h.secureCookie,
 		Expires:  time.Unix(0, 0),
 		MaxAge:   -1,
 	}

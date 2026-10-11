@@ -1,7 +1,9 @@
 package control
 
 import (
+	"log"
 	"net/http"
+	"os"
 	"time"
 
 	"aegis/internal/revocation"
@@ -58,10 +60,15 @@ func NewAPIServer(
 	// 2. Strict Security Headers & CSP (OPS-04)
 	r.Use(SecurityHeadersMiddleware)
 
+	cookieSecure := cookieSecureFromEnv(os.Getenv)
+	if !cookieSecure {
+		log.Printf("WARNING: AEGIS_COOKIE_SECURE disabled; session cookies are sent without the Secure flag (demo/plain-HTTP only)")
+	}
+
 	server := &APIServer{
 		router:       r,
 		sessionMgr:   sessionMgr,
-		authHandler:  NewAuthHandler(sessionMgr),
+		authHandler:  NewAuthHandler(sessionMgr).WithSecureCookie(cookieSecure),
 		idempStore:   idempStore,
 		distServer:   distServer,
 		validator:    validator,
