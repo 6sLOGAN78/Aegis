@@ -254,6 +254,17 @@ decision := {
 		signer,
 	)
 
+	if mappingsPath := os.Getenv("AEGIS_IDENTITY_MAPPINGS_FILE"); mappingsPath != "" {
+		mappings, err := control.LoadIdentityMappings(mappingsPath)
+		if err != nil {
+			log.Fatalf("failed to load identity mappings from %s: %v", mappingsPath, err)
+		}
+		apiServer.SetIdentityMappings(mappings)
+		log.Printf("loaded %d identity mappings from %s", len(mappings), mappingsPath)
+	} else {
+		log.Printf("AEGIS_IDENTITY_MAPPINGS_FILE not set; publish carries mappings forward from the active snapshot")
+	}
+
 	apiSrv := &http.Server{
 		Addr:         httpPort,
 		Handler:      apiServer.Handler(),
