@@ -46,6 +46,9 @@ services:
       - AEGIS_DB_PASSWORD=aegis-secret-pw
       - AEGIS_DB_NAME=aegis
       - AEGIS_DB_SSLMODE=disable
+      - AEGIS_IDENTITY_MAPPINGS_FILE=/etc/aegis/seed_roles.json
+    volumes:
+      - ../../policies/data/seed_roles.json:/etc/aegis/seed_roles.json:ro
     healthcheck:
       # No -f: a 401 from the unauthenticated probe still proves the server is up.
       test: ["CMD-SHELL", "curl -s -o /dev/null http://127.0.0.1:8084/control/v1/auth/me"]
