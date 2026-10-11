@@ -49,7 +49,15 @@ Out of scope: full production K8S-01 (default-deny NetworkPolicies, topology spr
 - **D-20:** Certs and keysets reach pods through **named Secret and ConfigMap references** (for example the runbook's `gateway-jwt-keyset`, a snapshot keyset ConfigMap, the control-plane server cert Secret, and per-gateway control-plane client cert Secrets). A script or doc creates them from `deployments/certs`. No key material is committed into the manifests or the kustomize output.
 - **D-21:** The K8s gateway ID follows the StatefulSet pod ordinal (`aegis-gateway-0` → cert `.../gw/aegis-gateway-0`). Each pod mounts its own client cert. Research and the planner choose the mechanism (for example a projected volume of all ordinal certs plus selection by hostname, or an init container).
 
+### Decisions added after research (2026-10-11)
+- **D-22:** Postgres is **mandatory** at control-plane startup: if it is unreachable, startup fails. The silent in-memory fallback is removed, or kept only behind an explicit dev-only flag that defaults off and logs loudly. Durable quarantines and revocations (D-01..D-03) must never be silently non-durable.
+- **D-23:** In K8s the audit worker runs as a **sidecar** in the gateway StatefulSet pod. It mounts the same `wal-spool` PVC and is placed **after** the `gateway` container, so tests indexing `containers[0]` keep working. The separate audit-worker Deployment (with its `emptyDir`) is removed. This mirrors compose's one worker per spool (Phase 7).
+- **D-24:** Dev certs: add `pki.LoadCA` (or equivalent) so `scripts/certificates` **reuses the existing root CA** when present, then regenerate the full tracked set (existing certs plus the new control-plane server cert and per-gateway control-plane client certs from D-17) in **one dedicated commit**. That regeneration replaces the uncommitted cert changes currently in the working tree. Other tasks must not stage `deployments/certs` changes. `tests/integration/bypass_test.go` must still pass against the regenerated set.
+- **D-25:** Amends D-07. Inside a keyset directory, **every regular file whose name does not start with `.`** is parsed as a key. This matches the runbook's `keyset.pub.N` names and skips ConfigMap `..data` internals. If any file fails to parse, the whole set is rejected and the last good set is kept (D-08).
+- **D-26 [Claude default]:** The control plane gets unauthenticated `/livez` and `/readyz` handlers so its K8s probes work. Readiness requires Postgres reachable and the DR reconstruct marker written (D-04).
+
 ### Claude's Discretion
+- Whether to run a short spike task first to confirm research assumptions A1–A3 (gRPC `peer`/`TLSInfo` behavior, `NewClient` resolver with bufconn, K8s `$(POD_NAME)` env expansion for per-pod cert selection).
 - Exact table and column names, the marker key name and format, the reconcile cadence, and the env var names, as long as they are consistent and documented.
 - Poll interval default and the reload metric names.
 - Reason-code names for missing security state and for gRPC identity rejection, as long as they are classified.
