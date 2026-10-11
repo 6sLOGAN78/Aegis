@@ -9,6 +9,7 @@ import (
 	"time"
 
 	"aegis/internal/identity"
+	"aegis/internal/storage"
 	controlv1 "aegis/pkg/api/control/v1"
 
 	"github.com/go-chi/chi/v5"
@@ -141,6 +142,16 @@ func (s *APIServer) quarantineCore(w http.ResponseWriter, r *http.Request, princ
 		actor = sess.Username
 	}
 
+	if s.secRepo != nil {
+		if err := s.secRepo.UpsertQuarantine(r.Context(), storage.QuarantineRecord{
+			PrincipalID: principalID, Reason: req.Reason, CreatedBy: actor,
+			CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(ttl),
+		}); err != nil {
+			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to persist quarantine")
+			return
+		}
+	}
+
 	if s.revStore != nil {
 		if err := s.revStore.QuarantinePrincipal(r.Context(), principalID, req.Reason, ttl); err != nil {
 			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to propagate quarantine to Redis: "+err.Error())
@@ -176,6 +187,13 @@ func (s *APIServer) HandleUnquarantinePrincipal(w http.ResponseWriter, r *http.R
 		return
 	}
 
+	if s.secRepo != nil {
+		if err := s.secRepo.DeleteQuarantine(r.Context(), principalID); err != nil {
+			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to persist quarantine removal")
+			return
+		}
+	}
+
 	if s.revStore != nil {
 		if err := s.revStore.RemoveQuarantine(r.Context(), principalID); err != nil {
 			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to remove quarantine from Redis: "+err.Error())
@@ -208,6 +226,24 @@ func (s *APIServer) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 	ttl := 24 * time.Hour
 	if req.TTLSeconds > 0 {
 		ttl = time.Duration(req.TTLSeconds) * time.Second
+	}
+
+	if s.secRepo != nil {
+		actor := "sec-ops"
+		if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
+			actor = sess.Username
+		}
+		reason := req.Reason
+		if reason == "" {
+			reason = "TOKEN_REVOKED"
+		}
+		now := time.Now().UTC()
+		if err := s.secRepo.UpsertRevokedToken(r.Context(), storage.RevokedTokenRecord{
+			JTI: req.JTI, Reason: reason, CreatedBy: actor, CreatedAt: now, ExpiresAt: now.Add(ttl),
+		}); err != nil {
+			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to persist revocation")
+			return
+		}
 	}
 
 	if s.revStore != nil {
