@@ -32,11 +32,11 @@ Requirements for initial release. Each maps to roadmap phases.
 
 ### Control Plane & Snapshot Distribution (CTRL)
 
-- [ ] **CTRL-01**: Control plane manages route definitions and policy drafts with OpenAPI schema validation and Rego unit test verification
-- [ ] **CTRL-02**: Monotonic signed configuration snapshots (Ed25519) containing routes, policies, and identity mappings
+- [x] **CTRL-01**: Control plane manages route definitions and policy drafts with OpenAPI schema validation and Rego unit test verification
+- [x] **CTRL-02**: Monotonic signed configuration snapshots (Ed25519) containing routes, policies, and identity mappings
 - [x] **CTRL-03**: Streaming gRPC snapshot distribution pushes active configuration to gateway replicas with atomic in-memory swap
 - [x] **CTRL-04**: Signed 10-second freshness leases streamed to replicas; gateways fail closed (503) after 60 seconds without valid lease renewal
-- [ ] **CTRL-05**: Gateway replicas report activation acknowledgments and convergence status back to the control plane
+- [x] **CTRL-05**: Gateway replicas report activation acknowledgments and convergence status back to the control plane
 - [x] **CTRL-06**: Policy rollback republishes previous content under a strictly higher monotonic version number
 
 ### Rate Limiting, Revocation & Quarantine (REV)
@@ -62,8 +62,8 @@ Requirements for initial release. Each maps to roadmap phases.
 ### Operator Dashboard & Management APIs (OPS)
 
 - [x] **OPS-01**: REST JSON management endpoints (`/control/v1`) for routes, policies, simulation, quarantine, and audit log inspection
-- [ ] **OPS-02**: Optimistic concurrency (ETag/If-Match), idempotency keys, and RBAC permissions on management endpoints
-- [ ] **OPS-03**: React/TypeScript operator dashboard with audit stream, live Rego policy simulation, and replica convergence tracking
+- [x] **OPS-02**: Optimistic concurrency (ETag/If-Match), idempotency keys, and RBAC permissions on management endpoints
+- [x] **OPS-03**: React/TypeScript operator dashboard with audit stream, live Rego policy simulation, and replica convergence tracking
 - [x] **OPS-04**: Operator session security with HttpOnly cookies, CSRF protection, and Content Security Policy
 
 ### Resilience, Telemetry & Distributed Operation (DIST)

@@ -1,7 +1,7 @@
 ---
 phase: 10-close-gaps-b5-b6-dashboard-and-control-plane-flows-ops-03-ct
 verified: 2026-10-11T13:00:00Z
-status: human_needed
+status: passed
 score: 22/22 must-haves verified
 overrides_applied: 0
 re_verification:
@@ -57,3 +57,7 @@ No TBD/FIXME/XXX introduced in the reviewed files. Fragile Vite CDN-strip plugin
 Note: Monaco rendering could not be confirmed without a browser; the dist bundle and wiring are correct statically.
 
 _Verifier: Claude (gsd-verifier)_
+
+## Human Verification Resolution
+
+All human_verification items confirmed in 10-HUMAN-UAT.md (3/3 pass, 2026-10-11): plain-HTTP cookie login + local Monaco (LAN IP and localhost), stale-gateway eviction / partitioned status, and the review-fix retest (WR-01..WR-04, SEC-01). Security: 10-SECURITY.md threats_open: 0.
