@@ -363,13 +363,13 @@ DROP TABLE IF EXISTS principal_quarantines;
 | A5 | Dev certs stay tracked in git and are regenerated in one commit | Cert generation | User may prefer generate-on-demand |
 | A6 | Choose 8443 as the K8s workload port (vs 9443) | B2 table #2 | Pure choice; tests tie env and ports together either way |
 
-## Open Questions
+## Open Questions (RESOLVED)
 
-1. **PG mandatory for control plane?** Currently CP continues without PG. Recommendation: fatal at startup (durable state requires it). Needs user confirmation (A4).
-2. **Convert the audit-worker to a gateway sidecar?** Needed for K8s correctness (separate Deployment cannot read per-pod RWO WAL). Recommendation: yes, sidecar appended after the gateway container.
-3. **Add unauthenticated `/livez` `/readyz` to the control plane?** Needed for K8s probes; small code change in `internal/control/api.go`. Recommendation: yes.
-4. **Keyset file selection:** D-07 says `*.pub`; runbook says `keyset.pub.N`. Recommendation: accept all non-dot files.
-5. **Dev cert regeneration commit strategy** (A5).
+1. **PG mandatory for control plane?** Currently CP continues without PG. Recommendation: fatal at startup (durable state requires it). Needs user confirmation (A4). **RESOLVED: D-22** (mandatory, fail at startup).
+2. **Convert the audit-worker to a gateway sidecar?** Needed for K8s correctness (separate Deployment cannot read per-pod RWO WAL). Recommendation: yes, sidecar appended after the gateway container. **RESOLVED: D-23** (sidecar).
+3. **Add unauthenticated `/livez` `/readyz` to the control plane?** Needed for K8s probes; small code change in `internal/control/api.go`. Recommendation: yes. **RESOLVED: D-26** (added).
+4. **Keyset file selection:** D-07 says `*.pub`; runbook says `keyset.pub.N`. Recommendation: accept all non-dot files. **RESOLVED: D-25** (all non-dot files).
+5. **Dev cert regeneration commit strategy** (A5). **RESOLVED: D-24** (reuse root CA, one dedicated regeneration commit).
 
 ## Environment Availability
 
