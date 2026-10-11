@@ -3,6 +3,7 @@ package control
 import (
 	"encoding/json"
 	"net/http"
+	"os"
 	"sort"
 	"time"
 
@@ -17,6 +18,36 @@ type replicaInfo struct {
 	lastHeartbeatAt time.Time
 	connectedAt     time.Time
 	leaseExpiresAt  *time.Time
+}
+
+const (
+	defaultGatewayStaleAfter = 15 * time.Minute
+	gatewayPartitionAfter    = 60 * time.Second
+)
+
+// gatewayStaleAfter returns the heartbeat age beyond which a gateway record is
+// hidden from the list. Read from AEGIS_GATEWAY_STALE_AFTER (Go duration). Invalid,
+// non-positive or <=60s values fall back to the default so the 60s fail-closed
+// partitioned boundary is never shadowed.
+func gatewayStaleAfter() time.Duration {
+	v := os.Getenv("AEGIS_GATEWAY_STALE_AFTER")
+	if v == "" {
+		return defaultGatewayStaleAfter
+	}
+	d, err := time.ParseDuration(v)
+	if err != nil || d <= gatewayPartitionAfter {
+		return defaultGatewayStaleAfter
+	}
+	return d
+}
+
+// isStaleReplica reports whether a replica should be omitted from the list.
+// Rejected replicas are never stale (fail-closed: a failure signal is never hidden).
+func isStaleReplica(now, lastHb time.Time, statusString string, staleAfter time.Duration) bool {
+	if statusString == "ACK_STATUS_REJECTED" {
+		return false
+	}
+	return now.Sub(lastHb) > staleAfter
 }
 
 // HandleListGateways returns live gateway replica statuses and convergence telemetry.
@@ -89,7 +120,14 @@ func (s *APIServer) HandleListGateways(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	items := make([]controlv1.GatewayStatus, 0, len(combined))
 
+	staleAfter := gatewayStaleAfter()
+
 	for _, rep := range combined {
+		// Stale records are hidden from the list (and thus the convergence
+		// denominator), not deleted from storage.
+		if isStaleReplica(now, rep.lastHeartbeatAt, rep.statusString, staleAfter) {
+			continue
+		}
 		status := controlv1.Healthy
 
 		// healthy: Active version equals active control plane snapshot version and lease expiration is in the future.
