@@ -30,6 +30,15 @@ type Metrics struct {
 	AuditDegraded               prometheus.Gauge
 	AuditFlushDuration          prometheus.Histogram
 	HTTPRejectedTotal           *prometheus.CounterVec
+
+	// Phase 11 metrics. Labels are closed enums only.
+	KeysetReloadTotal                     *prometheus.CounterVec
+	KeysetKeys                            *prometheus.GaugeVec
+	KeysetLastSuccessTimestamp            *prometheus.GaugeVec
+	SecurityStateReady                    prometheus.Gauge
+	SecurityStateReconstructTotal         *prometheus.CounterVec
+	SecurityStateLastReconstructTimestamp prometheus.Gauge
+	GRPCIdentityRejectionsTotal           *prometheus.CounterVec
 }
 
 // Closed label sets for the audit and rejection series. Pre-initializing them
@@ -39,6 +48,11 @@ var (
 	auditDropReasons   = []string{"queue_full", "hard_limit", "write_error", "closed", "timeout", "unauth_cap"}
 	rejectionReasons   = []string{"concurrency", "header_too_large", "ambiguous_credentials"}
 	otherRejectionName = "other"
+
+	keysetFamilies       = []string{"jwt", "snapshot"}
+	keysetResults        = []string{"ok", "error", "unchanged"}
+	reconstructResults   = []string{"ok", "error"}
+	grpcRejectionReasons = []string{"missing_cert", "invalid_identity", "id_mismatch"}
 )
 
 // NewMetrics initializes an isolated Prometheus registry and registers all metrics collectors.
@@ -164,6 +178,53 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"reason"},
 		),
+		KeysetReloadTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "aegis_keyset_reload_total",
+				Help: "Keyset reload attempts partitioned by family (jwt, snapshot) and result (ok, error, unchanged).",
+			},
+			[]string{"family", "result"},
+		),
+		KeysetKeys: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "aegis_keyset_keys",
+				Help: "Number of keys currently loaded per keyset family.",
+			},
+			[]string{"family"},
+		),
+		KeysetLastSuccessTimestamp: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "aegis_keyset_last_success_timestamp_seconds",
+				Help: "Unix time of the last successful keyset load per family.",
+			},
+			[]string{"family"},
+		),
+		SecurityStateReady: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "aegis_security_state_ready",
+				Help: "1 once the control plane security state has been reconstructed and is ready, otherwise 0.",
+			},
+		),
+		SecurityStateReconstructTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "aegis_securitystate_reconstruct_total",
+				Help: "Security state reconstruction attempts partitioned by result (ok, error).",
+			},
+			[]string{"result"},
+		),
+		SecurityStateLastReconstructTimestamp: prometheus.NewGauge(
+			prometheus.GaugeOpts{
+				Name: "aegis_securitystate_last_reconstruct_timestamp_seconds",
+				Help: "Unix time of the last successful security state reconstruction.",
+			},
+		),
+		GRPCIdentityRejectionsTotal: prometheus.NewCounterVec(
+			prometheus.CounterOpts{
+				Name: "aegis_grpc_identity_rejections_total",
+				Help: "gRPC calls rejected on peer identity, partitioned by closed reason.",
+			},
+			[]string{"reason"},
+		),
 	}
 
 	reg.MustRegister(
@@ -185,7 +246,28 @@ func NewMetrics() *Metrics {
 		m.AuditDegraded,
 		m.AuditFlushDuration,
 		m.HTTPRejectedTotal,
+		m.KeysetReloadTotal,
+		m.KeysetKeys,
+		m.KeysetLastSuccessTimestamp,
+		m.SecurityStateReady,
+		m.SecurityStateReconstructTotal,
+		m.SecurityStateLastReconstructTimestamp,
+		m.GRPCIdentityRejectionsTotal,
 	)
+
+	for _, fam := range keysetFamilies {
+		for _, res := range keysetResults {
+			m.KeysetReloadTotal.WithLabelValues(fam, res).Add(0)
+		}
+		m.KeysetKeys.WithLabelValues(fam).Set(0)
+		m.KeysetLastSuccessTimestamp.WithLabelValues(fam).Set(0)
+	}
+	for _, res := range reconstructResults {
+		m.SecurityStateReconstructTotal.WithLabelValues(res).Add(0)
+	}
+	for _, reason := range grpcRejectionReasons {
+		m.GRPCIdentityRejectionsTotal.WithLabelValues(reason).Add(0)
+	}
 
 	for _, kind := range auditKinds {
 		m.AuditRecordsWrittenTotal.WithLabelValues(kind).Add(0)
