@@ -75,6 +75,12 @@ const (
 	ListAuditEventsParamsDecisionDeny  ListAuditEventsParamsDecision = "deny"
 )
 
+// Defines values for ListAuditEventsAliasParamsDecision.
+const (
+	Allow ListAuditEventsAliasParamsDecision = "allow"
+	Deny  ListAuditEventsAliasParamsDecision = "deny"
+)
+
 // AuditEvent defines model for AuditEvent.
 type AuditEvent struct {
 	Decision        AuditEventDecision       `json:"decision"`
@@ -137,6 +143,20 @@ type GatewayStatus struct {
 
 // GatewayStatusStatus defines model for GatewayStatus.Status.
 type GatewayStatusStatus string
+
+// LoginRequest defines model for LoginRequest.
+type LoginRequest struct {
+	Password string `json:"password"`
+	Username string `json:"username"`
+}
+
+// LoginResponse defines model for LoginResponse.
+type LoginResponse struct {
+	CsrfToken string    `json:"csrf_token"`
+	ExpiresAt time.Time `json:"expires_at"`
+	Role      string    `json:"role"`
+	Username  string    `json:"username"`
+}
 
 // PolicyCreateRequest defines model for PolicyCreateRequest.
 type PolicyCreateRequest struct {
@@ -368,6 +388,24 @@ type ListAuditEventsParams struct {
 // ListAuditEventsParamsDecision defines parameters for ListAuditEvents.
 type ListAuditEventsParamsDecision string
 
+// ListAuditEventsAliasParams defines parameters for ListAuditEventsAlias.
+type ListAuditEventsAliasParams struct {
+	PrincipalId   *string                             `form:"principal_id,omitempty" json:"principal_id,omitempty"`
+	ServiceId     *string                             `form:"service_id,omitempty" json:"service_id,omitempty"`
+	Decision      *ListAuditEventsAliasParamsDecision `form:"decision,omitempty" json:"decision,omitempty"`
+	FromTimestamp *time.Time                          `form:"from_timestamp,omitempty" json:"from_timestamp,omitempty"`
+	ToTimestamp   *time.Time                          `form:"to_timestamp,omitempty" json:"to_timestamp,omitempty"`
+
+	// Cursor Opaque pagination cursor.
+	Cursor *Cursor `form:"cursor,omitempty" json:"cursor,omitempty"`
+
+	// Limit Maximum number of records to return.
+	Limit *Limit `form:"limit,omitempty" json:"limit,omitempty"`
+}
+
+// ListAuditEventsAliasParamsDecision defines parameters for ListAuditEventsAlias.
+type ListAuditEventsAliasParamsDecision string
+
 // ListGatewaysParams defines parameters for ListGateways.
 type ListGatewaysParams struct {
 	// Cursor Opaque pagination cursor.
@@ -379,8 +417,8 @@ type ListGatewaysParams struct {
 
 // CreatePolicyDraftParams defines parameters for CreatePolicyDraft.
 type CreatePolicyDraftParams struct {
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // PublishPolicyParams defines parameters for PublishPolicy.
@@ -388,8 +426,8 @@ type PublishPolicyParams struct {
 	// IfMatch Optimistic concurrency control ETag.
 	IfMatch *IfMatch `json:"If-Match,omitempty"`
 
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // RollbackPolicyParams defines parameters for RollbackPolicy.
@@ -397,8 +435,8 @@ type RollbackPolicyParams struct {
 	// IfMatch Optimistic concurrency control ETag.
 	IfMatch *IfMatch `json:"If-Match,omitempty"`
 
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // GetPolicyVersionsParams defines parameters for GetPolicyVersions.
@@ -412,26 +450,26 @@ type GetPolicyVersionsParams struct {
 
 // UnquarantinePrincipalParams defines parameters for UnquarantinePrincipal.
 type UnquarantinePrincipalParams struct {
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // QuarantinePrincipalParams defines parameters for QuarantinePrincipal.
 type QuarantinePrincipalParams struct {
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // QuarantinePrincipalByBodyParams defines parameters for QuarantinePrincipalByBody.
 type QuarantinePrincipalByBodyParams struct {
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // RevokeTokenParams defines parameters for RevokeToken.
 type RevokeTokenParams struct {
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
 
 // ListRoutesParams defines parameters for ListRoutes.
@@ -445,12 +483,27 @@ type ListRoutesParams struct {
 
 // CreateRouteParams defines parameters for CreateRoute.
 type CreateRouteParams struct {
-	// IdempotencyKey Client-provided UUID to ensure idempotent execution.
-	IdempotencyKey *IdempotencyKey `json:"Idempotency-Key,omitempty"`
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
 }
+
+// RollbackSnapshotParams defines parameters for RollbackSnapshot.
+type RollbackSnapshotParams struct {
+	// IfMatch Optimistic concurrency control ETag.
+	IfMatch *IfMatch `json:"If-Match,omitempty"`
+
+	// IdempotencyKey Client-provided UUID required on mutating operations to ensure idempotent execution.
+	IdempotencyKey IdempotencyKey `json:"Idempotency-Key"`
+}
+
+// LoginJSONRequestBody defines body for Login for application/json ContentType.
+type LoginJSONRequestBody = LoginRequest
 
 // CreatePolicyDraftJSONRequestBody defines body for CreatePolicyDraft for application/json ContentType.
 type CreatePolicyDraftJSONRequestBody = PolicyCreateRequest
+
+// SimulateCandidatePolicyJSONRequestBody defines body for SimulateCandidatePolicy for application/json ContentType.
+type SimulateCandidatePolicyJSONRequestBody = PolicySimulationRequest
 
 // PublishPolicyJSONRequestBody defines body for PublishPolicy for application/json ContentType.
 type PublishPolicyJSONRequestBody = PolicyPublishRequest
@@ -478,3 +531,6 @@ type RevokeTokenJSONRequestBody = RevokeTokenRequest
 
 // CreateRouteJSONRequestBody defines body for CreateRoute for application/json ContentType.
 type CreateRouteJSONRequestBody = RouteCreateRequest
+
+// RollbackSnapshotJSONRequestBody defines body for RollbackSnapshot for application/json ContentType.
+type RollbackSnapshotJSONRequestBody = PolicyRollbackRequest
