@@ -538,3 +538,24 @@ func TestSeedDockerfileTarget(t *testing.T) {
 	assert.Contains(t, stage, "apk add --no-cache curl jq", "seed stage must install curl and jq")
 	assert.Contains(t, stage, "seed.sh", "seed stage must copy seed.sh")
 }
+
+func TestControlPlaneMountsIdentityMappings(t *testing.T) {
+	for _, profile := range profiles {
+		t.Run(profile, func(t *testing.T) {
+			services, _ := loadCompose(t, profile)
+			cp, ok := services["control-plane"]
+			require.True(t, ok, "%s: control-plane service missing", profile)
+			assert.Equal(t, "/etc/aegis/seed_roles.json", envMap(cp)["AEGIS_IDENTITY_MAPPINGS_FILE"],
+				"%s: control-plane must set AEGIS_IDENTITY_MAPPINGS_FILE", profile)
+			found := false
+			for _, m := range volumeMounts(cp) {
+				if m.target == "/etc/aegis/seed_roles.json" {
+					found = true
+					assert.True(t, m.readOnly, "%s: seed_roles.json mount must be :ro", profile)
+					assert.True(t, strings.HasSuffix(m.source, "policies/data/seed_roles.json"), "%s: unexpected source %s", profile, m.source)
+				}
+			}
+			assert.True(t, found, "%s: control-plane must mount seed_roles.json", profile)
+		})
+	}
+}
