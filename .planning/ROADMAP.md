@@ -346,21 +346,42 @@ Plans:
 
 Plans:
 
+**Wave 1**
+
 - [ ] 11-01-PLAN.md — Foundations: gateway SPIFFE helpers, pki.LoadCA, keyfile, shared test PKI (A1/A2 spike), metrics
 - [ ] 11-02-PLAN.md — Durable security-state storage: migration 000005, repo, revocation marker/jti restore, governor reason
+
+**Wave 2** *(blocked on Wave 1 completion)*
+
 - [ ] 11-03-PLAN.md — Cert generator extensions, isolated dev-PKI regeneration commit, dev signing keys and keyset dirs
 - [ ] 11-04-PLAN.md — gRPC mTLS server/client with GatewayId bound to cert identity; no insecure default
 - [ ] 11-05-PLAN.md — Control-plane SecurityState (reconstruct/backfill/reconcile), write-through handlers, /livez /readyz
 - [ ] 11-06-PLAN.md — Keyset reloader, demo issuer key file, rotation tests on the real reloader
+
+**Wave 3** *(blocked on Wave 2 completion)*
+
 - [ ] 11-07-PLAN.md — Control-plane entrypoint: mTLS gRPC, mandatory Postgres, synchronous reconstruct, keyfile signing key
 - [ ] 11-08-PLAN.md — Gateway entrypoint: keyset dirs with hot reload, cert-derived GatewayId, mTLS stream creds
-- [ ] 11-09-PLAN.md — Gateway fail-closed security-state gate (SECURITY_STATE_MISSING) and /readyz
 - [ ] 11-10-PLAN.md — Migrate chaos and integration tests to mTLS test PKI
+
+**Wave 4** *(blocked on Wave 3 completion)*
+
+- [ ] 11-09-PLAN.md — Gateway fail-closed security-state gate (SECURITY_STATE_MISSING) and /readyz
 - [ ] 11-11-PLAN.md — Kubernetes manifests (B2): real env/ports/probes, audit sidecar, secrets script, source-derived cross-checks
 - [ ] 11-12-PLAN.md — Compose profiles: CP mTLS, per-gateway client certs, keyset dirs, separated keys, lint
+
+**Wave 5** *(blocked on Wave 4 completion)*
+
 - [ ] 11-13-PLAN.md — Smoke script DR, KEYROT-JWT, KEYROT-SNAPSHOT and MTLS sections plus lint
 - [ ] 11-14-PLAN.md — Runbooks (DR, credential rotation) and AR-01 closure in 10-SECURITY.md
+
+**Wave 6** *(blocked on Wave 5 completion)*
+
 - [ ] 11-15-PLAN.md — Phase gate: full suite and live smoke on mvp, hardened, distributed
+
+**Cross-cutting constraints:**
+
+- Implements locked CONTEXT decisions: D-18 (see <objective> and <tasks>).
 
 ---
 
