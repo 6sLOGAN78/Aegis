@@ -2,12 +2,17 @@ package control
 
 import (
 	"context"
+	"log"
 	"sync"
 
+	"aegis/internal/identity"
+	"aegis/internal/telemetry"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc/codes"
+	"google.golang.org/grpc/credentials"
+	"google.golang.org/grpc/peer"
 	"google.golang.org/grpc/status"
 	"google.golang.org/protobuf/proto"
 	"google.golang.org/protobuf/types/known/timestamppb"
@@ -23,6 +28,47 @@ type SnapshotDistributionServer struct {
 	activeSnapshot *snapshotv1.SnapshotEnvelope
 	clients        map[string]chan *snapshotv1.ControlPlaneMessage
 	ackTracker     *AckTracker
+	metrics        *telemetry.Metrics
+}
+
+// SetMetrics wires the metrics registry used to count identity rejections.
+// A nil registry (the default) disables counting.
+func (s *SnapshotDistributionServer) SetMetrics(m *telemetry.Metrics) {
+	s.mu.Lock()
+	s.metrics = m
+	s.mu.Unlock()
+}
+
+func (s *SnapshotDistributionServer) countRejection(reason string) {
+	s.mu.RLock()
+	m := s.metrics
+	s.mu.RUnlock()
+	if m != nil && m.GRPCIdentityRejectionsTotal != nil {
+		m.GRPCIdentityRejectionsTotal.WithLabelValues(reason).Inc()
+	}
+}
+
+// gatewayIdentityFromContext derives the gateway id from the verified peer
+// certificate SPIFFE id (/gw/<id>). It is the only trusted identity source.
+// The second return value is the closed metric reason on failure.
+func gatewayIdentityFromContext(ctx context.Context) (string, string, error) {
+	p, ok := peer.FromContext(ctx)
+	if !ok || p.AuthInfo == nil {
+		return "", "missing_cert", status.Error(codes.Unauthenticated, "client certificate required")
+	}
+	tlsInfo, ok := p.AuthInfo.(credentials.TLSInfo)
+	if !ok || len(tlsInfo.State.VerifiedChains) == 0 || len(tlsInfo.State.PeerCertificates) == 0 {
+		return "", "missing_cert", status.Error(codes.Unauthenticated, "verified client certificate required")
+	}
+	spiffe, err := identity.ExtractSPIFFEID(tlsInfo.State.PeerCertificates[0], "aegis.local")
+	if err != nil {
+		return "", "invalid_identity", status.Error(codes.PermissionDenied, "client certificate has no valid SPIFFE identity")
+	}
+	id, err := identity.GatewayIDFromSPIFFE(spiffe)
+	if err != nil {
+		return "", "invalid_identity", status.Error(codes.PermissionDenied, "client certificate is not a gateway identity")
+	}
+	return id, "", nil
 }
 
 // NewSnapshotDistributionServer instantiates a SnapshotDistributionServer.
@@ -36,6 +82,13 @@ func NewSnapshotDistributionServer(initialSnapshot *snapshotv1.SnapshotEnvelope,
 
 // StreamSnapshots handles bidirectional gRPC streaming with a gateway replica.
 func (s *SnapshotDistributionServer) StreamSnapshots(stream snapshotv1.SnapshotDistributionService_StreamSnapshotsServer) error {
+	certID, reason, idErr := gatewayIdentityFromContext(stream.Context())
+	if idErr != nil {
+		s.countRejection(reason)
+		log.Printf("control: rejected snapshot stream: %v", idErr)
+		return idErr
+	}
+
 	connID := uuid.NewString()
 	msgCh := make(chan *snapshotv1.ControlPlaneMessage, 64)
 
@@ -91,10 +144,18 @@ func (s *SnapshotDistributionServer) StreamSnapshots(stream snapshotv1.SnapshotD
 				return
 			}
 			if req != nil {
+				mismatch := req.GatewayId != certID
+				if ack := req.GetAck(); ack != nil && ack.GatewayId != "" && ack.GatewayId != certID {
+					mismatch = true
+				}
+				if mismatch {
+					s.countRejection("id_mismatch")
+					log.Printf("control: gateway id mismatch on stream: cert=%q claimed=%q", certID, req.GatewayId)
+					errCh <- status.Error(codes.PermissionDenied, "gateway id does not match client certificate")
+					return
+				}
 				if ack := req.GetAck(); ack != nil {
-					if ack.GatewayId == "" && req.GatewayId != "" {
-						ack.GatewayId = req.GatewayId
-					}
+					ack.GatewayId = certID
 					if ack.AcknowledgedAt == nil {
 						ack.AcknowledgedAt = timestamppb.Now()
 					}
@@ -102,16 +163,16 @@ func (s *SnapshotDistributionServer) StreamSnapshots(stream snapshotv1.SnapshotD
 						_ = s.ackTracker.RecordAck(stream.Context(), ack)
 					}
 				}
-				if pong := req.GetPong(); pong != nil && s.ackTracker != nil && req.GatewayId != "" {
+				if pong := req.GetPong(); pong != nil && s.ackTracker != nil {
 					// A Pong is a liveness signal: refresh the heartbeat with server time,
 					// but never upgrade a previously REJECTED replica to ACTIVATED.
 					rec := &snapshotv1.SnapshotAck{
-						GatewayId:      req.GatewayId,
+						GatewayId:      certID,
 						ActiveVersion:  pong.ActiveVersion,
 						Status:         snapshotv1.AckStatus_ACK_STATUS_ACTIVATED,
 						AcknowledgedAt: timestamppb.Now(),
 					}
-					if prior, ok := s.ackTracker.GetReplicaStatuses()[req.GatewayId]; ok && prior.Status == snapshotv1.AckStatus_ACK_STATUS_REJECTED {
+					if prior, ok := s.ackTracker.GetReplicaStatuses()[certID]; ok && prior.Status == snapshotv1.AckStatus_ACK_STATUS_REJECTED {
 						rec.Status = snapshotv1.AckStatus_ACK_STATUS_REJECTED
 						rec.ErrorMessage = prior.ErrorMessage
 					}
@@ -210,4 +271,3 @@ func (s *SnapshotDistributionServer) AckTracker() *AckTracker {
 	defer s.mu.RUnlock()
 	return s.ackTracker
 }
-

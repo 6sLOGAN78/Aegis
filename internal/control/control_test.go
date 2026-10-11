@@ -12,10 +12,10 @@ import (
 	"aegis/internal/snapshot"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
+	"aegis/internal/testpki"
 	"github.com/stretchr/testify/assert"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
@@ -29,6 +29,21 @@ func setupTestControlPlane(t *testing.T) (
 	func(),
 ) {
 	t.Helper()
+	a, b, c, d, e, f, _ := setupTestControlPlaneAs(t, "gateway-node-1")
+	return a, b, c, d, e, f
+}
+
+func setupTestControlPlaneAs(t *testing.T, gatewayID string) (
+	*control.SnapshotDistributionServer,
+	*control.AckTracker,
+	*snapshot.Signer,
+	*snapshot.Verifier,
+	snapshotv1.SnapshotDistributionServiceClient,
+	func(),
+	*testpki.PKI,
+) {
+	t.Helper()
+	pki := testpki.New(t)
 
 	pub, priv, err := ed25519.GenerateKey(rand.Reader)
 	require.NoError(t, err)
@@ -55,7 +70,7 @@ func setupTestControlPlane(t *testing.T) (
 	distServer := control.NewSnapshotDistributionServer(initialEnv, ackTracker)
 
 	lis := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.Creds(pki.ServerCreds()))
 	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
 
 	go func() {
@@ -70,7 +85,7 @@ func setupTestControlPlane(t *testing.T) (
 		context.Background(),
 		"bufnet",
 		grpc.WithContextDialer(dialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(pki.ClientCreds(gatewayID)),
 	)
 	require.NoError(t, err)
 
@@ -82,7 +97,7 @@ func setupTestControlPlane(t *testing.T) (
 		_ = lis.Close()
 	}
 
-	return distServer, ackTracker, signer, verifier, client, cleanup
+	return distServer, ackTracker, signer, verifier, client, cleanup, pki
 }
 
 func TestControl_StreamInitialSnapshotAndAck(t *testing.T) {
@@ -304,10 +319,10 @@ func TestControl_Pong_RecordsAck(t *testing.T) {
 	_, err = stream.Recv()
 	require.NoError(t, err)
 
-	sendPong(t, stream, "gw-pong", 1)
+	sendPong(t, stream, "gateway-node-1", 1)
 
 	assert.Eventually(t, func() bool {
-		ack, ok := ackTracker.GetReplicaStatuses()["gw-pong"]
+		ack, ok := ackTracker.GetReplicaStatuses()["gateway-node-1"]
 		return ok && ack.ActiveVersion == 1 &&
 			ack.Status == snapshotv1.AckStatus_ACK_STATUS_ACTIVATED &&
 			time.Since(ack.AcknowledgedAt.AsTime()) < 5*time.Second
@@ -326,9 +341,9 @@ func TestControl_Pong_DoesNotMaskRejected(t *testing.T) {
 	require.NoError(t, err)
 
 	require.NoError(t, stream.Send(&snapshotv1.GatewayMessage{
-		GatewayId: "gw-rej",
+		GatewayId: "gateway-node-1",
 		Payload: &snapshotv1.GatewayMessage_Ack{Ack: &snapshotv1.SnapshotAck{
-			GatewayId:      "gw-rej",
+			GatewayId:      "gateway-node-1",
 			ActiveVersion:  1,
 			Status:         snapshotv1.AckStatus_ACK_STATUS_REJECTED,
 			ErrorMessage:   "bad snapshot",
@@ -336,28 +351,28 @@ func TestControl_Pong_DoesNotMaskRejected(t *testing.T) {
 		}},
 	}))
 	require.Eventually(t, func() bool {
-		ack, ok := ackTracker.GetReplicaStatuses()["gw-rej"]
+		ack, ok := ackTracker.GetReplicaStatuses()["gateway-node-1"]
 		return ok && ack.Status == snapshotv1.AckStatus_ACK_STATUS_REJECTED
 	}, 2*time.Second, 20*time.Millisecond)
 
-	sendPong(t, stream, "gw-rej", 1)
+	sendPong(t, stream, "gateway-node-1", 1)
 
 	// Wait until the Pong refreshed the heartbeat time, then check status preserved.
 	assert.Eventually(t, func() bool {
-		ack := ackTracker.GetReplicaStatuses()["gw-rej"]
+		ack := ackTracker.GetReplicaStatuses()["gateway-node-1"]
 		return time.Since(ack.AcknowledgedAt.AsTime()) < 5*time.Second
 	}, 2*time.Second, 20*time.Millisecond)
-	ack := ackTracker.GetReplicaStatuses()["gw-rej"]
+	ack := ackTracker.GetReplicaStatuses()["gateway-node-1"]
 	assert.Equal(t, snapshotv1.AckStatus_ACK_STATUS_REJECTED, ack.Status)
 	assert.Equal(t, "bad snapshot", ack.ErrorMessage)
 }
 
 func TestControl_HeartbeatOnLease(t *testing.T) {
-	distServer, ackTracker, signer, verifier, _, cleanup := setupTestControlPlane(t)
+	distServer, ackTracker, signer, verifier, _, cleanup, pki := setupTestControlPlaneAs(t, "gw-hb")
 	defer cleanup()
 
 	lis := bufconn.Listen(1024 * 1024)
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.Creds(pki.ServerCreds()))
 	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
 	go func() { _ = grpcServer.Serve(lis) }()
 	defer grpcServer.Stop()
@@ -365,7 +380,7 @@ func TestControl_HeartbeatOnLease(t *testing.T) {
 	mgr := snapshot.NewManager(verifier)
 	sc := snapshot.NewStreamClient("bufnet", "gw-hb", mgr, verifier,
 		grpc.WithContextDialer(func(context.Context, string) (net.Conn, error) { return lis.Dial() }),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(pki.ClientCreds("gw-hb")),
 	)
 	ctx, cancel := context.WithCancel(context.Background())
 	defer cancel()
