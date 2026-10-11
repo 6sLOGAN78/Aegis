@@ -1,6 +1,7 @@
 package rotation
 
 import (
+	"context"
 	"crypto"
 	"crypto/ecdsa"
 	"crypto/ed25519"
@@ -10,6 +11,7 @@ import (
 	"crypto/tls"
 	"crypto/x509"
 	"crypto/x509/pkix"
+	"encoding/base64"
 	"encoding/hex"
 	"fmt"
 	"io"
@@ -18,12 +20,15 @@ import (
 	"net/http"
 	"net/http/httptest"
 	"net/url"
+	"os"
+	"path/filepath"
 	"sync"
 	"sync/atomic"
 	"testing"
 	"time"
 
 	"aegis/internal/identity"
+	"aegis/internal/keyset"
 	"aegis/internal/snapshot"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
@@ -224,6 +229,117 @@ func TestSnapshotSigningKeyRotation(t *testing.T) {
 	env4Key1 := createSignedSnapshot(t, priv1, 4)
 	_, err = verifier.VerifySnapshot(env4Key1, 3)
 	require.ErrorIs(t, err, snapshot.ErrInvalidSignature, "Snapshot signed by retired Key 1 must be rejected")
+}
+
+func writePubFile(t *testing.T, dir, name string, pub ed25519.PublicKey) {
+	t.Helper()
+	require.NoError(t, os.WriteFile(filepath.Join(dir, name), []byte(base64.StdEncoding.EncodeToString(pub)), 0o600))
+}
+
+// TestJWTKeysetReloaderRotation drives expand/switch/prune through the real reloader.
+func TestJWTKeysetReloaderRotation(t *testing.T) {
+	pubOld, privOld, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	pubNew, privNew, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	issuer, audience := "https://auth.aegis.local", "aegis-gateway"
+
+	dir := t.TempDir()
+	writePubFile(t, dir, "old.pub", pubOld)
+
+	val := identity.NewTokenValidator(issuer, audience)
+	r := keyset.New("jwt", dir, 20*time.Millisecond, func(keys []ed25519.PublicKey) {
+		cks := make([]crypto.PublicKey, len(keys))
+		for i := range keys {
+			cks[i] = keys[i]
+		}
+		val.SetPublicKeys(cks)
+	})
+	require.NoError(t, r.Load())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	tokOld := mintTestToken(t, privOld, issuer, audience, "old", 10*time.Minute)
+	tokNew := mintTestToken(t, privNew, issuer, audience, "new", 10*time.Minute)
+	_, err = val.ValidateBearerToken("Bearer " + tokOld)
+	require.NoError(t, err)
+	_, err = val.ValidateBearerToken("Bearer " + tokNew)
+	require.Error(t, err)
+
+	// EXPAND
+	writePubFile(t, dir, "new.pub", pubNew)
+	require.Eventually(t, func() bool {
+		_, e := val.ValidateBearerToken("Bearer " + tokNew)
+		return e == nil
+	}, 2*time.Second, 10*time.Millisecond)
+	_, err = val.ValidateBearerToken("Bearer " + tokOld)
+	require.NoError(t, err, "old key must still verify during overlap")
+
+	// corrupt file during overlap: last good kept
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "corrupt.pub"), []byte("garbage"), 0o600))
+	time.Sleep(100 * time.Millisecond)
+	_, err = val.ValidateBearerToken("Bearer " + tokOld)
+	require.NoError(t, err)
+	_, err = val.ValidateBearerToken("Bearer " + tokNew)
+	require.NoError(t, err)
+	require.NoError(t, os.Remove(filepath.Join(dir, "corrupt.pub")))
+
+	// SWITCH: issuer signs only with new key (tokNew); PRUNE old
+	require.NoError(t, os.Remove(filepath.Join(dir, "old.pub")))
+	require.Eventually(t, func() bool {
+		_, e := val.ValidateBearerToken("Bearer " + tokOld)
+		return e != nil
+	}, 2*time.Second, 10*time.Millisecond)
+	_, err = val.ValidateBearerToken("Bearer " + tokNew)
+	require.NoError(t, err)
+}
+
+// TestSnapshotKeysetReloaderRotation drives expand/switch/prune for snapshot and lease keys.
+func TestSnapshotKeysetReloaderRotation(t *testing.T) {
+	pub1, priv1, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+	pub2, priv2, err := ed25519.GenerateKey(rand.Reader)
+	require.NoError(t, err)
+
+	dir := t.TempDir()
+	writePubFile(t, dir, "keyset.pub.0", pub1)
+	verifier := snapshot.NewVerifier()
+	r := keyset.New("snapshot", dir, 20*time.Millisecond, verifier.SetTrustedKeys)
+	require.NoError(t, r.Load())
+	ctx, cancel := context.WithCancel(context.Background())
+	defer cancel()
+	go r.Run(ctx)
+
+	_, err = verifier.VerifySnapshot(createSignedSnapshot(t, priv1, 1), 0)
+	require.NoError(t, err)
+	_, err = verifier.VerifySnapshot(createSignedSnapshot(t, priv2, 2), 1)
+	require.ErrorIs(t, err, snapshot.ErrInvalidSignature)
+
+	// EXPAND
+	writePubFile(t, dir, "keyset.pub.1", pub2)
+	lease2 := createSignedLease(t, priv2, "l2", 2, time.Now().Add(time.Minute))
+	require.Eventually(t, func() bool { return verifier.VerifyLease(lease2, 2) == nil }, 2*time.Second, 10*time.Millisecond)
+	lease1 := createSignedLease(t, priv1, "l1", 2, time.Now().Add(time.Minute))
+	require.NoError(t, verifier.VerifyLease(lease1, 2), "old key still verifies during overlap")
+	_, err = verifier.VerifySnapshot(createSignedSnapshot(t, priv2, 2), 1)
+	require.NoError(t, err)
+
+	// corrupt file: last good kept
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "junk"), []byte("garbage"), 0o600))
+	time.Sleep(100 * time.Millisecond)
+	require.NoError(t, verifier.VerifyLease(lease1, 2))
+	require.NoError(t, verifier.VerifyLease(lease2, 2))
+	require.NoError(t, os.Remove(filepath.Join(dir, "junk")))
+
+	// PRUNE old key
+	require.NoError(t, os.Remove(filepath.Join(dir, "keyset.pub.0")))
+	require.Eventually(t, func() bool { return verifier.VerifyLease(lease1, 2) != nil }, 2*time.Second, 10*time.Millisecond)
+	require.NoError(t, verifier.VerifyLease(lease2, 2))
+	_, err = verifier.VerifySnapshot(createSignedSnapshot(t, priv1, 3), 2)
+	require.ErrorIs(t, err, snapshot.ErrInvalidSignature)
+	_, err = verifier.VerifySnapshot(createSignedSnapshot(t, priv2, 3), 2)
+	require.NoError(t, err)
 }
 
 // Helpers for mTLS CA generation
