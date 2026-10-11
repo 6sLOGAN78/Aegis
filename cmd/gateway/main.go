@@ -136,13 +136,16 @@ func main() {
 	var rdb *redis.Client
 	var revStore *revocation.Store
 	var rateLimiter *ratelimit.RateLimiter
+	var secPoller *securityStatePoller
 	if cfg.RedisAddr != "" {
 		rdb = redis.NewClient(&redis.Options{
 			Addr:     cfg.RedisAddr,
 			Password: cfg.RedisPassword,
 		})
-		revStore = revocation.NewStore(rdb)
+		revStore = revocation.NewStore(rdb, revocation.WithRequireSecurityMarker())
 		rateLimiter = ratelimit.NewRateLimiter(rdb)
+		secPoller = newSecurityStatePoller(revStore, metrics, time.Second)
+		go secPoller.Run(streamCtx)
 	}
 
 	auditLogger := audit.NewLogger(nil)
@@ -416,6 +419,21 @@ func main() {
 		if revStore != nil {
 			revoked, reason, err := revStore.CheckRevocation(r.Context(), claims.Subject, claims.ID)
 			if err != nil {
+				if errors.Is(err, revocation.ErrSecurityStateMissing) {
+					if ac != nil {
+						ac.SetDecision("deny", "SECURITY_STATE_MISSING")
+						ac.SetErrorCode("SECURITY_STATE_MISSING")
+					}
+					proxy.WriteProblemDetails(
+						w,
+						http.StatusServiceUnavailable,
+						"Service Unavailable",
+						"Security state is being restored; failing closed.",
+						"https://aegis.local/errors/security-state-missing",
+						reqID,
+					)
+					return
+				}
 				if ac != nil {
 					ac.SetDecision("deny", "DEPENDENCY_OUTAGE_REDIS")
 					ac.SetErrorCode("DEPENDENCY_OUTAGE_REDIS")
@@ -739,6 +757,21 @@ func main() {
 		if revStore != nil {
 			revoked, reason, err := revStore.CheckRevocation(r.Context(), spiffeID, "")
 			if err != nil {
+				if errors.Is(err, revocation.ErrSecurityStateMissing) {
+					if ac != nil {
+						ac.SetDecision("deny", "SECURITY_STATE_MISSING")
+						ac.SetErrorCode("SECURITY_STATE_MISSING")
+					}
+					proxy.WriteProblemDetails(
+						w,
+						http.StatusServiceUnavailable,
+						"Service Unavailable",
+						"Security state is being restored; failing closed.",
+						"https://aegis.local/errors/security-state-missing",
+						reqID,
+					)
+					return
+				}
 				if ac != nil {
 					ac.SetDecision("deny", "DEPENDENCY_OUTAGE_REDIS")
 					ac.SetErrorCode("DEPENDENCY_OUTAGE_REDIS")
@@ -980,6 +1013,7 @@ func main() {
 		func() bool { return snapManager.Active() != nil },
 		diskSpool.IsSaturated,
 		userMetricsHandler,
+		proxy.WithSecurityState(func() bool { return secPoller != nil && secPoller.Missing() }),
 	)
 
 	auditedWorkloadHandler := audit.AuditMiddleware(auditLogger, 0, audit.WithSink(auditPipeline))(workloadHandler)

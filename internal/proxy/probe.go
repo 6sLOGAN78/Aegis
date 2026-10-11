@@ -26,6 +26,19 @@ func (s *DrainingState) IsDraining() bool {
 	return s.isDraining.Load()
 }
 
+type probeConfig struct {
+	securityMissing func() bool
+}
+
+// ProbeOption customizes optional readiness checks of CreateProbeHandler.
+type ProbeOption func(*probeConfig)
+
+// WithSecurityState adds a readiness check that fails with 503 SECURITY_STATE_MISSING
+// while isMissing reports true (Redis security-state marker absent).
+func WithSecurityState(isMissing func() bool) ProbeOption {
+	return func(c *probeConfig) { c.securityMissing = isMissing }
+}
+
 // CreateProbeHandler creates unauthenticated health and readiness endpoints (/livez, /readyz).
 // When /livez or /healthz is requested, it immediately responds with 200 OK.
 // When /readyz or /healthz/ready is requested, it verifies:
@@ -41,7 +54,14 @@ func CreateProbeHandler(
 	isSnapshotActive func() bool,
 	isSpoolSaturated func() bool,
 	nextHandler http.Handler,
+	opts ...ProbeOption,
 ) http.Handler {
+	cfg := &probeConfig{}
+	for _, o := range opts {
+		if o != nil {
+			o(cfg)
+		}
+	}
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		switch r.URL.Path {
 		case "/livez", "/healthz":
@@ -65,6 +85,10 @@ func CreateProbeHandler(
 			}
 			if isSpoolSaturated != nil && isSpoolSaturated() {
 				http.Error(w, "SPOOL_SATURATED", http.StatusServiceUnavailable)
+				return
+			}
+			if cfg.securityMissing != nil && cfg.securityMissing() {
+				http.Error(w, "SECURITY_STATE_MISSING", http.StatusServiceUnavailable)
 				return
 			}
 			w.Header().Set("Content-Type", "text/plain; charset=utf-8")
