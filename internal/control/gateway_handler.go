@@ -2,8 +2,8 @@ package control
 
 import (
 	"encoding/json"
+	"log"
 	"net/http"
-	"os"
 	"sort"
 	"time"
 
@@ -38,17 +38,21 @@ func rejectedStaleAfter(staleAfter time.Duration) time.Duration {
 	return minRejectedStaleAfter
 }
 
-// gatewayStaleAfter returns the heartbeat age beyond which a gateway record is
-// hidden from the list. Read from AEGIS_GATEWAY_STALE_AFTER (Go duration). Invalid,
-// non-positive or <=60s values fall back to the default so the 60s fail-closed
-// partitioned boundary is never shadowed.
-func gatewayStaleAfter() time.Duration {
-	v := os.Getenv("AEGIS_GATEWAY_STALE_AFTER")
+// gatewayStaleAfterFromEnv returns the heartbeat age beyond which a gateway
+// record is hidden from the list. Read from AEGIS_GATEWAY_STALE_AFTER (Go
+// duration). Invalid, non-positive or <=60s values fall back to the default so
+// the 60s fail-closed partitioned boundary is never shadowed; in that case a
+// warning is logged so the misconfiguration is visible. Called once at server
+// construction (NewAPIServer), not per request.
+func gatewayStaleAfterFromEnv(getenv func(string) string) time.Duration {
+	v := getenv("AEGIS_GATEWAY_STALE_AFTER")
 	if v == "" {
 		return defaultGatewayStaleAfter
 	}
 	d, err := time.ParseDuration(v)
 	if err != nil || d <= gatewayPartitionAfter {
+		log.Printf("WARNING: AEGIS_GATEWAY_STALE_AFTER=%q invalid or <= %s; using default %s",
+			v, gatewayPartitionAfter, defaultGatewayStaleAfter)
 		return defaultGatewayStaleAfter
 	}
 	return d
@@ -135,7 +139,10 @@ func (s *APIServer) HandleListGateways(w http.ResponseWriter, r *http.Request) {
 	now := time.Now().UTC()
 	items := make([]controlv1.GatewayStatus, 0, len(combined))
 
-	staleAfter := gatewayStaleAfter()
+	staleAfter := s.gatewayStaleAfter
+	if staleAfter <= 0 {
+		staleAfter = defaultGatewayStaleAfter
+	}
 
 	hiddenStale := 0
 	for _, rep := range combined {

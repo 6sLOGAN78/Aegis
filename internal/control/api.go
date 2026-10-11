@@ -32,6 +32,10 @@ type APIServer struct {
 	signer       *snapshot.Signer
 
 	identityMappings []*snapshotv1.IdentityMapping
+
+	// gatewayStaleAfter is parsed once from AEGIS_GATEWAY_STALE_AFTER at
+	// construction; zero means "use defaultGatewayStaleAfter".
+	gatewayStaleAfter time.Duration
 }
 
 // NewAPIServer constructs and configures the control plane REST API router.
@@ -79,6 +83,8 @@ func NewAPIServer(
 		auditRepo:    auditRepo,
 		revStore:     revStore,
 		signer:       signer,
+
+		gatewayStaleAfter: gatewayStaleAfterFromEnv(os.Getenv),
 	}
 
 	server.routes()

@@ -16,8 +16,13 @@ func TestGatewayStaleAfterEnv(t *testing.T) {
 		"-5m":  15 * time.Minute,
 	}
 	for in, want := range cases {
-		t.Setenv("AEGIS_GATEWAY_STALE_AFTER", in)
-		if got := gatewayStaleAfter(); got != want {
+		getenv := func(k string) string {
+			if k == "AEGIS_GATEWAY_STALE_AFTER" {
+				return in
+			}
+			return ""
+		}
+		if got := gatewayStaleAfterFromEnv(getenv); got != want {
 			t.Errorf("env %q: got %v want %v", in, got, want)
 		}
 	}
