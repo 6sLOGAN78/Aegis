@@ -40,6 +40,19 @@ spec:
               name: mtls-workload
             - containerPort: 9091
               name: metrics
+          envFrom:
+            - configMapRef:
+                name: aegis-gateway-config
+          env:
+            # POD_NAME must be declared before the variables that use $(POD_NAME).
+            - name: POD_NAME
+              valueFrom:
+                fieldRef:
+                  fieldPath: metadata.name
+            - name: AEGIS_CP_CLIENT_CERT_PATH
+              value: /etc/aegis/cp-client/cp-client-$(POD_NAME).crt
+            - name: AEGIS_CP_CLIENT_KEY_PATH
+              value: /etc/aegis/cp-client/cp-client-$(POD_NAME).key
           resources:
             requests:
               cpu: 250m
@@ -71,9 +84,88 @@ spec:
               mountPath: /var/log/aegis/wal
             - name: tmp
               mountPath: /tmp
+            - name: workload-tls
+              mountPath: /etc/aegis/tls
+              readOnly: true
+            - name: root-ca
+              mountPath: /etc/aegis/ca
+              readOnly: true
+            - name: assertion-key
+              mountPath: /etc/aegis/assertion
+              readOnly: true
+            - name: cp-clients
+              mountPath: /etc/aegis/cp-client
+              readOnly: true
+            - name: jwt-keyset
+              mountPath: /etc/aegis/keysets/jwt
+              readOnly: true
+            - name: snapshot-keyset
+              mountPath: /etc/aegis/keysets/snapshot
+              readOnly: true
+        # Audit worker sidecar: drains the same PVC-backed WAL the gateway writes (D-23).
+        - name: audit-worker
+          image: aegis/audit-worker:latest
+          imagePullPolicy: IfNotPresent
+          securityContext:
+            allowPrivilegeEscalation: false
+            readOnlyRootFilesystem: true
+            capabilities:
+              drop:
+                - ALL
+          env:
+            - name: AEGIS_SPOOL_DIR
+              value: /var/log/aegis/wal
+            - name: AEGIS_DB_HOST
+              value: postgres.aegis-system
+            - name: AEGIS_DB_PORT
+              value: "5432"
+            - name: AEGIS_DB_NAME
+              value: aegis
+            - name: AEGIS_DB_SSLMODE
+              value: disable
+            - name: AEGIS_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-db-credentials
+                  key: AEGIS_DB_USER
+            - name: AEGIS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-db-credentials
+                  key: AEGIS_DB_PASSWORD
+          resources:
+            requests:
+              cpu: 100m
+              memory: 128Mi
+            limits:
+              cpu: 500m
+              memory: 256Mi
+          volumeMounts:
+            - name: wal-spool
+              mountPath: /var/log/aegis/wal
+            - name: tmp
+              mountPath: /tmp
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: workload-tls
+          secret:
+            secretName: aegis-gateway-workload-tls
+        - name: root-ca
+          configMap:
+            name: aegis-root-ca
+        - name: assertion-key
+          secret:
+            secretName: aegis-gateway-assertion-key
+        - name: cp-clients
+          secret:
+            secretName: aegis-gateway-cp-clients
+        - name: jwt-keyset
+          configMap:
+            name: gateway-jwt-keyset
+        - name: snapshot-keyset
+          configMap:
+            name: gateway-snapshot-keyset
   volumeClaimTemplates:
     - metadata:
         name: wal-spool
