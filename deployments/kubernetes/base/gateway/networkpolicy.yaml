@@ -55,7 +55,15 @@ spec:
       ports:
         - protocol: TCP
           port: 9090
-    # 4. Mandatory CoreDNS egress on port 53 UDP/TCP in kube-system
+    # 4. Audit-worker sidecar: PostgreSQL on :5432
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - protocol: TCP
+          port: 5432
+    # 5. Mandatory CoreDNS egress on port 53 UDP/TCP in kube-system
     - to:
         - namespaceSelector:
             matchLabels:
