@@ -2,6 +2,7 @@ package snapshot
 
 import (
 	"context"
+	"errors"
 	"fmt"
 	"math"
 	"math/rand/v2"
@@ -12,7 +13,6 @@ import (
 
 	"github.com/google/uuid"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/protobuf/types/known/timestamppb"
 )
 
@@ -135,7 +135,8 @@ func (c *StreamClient) Start(ctx context.Context) error {
 func (c *StreamClient) runStream(ctx context.Context, onFirstMessage func()) error {
 	opts := append([]grpc.DialOption{}, c.dialOpts...)
 	if len(opts) == 0 {
-		opts = append(opts, grpc.WithTransportCredentials(insecure.NewCredentials()))
+		// No plaintext fallback: fail closed and let the backoff loop retry (D-14).
+		return errors.New("no transport credentials configured")
 	}
 
 	streamCtx, cancel := context.WithCancel(ctx)
