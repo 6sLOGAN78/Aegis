@@ -67,7 +67,7 @@ func TestEveryMainReasonIsClassified(t *testing.T) {
 	})
 	require.GreaterOrEqual(t, found, 20, "expected at least 20 literal deny reasons in main.go; parser or path failure?")
 
-	for _, r := range []string{"POLICY_LEASE_EXPIRED", "UNINITIALIZED", "DEPENDENCY_OUTAGE_REDIS", "AUDIT_SPOOL_WRITE_ERROR"} {
+	for _, r := range []string{"POLICY_LEASE_EXPIRED", "UNINITIALIZED", "DEPENDENCY_OUTAGE_REDIS", "AUDIT_SPOOL_WRITE_ERROR", "SECURITY_STATE_MISSING"} {
 		c, ok := reasonClassOf(r)
 		require.True(t, ok, r)
 		assert.Equal(t, classOutage, c, r)

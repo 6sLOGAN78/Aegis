@@ -46,6 +46,7 @@ var reasonTable = map[string]reasonClass{
 	"UNINITIALIZED":           classOutage,
 	"DEPENDENCY_OUTAGE_REDIS": classOutage,
 	"AUDIT_SPOOL_WRITE_ERROR": classOutage,
+	"SECURITY_STATE_MISSING":  classOutage,
 
 	// Unauthenticated class: per-reason token bucket.
 	"BAD_REQUEST_INVALID_PATH":    classUnauth,
