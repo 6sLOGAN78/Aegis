@@ -27,6 +27,7 @@ import (
 	"aegis/internal/ratelimit"
 	"aegis/internal/revocation"
 	"aegis/internal/snapshot"
+	"aegis/internal/testpki"
 	snapshotv1 "aegis/pkg/api/snapshot/v1"
 
 	"github.com/alicebob/miniredis/v2"
@@ -35,7 +36,6 @@ import (
 	"github.com/redis/go-redis/v9"
 	"github.com/stretchr/testify/require"
 	"google.golang.org/grpc"
-	"google.golang.org/grpc/credentials/insecure"
 	"google.golang.org/grpc/test/bufconn"
 )
 
@@ -84,6 +84,7 @@ type TestControlPlane struct {
 	Signer     *snapshot.Signer
 	Verifier   *snapshot.Verifier
 	Dialer     func(context.Context, string) (net.Conn, error)
+	PKI        *testpki.PKI
 	severed    atomic.Bool
 }
 
@@ -415,7 +416,7 @@ func (c *ChaosCluster) MintExpiredToken(sub, role string) string {
 	return signed
 }
 
-// MintAlgNoneToken crafts an insecure JWT specifying "alg": "none".
+// MintAlgNoneToken crafts an unsigned JWT specifying "alg": "none".
 func (c *ChaosCluster) MintAlgNoneToken(sub, role string) string {
 	header := base64.RawURLEncoding.EncodeToString([]byte(`{"alg":"none","typ":"JWT"}`))
 	claims := fmt.Sprintf(`{"iss":"%s","aud":["%s"],"sub":"%s","roles":["%s"],"exp":%d}`,
@@ -660,8 +661,9 @@ func StartTestControlPlane(t *testing.T, initialVersion int64) *TestControlPlane
 	ackTracker := control.NewAckTracker(nil)
 	distServer := control.NewSnapshotDistributionServer(initEnv, ackTracker)
 
+	tpki := testpki.New(t)
 	lis := bufconn.Listen(2 * 1024 * 1024)
-	grpcServer := grpc.NewServer()
+	grpcServer := grpc.NewServer(grpc.Creds(tpki.ServerCreds()))
 	snapshotv1.RegisterSnapshotDistributionServiceServer(grpcServer, distServer)
 
 	go func() {
@@ -675,6 +677,7 @@ func StartTestControlPlane(t *testing.T, initialVersion int64) *TestControlPlane
 		Listener:   lis,
 		Signer:     signer,
 		Verifier:   verifier,
+		PKI:        tpki,
 	}
 
 	cp.Dialer = func(ctx context.Context, s string) (net.Conn, error) {
@@ -699,7 +702,7 @@ func (c *ChaosCluster) spawnNode(parentCtx context.Context, gatewayID string) *T
 		mgr,
 		c.ControlPlane.Verifier,
 		grpc.WithContextDialer(c.ControlPlane.Dialer),
-		grpc.WithTransportCredentials(insecure.NewCredentials()),
+		grpc.WithTransportCredentials(c.ControlPlane.PKI.ClientCreds(gatewayID)),
 	)
 
 	spoolDir, err := os.MkdirTemp("", fmt.Sprintf("aegis-spool-%s-*", gatewayID))
