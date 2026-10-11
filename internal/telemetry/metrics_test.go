@@ -274,3 +274,41 @@ func TestAuditMetrics(t *testing.T) {
 		}
 	})
 }
+
+func TestPhase11MetricsPreInitialised(t *testing.T) {
+	m := NewMetrics()
+	mfs, err := m.Registry.Gather()
+	require.NoError(t, err)
+
+	got := map[string]map[string]bool{}
+	for _, mf := range mfs {
+		set := map[string]bool{}
+		for _, metric := range mf.GetMetric() {
+			var parts []string
+			for _, lp := range metric.GetLabel() {
+				parts = append(parts, lp.GetName()+"="+lp.GetValue())
+			}
+			set[strings.Join(parts, ",")] = true
+		}
+		got[mf.GetName()] = set
+	}
+
+	want := map[string][]string{
+		"aegis_keyset_reload_total": {
+			"family=jwt,result=ok", "family=jwt,result=error", "family=jwt,result=unchanged",
+			"family=snapshot,result=ok", "family=snapshot,result=error", "family=snapshot,result=unchanged",
+		},
+		"aegis_keyset_keys":                                      {"family=jwt", "family=snapshot"},
+		"aegis_keyset_last_success_timestamp_seconds":            {"family=jwt", "family=snapshot"},
+		"aegis_security_state_ready":                             {""},
+		"aegis_securitystate_reconstruct_total":                  {"result=ok", "result=error"},
+		"aegis_securitystate_last_reconstruct_timestamp_seconds": {""},
+		"aegis_grpc_identity_rejections_total":                   {"reason=missing_cert", "reason=invalid_identity", "reason=id_mismatch"},
+	}
+	for name, labels := range want {
+		require.Contains(t, got, name)
+		for _, l := range labels {
+			assert.True(t, got[name][l], "%s missing label set %q", name, l)
+		}
+	}
+}
