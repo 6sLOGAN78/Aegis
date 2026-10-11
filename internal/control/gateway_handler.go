@@ -23,7 +23,20 @@ type replicaInfo struct {
 const (
 	defaultGatewayStaleAfter = 15 * time.Minute
 	gatewayPartitionAfter    = 60 * time.Second
+	// minRejectedStaleAfter is the floor for hiding REJECTED replicas. A rejection
+	// is a failure signal, so it stays listed far longer than an ordinary stale
+	// record, but not forever (a decommissioned rejecter must not remain a ghost).
+	minRejectedStaleAfter = 24 * time.Hour
 )
+
+// rejectedStaleAfter returns the (much longer, finite) cutoff for REJECTED
+// replicas: max(24h, 4 * staleAfter).
+func rejectedStaleAfter(staleAfter time.Duration) time.Duration {
+	if d := 4 * staleAfter; d > minRejectedStaleAfter {
+		return d
+	}
+	return minRejectedStaleAfter
+}
 
 // gatewayStaleAfter returns the heartbeat age beyond which a gateway record is
 // hidden from the list. Read from AEGIS_GATEWAY_STALE_AFTER (Go duration). Invalid,
@@ -42,10 +55,12 @@ func gatewayStaleAfter() time.Duration {
 }
 
 // isStaleReplica reports whether a replica should be omitted from the list.
-// Rejected replicas are never stale (fail-closed: a failure signal is never hidden).
+// Rejected replicas use a much longer cutoff (rejectedStaleAfter) so a recent
+// failure signal is never hidden, while a long-decommissioned rejecter
+// eventually ages out. Hidden records are still reported via HiddenStaleCount.
 func isStaleReplica(now, lastHb time.Time, statusString string, staleAfter time.Duration) bool {
 	if statusString == "ACK_STATUS_REJECTED" {
-		return false
+		return now.Sub(lastHb) > rejectedStaleAfter(staleAfter)
 	}
 	return now.Sub(lastHb) > staleAfter
 }

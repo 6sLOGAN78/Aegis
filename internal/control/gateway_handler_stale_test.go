@@ -40,6 +40,10 @@ func TestIsStaleReplicaBoundaries(t *testing.T) {
 		{"2m threshold 5m absent", 5 * time.Minute, "ACK_STATUS_APPLIED", 2 * time.Minute, true},
 		{"2m threshold 90s present", 90 * time.Second, "ACK_STATUS_APPLIED", 2 * time.Minute, false},
 		{"ACK_STATUS_REJECTED 20m still listed", 20 * time.Minute, "ACK_STATUS_REJECTED", def, false},
+		{"ACK_STATUS_REJECTED 23h still listed", 23 * time.Hour, "ACK_STATUS_REJECTED", def, false},
+		{"ACK_STATUS_REJECTED 25h aged out", 25 * time.Hour, "ACK_STATUS_REJECTED", def, true},
+		{"ACK_STATUS_REJECTED 4x long threshold", 30 * time.Hour, "ACK_STATUS_REJECTED", 8 * time.Hour, false},
+		{"ACK_STATUS_REJECTED beyond 4x long threshold", 33 * time.Hour, "ACK_STATUS_REJECTED", 8 * time.Hour, true},
 	}
 	for _, tc := range tests {
 		if got := isStaleReplica(now, now.Add(-tc.age), tc.status, tc.after); got != tc.stale {
