@@ -1,0 +1,18 @@
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: aegis-control-plane-config
+  namespace: aegis-system
+  labels:
+    app: aegis-control-plane
+data:
+  AEGIS_REDIS_ADDR: "redis.aegis-system:6379"
+  AEGIS_DB_HOST: "postgres.aegis-system"
+  AEGIS_DB_PORT: "5432"
+  AEGIS_DB_NAME: "aegis"
+  AEGIS_DB_SSLMODE: "disable"
+  AEGIS_GRPC_TLS_CERT_PATH: "/etc/aegis/tls/control-plane-server.crt"
+  AEGIS_GRPC_TLS_KEY_PATH: "/etc/aegis/tls/control-plane-server.key"
+  AEGIS_GRPC_CLIENT_CA_PATH: "/etc/aegis/ca/root-ca.crt"
+  AEGIS_SIGNING_KEY_PATH: "/etc/aegis/signing/snapshot-current.key"
+  AEGIS_COOKIE_SECURE: "true"

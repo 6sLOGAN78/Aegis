@@ -408,3 +408,126 @@ func TestManifestGatewayPerPodCertSelection(t *testing.T) {
 		assert.True(t, strings.HasPrefix(v, mount+"/"), "%s=%s not under %s", name, v, mount)
 	}
 }
+
+// ---------------------------------------------------- control plane / backends
+
+// mountsBySource maps "secret:<name>" / "configmap:<name>" to the mountPath
+// at which the container mounts that source.
+func mountsBySource(d manifestDoc, c obj) map[string]string {
+	out := map[string]string{}
+	for _, vm := range list(c["volumeMounts"]) {
+		for _, v := range list(podSpec(d)["volumes"]) {
+			if str(v["name"]) != str(vm["name"]) {
+				continue
+			}
+			if s := str(dig(v, "secret", "secretName")); s != "" {
+				out["secret:"+s] = str(vm["mountPath"])
+			}
+			if s := str(dig(v, "configMap", "name")); s != "" {
+				out["configmap:"+s] = str(vm["mountPath"])
+			}
+		}
+	}
+	return out
+}
+
+func underMount(t *testing.T, mounts map[string]string, src, path string) {
+	t.Helper()
+	mp, ok := mounts[src]
+	require.True(t, ok, "%s is not mounted", src)
+	assert.True(t, strings.HasPrefix(path, mp+"/"), "%s is not under %s mount %s", path, src, mp)
+}
+
+func TestManifestControlPlaneEnvAndProbes(t *testing.T) {
+	docs := baseDocs(t)
+	cp := findDoc(t, docs, "Deployment", "aegis-control-plane")
+	c := containerByName(t, cp, "control-plane")
+	cfg := configMapData(t, docs, "aegis-control-plane-config")
+
+	assertEnvKnown(t, "control-plane", containerEnvNames(t, docs, c), controlPlaneKeys(t))
+
+	// Default listener ports come from the binary source.
+	src, err := os.ReadFile(filepath.Join(repoRoot, "cmd/control-plane/main.go"))
+	require.NoError(t, err)
+	for _, def := range []string{`":8084"`, `":9090"`, `":9092"`} {
+		require.Contains(t, string(src), def, "control-plane default port changed")
+	}
+	assert.Equal(t, map[int]bool{8084: true, 9090: true, 9092: true}, portNumbers(c))
+
+	api, err := os.ReadFile(filepath.Join(repoRoot, "internal/control/api.go"))
+	require.NoError(t, err)
+	require.Contains(t, string(api), `"/livez"`)
+	require.Contains(t, string(api), `"/readyz"`)
+	for probe, path := range map[string]string{"startupProbe": "/livez", "livenessProbe": "/livez", "readinessProbe": "/readyz"} {
+		hg, _ := dig(c[probe], "httpGet").(obj)
+		require.NotNil(t, hg, probe)
+		assert.Equal(t, path, hg["path"], probe)
+		assert.Equal(t, 8084, hg["port"], probe)
+	}
+
+	mounts := mountsBySource(cp, c)
+	underMount(t, mounts, "secret:aegis-control-plane-tls", str(cfg["AEGIS_GRPC_TLS_CERT_PATH"]))
+	underMount(t, mounts, "secret:aegis-control-plane-tls", str(cfg["AEGIS_GRPC_TLS_KEY_PATH"]))
+	underMount(t, mounts, "configmap:aegis-root-ca", str(cfg["AEGIS_GRPC_CLIENT_CA_PATH"]))
+	underMount(t, mounts, "secret:aegis-control-plane-signing-key", str(cfg["AEGIS_SIGNING_KEY_PATH"]))
+
+	for _, name := range []string{"AEGIS_DB_USER", "AEGIS_DB_PASSWORD"} {
+		var found bool
+		for _, e := range list(c["env"]) {
+			if str(e["name"]) == name {
+				found = true
+				assert.Equal(t, "aegis-db-credentials", str(dig(e, "valueFrom", "secretKeyRef", "name")))
+				assert.Empty(t, str(e["value"]), "%s must not be inline", name)
+			}
+		}
+		assert.True(t, found, name)
+	}
+}
+
+func TestManifestBackendsMTLSWiring(t *testing.T) {
+	docs := baseDocs(t)
+	ports := map[string]int{"orders": 8081, "payments": 8082, "admin": 8083}
+	for svc, port := range ports {
+		d := findDoc(t, docs, "Deployment", svc)
+		c := containerByName(t, d, svc)
+		assertEnvKnown(t, svc, containerEnvNames(t, docs, c), backendKeys(t, svc))
+		assert.Equal(t, strconv.Itoa(port), envValue(c, "PORT"))
+		assert.Equal(t, map[int]bool{port: true}, portNumbers(c))
+
+		mounts := mountsBySource(d, c)
+		underMount(t, mounts, "secret:aegis-backend-"+svc+"-tls", envValue(c, "TLS_CERT_PATH"))
+		underMount(t, mounts, "secret:aegis-backend-"+svc+"-tls", envValue(c, "TLS_KEY_PATH"))
+		underMount(t, mounts, "configmap:aegis-root-ca", envValue(c, "CA_CERT_PATH"))
+		underMount(t, mounts, "configmap:aegis-assertion-pubkey", envValue(c, "GATEWAY_ASSERTION_PUBKEY_PATH"))
+
+		for _, probe := range []string{"startupProbe", "livenessProbe", "readinessProbe"} {
+			ts, _ := dig(c[probe], "tcpSocket").(obj)
+			require.NotNil(t, ts, "%s %s must be tcpSocket (mTLS forbids httpGet)", svc, probe)
+			assert.Equal(t, port, ts["port"])
+			assert.Nil(t, dig(c[probe], "httpGet"))
+		}
+	}
+	// D-13: the backend NetworkPolicy (pinned gateway identity) is still present.
+	findDoc(t, docs, "NetworkPolicy", "aegis-backends-networkpolicy")
+}
+
+func TestManifestOverlayPatchTargetsExist(t *testing.T) {
+	base := baseDocs(t)
+	targets := map[string][2]string{
+		"gateway-prod.yaml":       {"StatefulSet", "gateway"},
+		"control-plane-prod.yaml": {"Deployment", "control-plane"},
+	}
+	for file, kc := range targets {
+		raw, err := os.ReadFile(filepath.Join(k8sRoot, "overlays", "production", file))
+		require.NoError(t, err)
+		var patch obj
+		require.NoError(t, yaml.Unmarshal(raw, &patch))
+		pd := manifestDoc{Path: file, Body: patch}
+		require.Equal(t, kc[0], pd.kind())
+		baseDoc := findDoc(t, base, kc[0], pd.name())
+		for _, pc := range list(podSpec(pd)["containers"]) {
+			containerByName(t, baseDoc, str(pc["name"]))
+			assert.Equal(t, kc[1], str(pc["name"]))
+		}
+	}
+}

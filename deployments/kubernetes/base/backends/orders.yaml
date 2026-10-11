@@ -35,6 +35,17 @@ spec:
           ports:
             - containerPort: 8081
               name: http-mtls
+          env:
+            - name: PORT
+              value: "8081"
+            - name: TLS_CERT_PATH
+              value: /etc/aegis/tls/tls.crt
+            - name: TLS_KEY_PATH
+              value: /etc/aegis/tls/tls.key
+            - name: CA_CERT_PATH
+              value: /etc/aegis/ca/root-ca.crt
+            - name: GATEWAY_ASSERTION_PUBKEY_PATH
+              value: /etc/aegis/assertion/assertion-ed25519.pub
           resources:
             requests:
               cpu: 100m
@@ -42,12 +53,46 @@ spec:
             limits:
               cpu: 500m
               memory: 256Mi
+          # mTLS is mandatory, so httpGet probes cannot present a client cert.
+          startupProbe:
+            tcpSocket:
+              port: 8081
+            periodSeconds: 2
+            failureThreshold: 30
+          livenessProbe:
+            tcpSocket:
+              port: 8081
+            periodSeconds: 10
+            failureThreshold: 3
+          readinessProbe:
+            tcpSocket:
+              port: 8081
+            periodSeconds: 5
+            failureThreshold: 1
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: tls
+              mountPath: /etc/aegis/tls
+              readOnly: true
+            - name: root-ca
+              mountPath: /etc/aegis/ca
+              readOnly: true
+            - name: assertion-pubkey
+              mountPath: /etc/aegis/assertion
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: tls
+          secret:
+            secretName: aegis-backend-orders-tls
+        - name: root-ca
+          configMap:
+            name: aegis-root-ca
+        - name: assertion-pubkey
+          configMap:
+            name: aegis-assertion-pubkey
 ---
 apiVersion: v1
 kind: Service

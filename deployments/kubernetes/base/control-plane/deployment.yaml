@@ -39,6 +39,20 @@ spec:
               name: grpc-snapshot
             - containerPort: 9092
               name: metrics
+          envFrom:
+            - configMapRef:
+                name: aegis-control-plane-config
+          env:
+            - name: AEGIS_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-db-credentials
+                  key: AEGIS_DB_USER
+            - name: AEGIS_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-db-credentials
+                  key: AEGIS_DB_PASSWORD
           resources:
             requests:
               cpu: 100m
@@ -68,6 +82,24 @@ spec:
           volumeMounts:
             - name: tmp
               mountPath: /tmp
+            - name: grpc-tls
+              mountPath: /etc/aegis/tls
+              readOnly: true
+            - name: root-ca
+              mountPath: /etc/aegis/ca
+              readOnly: true
+            - name: signing-key
+              mountPath: /etc/aegis/signing
+              readOnly: true
       volumes:
         - name: tmp
           emptyDir: {}
+        - name: grpc-tls
+          secret:
+            secretName: aegis-control-plane-tls
+        - name: root-ca
+          configMap:
+            name: aegis-root-ca
+        - name: signing-key
+          secret:
+            secretName: aegis-control-plane-signing-key
