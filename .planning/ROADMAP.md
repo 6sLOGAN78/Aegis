@@ -402,3 +402,5 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 | 7. Close gaps B1, B3, B4 (compose alignment) | 6/6 | Complete | 2026-10-09 |
 | 8. Close gap B7 (denials and completions to the audit spool) | 12/12 | Complete | 2026-10-09 |
 | 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 8/8 | Complete    | 2026-10-10 |
+| 10. Close gaps B5, B6 (dashboard and control-plane flows) | 11/11 | Complete | 2026-10-11 |
+| 11. Close gaps B8, B2, CR-02 (key rotation, DR reconstruct, K8s manifests, gRPC mTLS) | 15/15 | Complete | 2026-10-12 |
