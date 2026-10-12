@@ -381,23 +381,31 @@ cleanup() {
 
 # restore_keys puts the rotation-drill key files back from KEYS_BACKUP (no-op unless the
 # drill ran). Private keys are rewritten in place (cat > file) so the single-file bind-mount
-# inode survives; key contents are never printed.
+# inode survives; key contents are never printed. KEYS_BACKUP is deleted only when every
+# restore step succeeded; otherwise it is kept and its path printed, since it may be the only
+# copy of the original keys.
 restore_keys() {
   if [ "${KEYS_TOUCHED}" != "true" ] || [ -z "${KEYS_BACKUP}" ] || [ ! -d "${KEYS_BACKUP}" ]; then
     return 0
   fi
+  local restore_ok="true"
   local f
   for f in jwt-current.key snapshot-current.key; do
     if [ -f "${KEYS_BACKUP}/${f}" ]; then
-      cat "${KEYS_BACKUP}/${f}" >"${KEYS_DIR}/${f}" || echo "WARN: could not restore ${f}" >&2
+      if ! cat "${KEYS_BACKUP}/${f}" >"${KEYS_DIR}/${f}"; then
+        echo "WARN: could not restore ${f}" >&2
+        restore_ok="false"
+      fi
     fi
   done
   local fam
   for fam in keyset-jwt keyset-snapshot; do
     if [ -d "${KEYS_BACKUP}/${fam}" ]; then
       rm -f "${KEYS_DIR}/${fam}"/* 2>/dev/null || true
-      cp -p "${KEYS_BACKUP}/${fam}"/* "${KEYS_DIR}/${fam}/" 2>/dev/null \
-        || echo "WARN: could not restore ${fam}" >&2
+      if ! cp -p "${KEYS_BACKUP}/${fam}"/* "${KEYS_DIR}/${fam}/" 2>/dev/null; then
+        echo "WARN: could not restore ${fam}" >&2
+        restore_ok="false"
+      fi
     fi
   done
   if [ "${ISSUER_SWITCHED}" = "true" ]; then
@@ -417,7 +425,12 @@ restore_keys() {
       done
     done
   fi
-  rm -rf "${KEYS_BACKUP}"
+  if [ "${restore_ok}" = "true" ]; then
+    rm -rf "${KEYS_BACKUP}"
+  else
+    echo "WARN: key restore incomplete; keys backup retained at ${KEYS_BACKUP}" >&2
+    echo "      copy it back into ${KEYS_DIR} manually before restarting the stack" >&2
+  fi
   KEYS_TOUCHED="false"
 }
 trap cleanup EXIT
