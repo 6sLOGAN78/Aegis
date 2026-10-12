@@ -133,3 +133,64 @@ func TestSmokeScriptNoTokenValueEcho(t *testing.T) {
 		}
 	}
 }
+
+func TestSmokeScriptCoversDRKeyrotAndMTLS(t *testing.T) {
+	_, script := readSmokeScript(t)
+	required := []string{
+		"=== DR", "=== KEYROT-JWT", "=== KEYROT-SNAPSHOT", "=== MTLS",
+		"FLUSHALL", "SECURITY_STATE_MISSING", "PRINCIPAL_QUARANTINED", "TOKEN_REVOKED",
+		"REPLICA_POLL_LIMIT", "-keypair", "AEGIS_KEYS_DIR",
+	}
+	for _, want := range required {
+		assert.Contains(t, script, want, "smoke script must contain %q", want)
+	}
+	after := strings.Index(script, "=== WORKLOAD QUARANTINE")
+	before := strings.Index(script, "=== GATEWAYS")
+	require.True(t, after >= 0 && before > after, "WORKLOAD QUARANTINE must precede GATEWAYS")
+	for _, sec := range []string{"=== DR", "=== KEYROT-JWT", "=== KEYROT-SNAPSHOT", "=== MTLS"} {
+		idx := strings.Index(script, sec)
+		require.True(t, idx >= 0, "missing %s", sec)
+		assert.Greater(t, idx, after, "%s must come after WORKLOAD QUARANTINE", sec)
+		assert.Less(t, idx, before, "%s must come before GATEWAYS idle health", sec)
+	}
+}
+
+func TestSmokeScriptHeaderDocumentsPhase11Sections(t *testing.T) {
+	_, script := readSmokeScript(t)
+	header := script
+	if i := strings.Index(script, "set -euo pipefail"); i > 0 {
+		header = script[:i]
+	}
+	for _, want := range []string{"DR", "KEYROT", "MTLS", "REV-03", "AUTH-01", "CTRL-02", "CTRL-05", "REPLICA_POLL_LIMIT", "AEGIS_KEYS_DIR"} {
+		assert.Contains(t, header, want, "header must document %q", want)
+	}
+	lower := strings.ToLower(header)
+	assert.NotContains(t, lower, "kubernetes live bring-up is covered")
+	assert.NotContains(t, lower, "kubernetes is proven")
+}
+
+func TestSmokeScriptDRRecoveryLimit60(t *testing.T) {
+	_, script := readSmokeScript(t)
+	assert.Contains(t, script, `REPLICA_POLL_LIMIT="${REPLICA_POLL_LIMIT:-5}"`, "default stays 5")
+	assert.Contains(t, script, "REPLICA_POLL_LIMIT=60", "DR section raises the limit to 60")
+}
+
+func TestSmokeScriptRestoresKeys(t *testing.T) {
+	_, script := readSmokeScript(t)
+	assert.Contains(t, script, "trap")
+	assert.Contains(t, script, "KEYS_BACKUP")
+}
+
+func TestSmokeScriptNoKeyFileCat(t *testing.T) {
+	_, script := readSmokeScript(t)
+	// Writing a key with `cat new > file` is allowed; printing one to stdout is not.
+	catKey := regexp.MustCompile(`\bcat\s+[^|>]*\.key\b`)
+	for i, line := range strings.Split(script, "\n") {
+		if strings.HasPrefix(strings.TrimSpace(line), "#") {
+			continue
+		}
+		if catKey.MatchString(line) && !strings.Contains(line, ">") {
+			t.Errorf("line %d prints a private key file: %s", i+1, line)
+		}
+	}
+}
