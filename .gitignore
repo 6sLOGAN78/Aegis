@@ -1,0 +1,40 @@
+# Go build output (binaries built at the repo root by `go build ./cmd/...`)
+/gateway
+/control-plane
+/audit-worker
+/demo-issuer
+/orders
+/payments
+/admin
+/bin/
+/dist/
+*.exe
+*.test
+*.out
+coverage.*
+*.prof
+
+# Dashboard dependencies (built assets in web/dashboard/dist ARE committed: they are go:embed'ed)
+web/dashboard/node_modules/
+web/dashboard/*.tsbuildinfo
+
+# Local environment and secrets — never commit real credentials
+.env
+.env.*
+!.env.example
+*.local
+
+# Editor / OS
+.idea/
+.vscode/
+*.swp
+.DS_Store
+
+# Local agent / tool state
+.claude/worktrees/
+.claude/settings.local.json
+.serena/
+.playwright-mcp/
+
+# NOTE: deployments/certs and deployments/keys hold intentional DEV-ONLY key
+# material and are tracked on purpose (see SECURITY.md). Do not add them here.
