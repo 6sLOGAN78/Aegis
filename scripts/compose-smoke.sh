@@ -22,6 +22,17 @@
 #   WORKLOAD QUARANTINE  (B10) the :9443 orders workload is quarantined via the @uri-encoded
 #       SPIFFE path and via POST /control/v1/quarantine {principal_id}; PRINCIPAL_QUARANTINED
 #       on every replica, then released and allowed again
+#   DR   (REV-03, Phase 11 D-06) after a quarantine and a jti revoke, FLUSHALL on Redis: gateways fail
+#       closed (SECURITY_STATE_MISSING) and each replica recovers within 60s (REPLICA_POLL_LIMIT=60),
+#       then the principal is 403 PRINCIPAL_QUARANTINED and the token 403 TOKEN_REVOKED on every replica
+#   KEYROT-JWT / KEYROT-SNAPSHOT  (AUTH-01, CTRL-02; D-12) key rotation drill without restarting any
+#       gateway: expand (add next.pub), switch signer (restart only demo-issuer or control-plane),
+#       prune the old public key; old JWT is rejected after prune, new works, snapshot leases keep
+#       gateways ready. Needs Go on the host (go run ./scripts/certificates -keypair) and mutates the
+#       keys under AEGIS_KEYS_DIR, restored from KEYS_BACKUP by the exit trap.
+#   MTLS (CTRL-03, CTRL-05; D-14) plaintext and client-cert-less connections to the control-plane gRPC
+#       port are refused while gateways stay ready and are listed under their cert-derived ids
+#   These sections are Docker Compose proof only; Kubernetes live bring-up is not covered here.
 #   GRACE (--stop-check only) a gateway stops with exit code 0, not 137
 #
 # AUD-03 and AUD-04 evidence requires AUDIT-TYPES, DEDUPE and ROTATION to all PASS in the
@@ -39,6 +50,10 @@
 #        is 2x this plus 30 seconds.
 #      SMOKE_ROTATION_REQUESTS (default 0 = skip ROTATION) number of allowed requests to
 #        send; start the stack with a small AEGIS_SPOOL_SEGMENT_BYTES (for example 65536).
+#      REPLICA_POLL_LIMIT (default 5) per-replica convergence limit in seconds used by replica_poll;
+#        the DR section raises it to 60 for recovery and restores it afterwards.
+#      AEGIS_KEYS_DIR (default deployments/keys) must be the same directory the stack was started with
+#        (compose mounts ${AEGIS_KEYS_DIR:-../keys}); the KEYROT sections rewrite files in it.
 #      Compose variables read at stack start (not by this script): AEGIS_SPOOL_SEGMENT_BYTES
 #        (default 16777216) and AEGIS_AUDIT_SUPPRESS_WINDOW (default 60s).
 # Credentials, session ids and CSRF tokens are never printed.
@@ -121,6 +136,16 @@ fi
 GATEWAY_URL="http://127.0.0.1:8080"
 CP_URL="http://127.0.0.1:8084"
 WAL_CURSOR="/var/log/aegis/wal/wal.cursor"
+
+# Per-replica convergence limit in seconds for replica_poll (DR raises it to 60).
+REPLICA_POLL_LIMIT="${REPLICA_POLL_LIMIT:-5}"
+
+# Dev signing keys mounted by the compose profiles (compose default ../keys).
+KEYS_DIR="${AEGIS_KEYS_DIR:-${ROOT_DIR}/deployments/keys}"
+KEYS_BACKUP=""
+KEYS_TOUCHED="false"
+ISSUER_SWITCHED="false"
+CP_SWITCHED="false"
 
 FAILS=0
 SESSION=""
@@ -218,7 +243,7 @@ replica_poll() {
           echo "ok ${el} ${status}" >"${rdir}/${g}"
           exit 0
         fi
-        if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
+        if awk -v e="${el}" -v l="${REPLICA_POLL_LIMIT}" 'BEGIN { exit !(e > l) }'; then
           echo "timeout ${el} ${status:-none}" >"${rdir}/${g}"
           exit 0
         fi
@@ -232,13 +257,13 @@ replica_poll() {
     read -r verdict el status <<<"${res}"
     if [ "${verdict}" = "ok" ]; then
       echo "${label}: ${g} denied after ${el}s since control call (includes exec latency)"
-      if awk -v e="${el}" 'BEGIN { exit !(e > 5) }'; then
-        fail "${label} ${g}" "propagation took ${el}s, limit 5s"
+      if awk -v e="${el}" -v l="${REPLICA_POLL_LIMIT}" 'BEGIN { exit !(e > l) }'; then
+        fail "${label} ${g}" "propagation took ${el}s, limit ${REPLICA_POLL_LIMIT}s"
       else
-        pass "${label} ${g} within 5s"
+        pass "${label} ${g} within ${REPLICA_POLL_LIMIT}s"
       fi
     else
-      fail "${label} ${g}" "no HTTP ${want_status} ${want_body} within 5s (last HTTP ${status})"
+      fail "${label} ${g}" "no HTTP ${want_status} ${want_body} within ${REPLICA_POLL_LIMIT}s (last HTTP ${status})"
     fi
   done
   rm -rf "${rdir}"
@@ -351,6 +376,49 @@ cleanup() {
   else
     echo "WARN: cleanup login failed; usr_developer_01 and smoke-b4-probe may still be quarantined" >&2
   fi
+  restore_keys
+}
+
+# restore_keys puts the rotation-drill key files back from KEYS_BACKUP (no-op unless the
+# drill ran). Private keys are rewritten in place (cat > file) so the single-file bind-mount
+# inode survives; key contents are never printed.
+restore_keys() {
+  if [ "${KEYS_TOUCHED}" != "true" ] || [ -z "${KEYS_BACKUP}" ] || [ ! -d "${KEYS_BACKUP}" ]; then
+    return 0
+  fi
+  local f
+  for f in jwt-current.key snapshot-current.key; do
+    if [ -f "${KEYS_BACKUP}/${f}" ]; then
+      cat "${KEYS_BACKUP}/${f}" >"${KEYS_DIR}/${f}" || echo "WARN: could not restore ${f}" >&2
+    fi
+  done
+  local fam
+  for fam in keyset-jwt keyset-snapshot; do
+    if [ -d "${KEYS_BACKUP}/${fam}" ]; then
+      rm -f "${KEYS_DIR}/${fam}"/* 2>/dev/null || true
+      cp -p "${KEYS_BACKUP}/${fam}"/* "${KEYS_DIR}/${fam}/" 2>/dev/null \
+        || echo "WARN: could not restore ${fam}" >&2
+    fi
+  done
+  if [ "${ISSUER_SWITCHED}" = "true" ]; then
+    dc restart demo-issuer >/dev/null 2>&1 || echo "WARN: demo-issuer restart failed during key restore" >&2
+  fi
+  if [ "${CP_SWITCHED}" = "true" ]; then
+    dc restart control-plane >/dev/null 2>&1 || echo "WARN: control-plane restart failed during key restore" >&2
+  fi
+  if [ "${ISSUER_SWITCHED}" = "true" ] || [ "${CP_SWITCHED}" = "true" ]; then
+    local g i
+    for g in "${GATEWAYS[@]}"; do
+      for i in $(seq 1 40); do
+        if [ "$(dc exec -T "${g}" curl -s -o /dev/null -w '%{http_code}' http://127.0.0.1:8080/readyz </dev/null 2>/dev/null || true)" = "200" ]; then
+          break
+        fi
+        sleep 1
+      done
+    done
+  fi
+  rm -rf "${KEYS_BACKUP}"
+  KEYS_TOUCHED="false"
 }
 trap cleanup EXIT
 
@@ -925,6 +993,360 @@ if op_login; then
   fi
 else
   fail "WORKLOAD QUARANTINE operator login" "could not obtain session and CSRF token from control plane"
+fi
+
+# --- Phase 11 helpers --------------------------------------------------------
+
+# metric_val SERVICE PORT NAME prints the first sample value whose line starts with NAME
+# (0 when absent). Labels in NAME must be written in exposition order (alphabetical).
+metric_val() {
+  local v
+  v="$(dc exec -T "$1" curl -s "http://127.0.0.1:$2/metrics" </dev/null 2>/dev/null \
+    | awk -v m="$3" 'index($0, m) == 1 { print $NF; exit }' || true)"
+  printf '%s\n' "${v:-0}"
+}
+
+# int_of VALUE prints the integer part of a Prometheus float (0 when not numeric).
+int_of() {
+  case "${1:-}" in
+    ''|*[!0-9.e+]*) echo 0 ;;
+    *) printf '%.0f\n' "$1" 2>/dev/null || echo 0 ;;
+  esac
+}
+
+# start_sig prints every gateway container's StartedAt, to prove no gateway restarted.
+start_sig() {
+  local g cid
+  for g in "${GATEWAYS[@]}"; do
+    cid="$(dc ps -q "${g}" 2>/dev/null | head -n1 || true)"
+    docker inspect -f '{{.State.StartedAt}}' "${cid}" 2>/dev/null || echo "unknown"
+  done
+}
+
+declare -A RELOAD_BASE=()
+# reload_snapshot FAMILY records each gateway's keyset reload ok counter.
+reload_snapshot() {
+  local g
+  for g in "${GATEWAYS[@]}"; do
+    RELOAD_BASE["$1/${g}"]="$(int_of "$(metric_val "${g}" 9091 "aegis_keyset_reload_total{family=\"$1\",result=\"ok\"}")")"
+  done
+}
+
+# wait_reload FAMILY SECONDS succeeds once every gateway's ok counter exceeds its snapshot.
+wait_reload() {
+  local fam="$1" secs="$2" i g cur all
+  for i in $(seq 1 "${secs}"); do
+    all="true"
+    for g in "${GATEWAYS[@]}"; do
+      cur="$(int_of "$(metric_val "${g}" 9091 "aegis_keyset_reload_total{family=\"${fam}\",result=\"ok\"}")")"
+      if [ "${cur}" -le "${RELOAD_BASE["${fam}/${g}"]:-0}" ]; then
+        all="false"
+      fi
+    done
+    if [ "${all}" = "true" ]; then
+      return 0
+    fi
+    sleep 1
+  done
+  return 1
+}
+
+# ensure_keys_backup copies the rotation-drill key files once; restore_keys (exit trap) uses it.
+ensure_keys_backup() {
+  if [ "${KEYS_TOUCHED}" = "true" ]; then
+    return 0
+  fi
+  if [ ! -d "${KEYS_DIR}/keyset-jwt" ] || [ ! -d "${KEYS_DIR}/keyset-snapshot" ]; then
+    return 1
+  fi
+  KEYS_BACKUP="$(mktemp -d)"
+  if cp -p "${KEYS_DIR}/jwt-current.key" "${KEYS_DIR}/snapshot-current.key" "${KEYS_BACKUP}/" \
+    && cp -rp "${KEYS_DIR}/keyset-jwt" "${KEYS_DIR}/keyset-snapshot" "${KEYS_BACKUP}/"; then
+    KEYS_TOUCHED="true"
+    return 0
+  fi
+  return 1
+}
+
+# new_keypair FAMILY prints the temp prefix of a fresh keypair (<prefix>.key / <prefix>.pub).
+new_keypair() {
+  local d
+  d="$(mktemp -d)"
+  if ! (cd "${ROOT_DIR}" && go run ./scripts/certificates -keypair "${d}/$1" >/dev/null 2>&1); then
+    rm -rf "${d}"
+    return 1
+  fi
+  echo "${d}/$1"
+}
+
+# prune_old_pub DIR removes every public key in DIR except next.pub.
+prune_old_pub() {
+  local f
+  for f in "$1"/*; do
+    [ -e "${f}" ] || continue
+    if [ "$(basename "${f}")" != "next.pub" ]; then
+      rm -f "${f}"
+    fi
+  done
+}
+
+# --- 7. DR: Redis loss, fail closed, reconstruct (REV-03, D-06) --------------
+echo "=== DR: FLUSHALL on Redis, fail closed, reconstruct from Postgres (REV-03) ==="
+DR_WL_ID="spiffe://aegis.local/workload/orders"
+DR_ENC="$(jq -rn --arg v "${DR_WL_ID}" '$v|@uri')"
+dr_mtls_args=(--cacert /certs/root-ca.crt --cert /certs/workload-orders.crt --key /certs/workload-orders.key
+  -X POST -H 'Content-Type: application/json' -d '{"amount":100.0,"currency":"USD"}' https://127.0.0.1:9443/api/payments)
+if op_login; then
+  dr_login="$(dev_login)"
+  dr_jt="${dr_login%% *}"
+  DR_JTI="${dr_login#* }"
+  if [ -z "${dr_jt}" ] || ! valid_rid "${DR_JTI}"; then
+    fail "DR login" "issuer returned no access_token or a malformed jti"
+  else
+    dr_exp="$(date -u -d '+600 seconds' +%Y-%m-%dT%H:%M:%SZ)"
+    dr_qbody="$(jq -n --arg e "${dr_exp}" '{reason:"compose-smoke-dr",expires_at:$e}')"
+    dr_rbody="$(jq -n --arg j "${DR_JTI}" '{jti:$j,reason:"compose-smoke-dr",ttl_seconds:600}')"
+    dr_q="$(cp_call POST "/control/v1/principals/${DR_ENC}/quarantine" "${dr_qbody}")"
+    dr_r="$(cp_call POST /control/v1/revocations "${dr_rbody}")"
+    if [ "${dr_q}" = "200" ] && [ "${dr_r}" = "200" ]; then
+      pass "DR quarantine and jti revoke POST returned 200"
+      if wait_q_eq "select count(*) from principal_quarantines where principal_id='${DR_WL_ID}'" 1 15; then
+        pass "DR principal_quarantines row exists in Postgres"
+      else
+        fail "DR quarantine row" "principal_quarantines count ${LAST_Q:-none}"
+      fi
+      if wait_q_eq "select count(*) from revoked_tokens where jti='${DR_JTI}'" 1 15; then
+        pass "DR revoked_tokens row exists in Postgres"
+      else
+        fail "DR revoked row" "revoked_tokens count ${LAST_Q:-none}"
+      fi
+      replica_poll "DR baseline quarantine" 403 PRINCIPAL_QUARANTINED "${dr_mtls_args[@]}"
+      replica_poll "DR baseline revoke" 403 TOKEN_REVOKED \
+        -H "Authorization: Bearer ${dr_jt}" http://127.0.0.1:8080/api/orders
+
+      dr_rec_before="$(int_of "$(metric_val control-plane 9092 'aegis_securitystate_reconstruct_total{result="ok"}')")"
+      dc exec -T redis redis-cli FLUSHALL >/dev/null 2>&1 || fail "DR FLUSHALL" "redis-cli FLUSHALL failed"
+      dr_seen="recovered before first poll"
+      dr_leak="false"
+      for _ in $(seq 1 30); do
+        out="$(dc exec -T "${GW}" curl -s -w '\n%{http_code}' http://127.0.0.1:8080/readyz </dev/null 2>/dev/null || true)"
+        wcode="$(dc exec -T "${GW}" curl -s -o /dev/null -w '%{http_code}' "${dr_mtls_args[@]}" </dev/null 2>/dev/null || true)"
+        rcode="$(dc exec -T "${GW}" curl -s -o /dev/null -w '%{http_code}' -H "Authorization: Bearer ${dr_jt}" http://127.0.0.1:8080/api/orders </dev/null 2>/dev/null || true)"
+        if [ "${wcode}" = "200" ] || [ "${rcode}" = "200" ]; then
+          dr_leak="true"
+        fi
+        if [ "${out##*$'\n'}" = "503" ] && [[ "${out}" == *SECURITY_STATE_MISSING* ]]; then
+          dr_seen="observed fail-closed (503 SECURITY_STATE_MISSING)"
+        elif [ "${wcode}" = "503" ] || [ "${rcode}" = "503" ]; then
+          dr_seen="observed fail-closed (503 on request)"
+        elif [ "${out##*$'\n'}" = "200" ] && [ "${dr_seen}" != "recovered before first poll" ]; then
+          break
+        elif [ "${out##*$'\n'}" = "200" ] && [ "${wcode}" = "403" ]; then
+          break
+        fi
+        sleep 0.3
+      done
+      echo "DR fail-closed window: ${dr_seen}"
+      if [ "${dr_leak}" = "true" ]; then
+        fail "DR fail-closed window" "quarantined workload or revoked token received HTTP 200 after FLUSHALL"
+      else
+        pass "DR no quarantined or revoked request returned 200 after FLUSHALL"
+      fi
+
+      REPLICA_POLL_LIMIT=60
+      replica_poll "DR recovery /readyz" 200 "" http://127.0.0.1:8080/readyz
+      replica_poll "DR recovered quarantine" 403 PRINCIPAL_QUARANTINED "${dr_mtls_args[@]}"
+      replica_poll "DR recovered revoke" 403 TOKEN_REVOKED \
+        -H "Authorization: Bearer ${dr_jt}" http://127.0.0.1:8080/api/orders
+      REPLICA_POLL_LIMIT=5
+
+      dr_rec_after="$(int_of "$(metric_val control-plane 9092 'aegis_securitystate_reconstruct_total{result="ok"}')")"
+      if [ "${dr_rec_after}" -gt "${dr_rec_before}" ]; then
+        pass "DR reconstruct ok counter increased (${dr_rec_before} -> ${dr_rec_after}); window: ${dr_seen}"
+      else
+        fail "DR reconstruct" "aegis_securitystate_reconstruct_total{result=ok} did not increase (${dr_rec_before} -> ${dr_rec_after})"
+      fi
+    else
+      fail "DR setup" "quarantine HTTP ${dr_q:-none}, revoke HTTP ${dr_r:-none}"
+    fi
+  fi
+  # Sessions live in Redis: log in again before releasing the quarantine.
+  if op_login; then
+    cp_call DELETE "/control/v1/principals/${DR_ENC}/quarantine" >/dev/null || true
+  fi
+else
+  fail "DR operator login" "could not obtain session and CSRF token from control plane"
+fi
+REPLICA_POLL_LIMIT=5
+
+# --- 8. KEYROT-JWT: expand, switch, prune (AUTH-01, CTRL-02; D-12) ------------
+echo "=== KEYROT-JWT: rotate the JWT signing key without restarting gateways ==="
+if ! command -v go >/dev/null 2>&1; then
+  fail "KEYROT-JWT" "go is required on the host to mint a rotation keypair"
+elif ! ensure_keys_backup; then
+  fail "KEYROT-JWT" "cannot back up keys under ${KEYS_DIR} (set AEGIS_KEYS_DIR to the stack's key directory)"
+else
+  rot_prefix="$(new_keypair jwt || true)"
+  if [ -z "${rot_prefix}" ]; then
+    fail "KEYROT-JWT" "go run ./scripts/certificates -keypair failed"
+  else
+    old_jt="$(dev_token)"
+    sig_before="$(start_sig)"
+    reload_snapshot jwt
+    cp "${rot_prefix}.pub" "${KEYS_DIR}/keyset-jwt/next.pub"
+    if wait_reload jwt 20; then
+      pass "KEYROT-JWT expand: every gateway reloaded the jwt keyset"
+    else
+      fail "KEYROT-JWT expand" "aegis_keyset_reload_total{family=jwt,result=ok} did not increase on every gateway within 20s"
+    fi
+
+    cat "${rot_prefix}.key" >"${KEYS_DIR}/jwt-current.key"
+    ISSUER_SWITCHED="true"
+    dc restart demo-issuer >/dev/null 2>&1 || fail "KEYROT-JWT switch" "demo-issuer restart failed"
+    new_jt=""
+    for _ in $(seq 1 30); do
+      new_jt="$(dev_token)"
+      [ -n "${new_jt}" ] && break
+      sleep 1
+    done
+    if [ -z "${new_jt}" ]; then
+      fail "KEYROT-JWT switch" "demo-issuer returned no token after restart"
+    else
+      REPLICA_POLL_LIMIT=20
+      replica_poll "KEYROT-JWT old token accepted after switch" 200 "" \
+        -H "Authorization: Bearer ${old_jt}" http://127.0.0.1:8080/api/orders
+      replica_poll "KEYROT-JWT new token accepted after switch" 200 "" \
+        -H "Authorization: Bearer ${new_jt}" http://127.0.0.1:8080/api/orders
+
+      reload_snapshot jwt
+      prune_old_pub "${KEYS_DIR}/keyset-jwt"
+      if wait_reload jwt 20; then
+        pass "KEYROT-JWT prune: every gateway reloaded the jwt keyset"
+      else
+        fail "KEYROT-JWT prune" "jwt keyset reload did not increase on every gateway within 20s"
+      fi
+      replica_poll "KEYROT-JWT old token rejected after prune" 401 "" \
+        -H "Authorization: Bearer ${old_jt}" http://127.0.0.1:8080/api/orders
+      replica_poll "KEYROT-JWT new token still accepted after prune" 200 "" \
+        -H "Authorization: Bearer ${new_jt}" http://127.0.0.1:8080/api/orders
+      REPLICA_POLL_LIMIT=5
+    fi
+    if [ "$(start_sig)" = "${sig_before}" ]; then
+      pass "KEYROT-JWT no gateway container restarted"
+    else
+      fail "KEYROT-JWT gateway restart" "a gateway StartedAt changed during rotation"
+    fi
+    rm -rf "$(dirname "${rot_prefix}")"
+  fi
+fi
+REPLICA_POLL_LIMIT=5
+
+# --- 9. KEYROT-SNAPSHOT: rotate the snapshot signing key (CTRL-02; D-12) ------
+echo "=== KEYROT-SNAPSHOT: rotate the snapshot signing key, gateways stay ready ==="
+if ! command -v go >/dev/null 2>&1; then
+  fail "KEYROT-SNAPSHOT" "go is required on the host to mint a rotation keypair"
+elif ! ensure_keys_backup; then
+  fail "KEYROT-SNAPSHOT" "cannot back up keys under ${KEYS_DIR} (set AEGIS_KEYS_DIR to the stack's key directory)"
+else
+  snap_prefix="$(new_keypair snapshot || true)"
+  if [ -z "${snap_prefix}" ]; then
+    fail "KEYROT-SNAPSHOT" "go run ./scripts/certificates -keypair failed"
+  else
+    sig_before="$(start_sig)"
+    reload_snapshot snapshot
+    cp "${snap_prefix}.pub" "${KEYS_DIR}/keyset-snapshot/next.pub"
+    if wait_reload snapshot 20; then
+      pass "KEYROT-SNAPSHOT expand: every gateway reloaded the snapshot keyset"
+    else
+      fail "KEYROT-SNAPSHOT expand" "snapshot keyset reload did not increase on every gateway within 20s"
+    fi
+
+    cat "${snap_prefix}.key" >"${KEYS_DIR}/snapshot-current.key"
+    CP_SWITCHED="true"
+    dc restart control-plane >/dev/null 2>&1 || fail "KEYROT-SNAPSHOT switch" "control-plane restart failed"
+    REPLICA_POLL_LIMIT=40
+    replica_poll "KEYROT-SNAPSHOT gateways ready after switch" 200 "" http://127.0.0.1:8080/readyz
+    REPLICA_POLL_LIMIT=5
+
+    reload_snapshot snapshot
+    prune_old_pub "${KEYS_DIR}/keyset-snapshot"
+    if wait_reload snapshot 20; then
+      pass "KEYROT-SNAPSHOT prune: every gateway reloaded the snapshot keyset"
+    else
+      fail "KEYROT-SNAPSHOT prune" "snapshot keyset reload did not increase on every gateway within 20s"
+    fi
+    # More than two 10s lease renewals under the new key only.
+    sleep 25
+    replica_poll "KEYROT-SNAPSHOT gateways ready after prune and 25s" 200 "" http://127.0.0.1:8080/readyz
+    snap_ok="false"
+    for _ in $(seq 1 30); do
+      if op_login; then
+        snap_json="$(dc exec -T control-plane curl -s -H "Cookie: aegis_session=${SESSION}" \
+          "${CP_URL}/control/v1/gateways" 2>/dev/null || true)"
+        if printf '%s' "${snap_json}" | jq -e '(.gateways | length) > 0 and all(.gateways[]; .status == "healthy")' >/dev/null 2>&1; then
+          snap_ok="true"
+          break
+        fi
+      fi
+      sleep 1
+    done
+    if [ "${snap_ok}" = "true" ]; then
+      pass "KEYROT-SNAPSHOT operator gateway list reports every replica healthy"
+    else
+      fail "KEYROT-SNAPSHOT gateway list" "not every replica healthy: ${snap_json:-no response}"
+    fi
+    if [ "$(start_sig)" = "${sig_before}" ]; then
+      pass "KEYROT-SNAPSHOT no gateway container restarted"
+    else
+      fail "KEYROT-SNAPSHOT gateway restart" "a gateway StartedAt changed during rotation"
+    fi
+    rm -rf "$(dirname "${snap_prefix}")"
+  fi
+fi
+REPLICA_POLL_LIMIT=5
+
+# --- 10. MTLS: control-plane gRPC requires a client certificate (CTRL-03, CTRL-05; D-14) ---
+echo "=== MTLS: gRPC port refuses plaintext and client-cert-less peers ==="
+cp_cert="/certs/cp-client-${GW}"
+if dc exec -T "${GW}" curl -s -o /dev/null --max-time 5 --http2-prior-knowledge \
+  http://control-plane:9090/ </dev/null >/dev/null 2>&1; then
+  fail "MTLS plaintext" "plaintext HTTP/2 to control-plane:9090 was answered"
+else
+  pass "MTLS plaintext connection to control-plane:9090 refused"
+fi
+nocert_code="$(dc exec -T "${GW}" curl -s -o /dev/null --max-time 5 --http2 -w '%{http_code}' \
+  --cacert /certs/root-ca.crt https://control-plane:9090/ </dev/null 2>/dev/null || true)"
+case "${nocert_code}" in
+  ''|000) pass "MTLS TLS connection without a client certificate refused" ;;
+  *) fail "MTLS no client cert" "control-plane:9090 answered HTTP ${nocert_code} without a client certificate" ;;
+esac
+withcert_code="$(dc exec -T "${GW}" curl -s -o /dev/null --max-time 5 --http2 -w '%{http_code}' \
+  --cacert /certs/root-ca.crt --cert "${cp_cert}.crt" --key "${cp_cert}.key" \
+  https://control-plane:9090/ </dev/null 2>/dev/null || true)"
+case "${withcert_code}" in
+  ''|000) fail "MTLS positive control" "handshake with ${cp_cert##*/} failed, so the refusals above prove nothing" ;;
+  *) pass "MTLS positive control: authenticated gateway client completes the handshake" ;;
+esac
+if op_login; then
+  mtls_json="$(dc exec -T control-plane curl -s -H "Cookie: aegis_session=${SESSION}" \
+    "${CP_URL}/control/v1/gateways" 2>/dev/null || true)"
+  mtls_ids="$(printf '%s' "${mtls_json}" | jq -r '[.gateways[] | (.gateway_id // .gatewayId // .id)] | sort | join(",")' 2>/dev/null || true)"
+  mtls_want="$(printf '%s\n' "${GATEWAYS[@]}" | sort | paste -sd, -)"
+  if [ "${mtls_ids}" = "${mtls_want}" ]; then
+    pass "MTLS gateways listed under cert-derived ids (${mtls_ids})"
+  else
+    fail "MTLS gateway ids" "expected ${mtls_want}, got ${mtls_ids:-none}"
+  fi
+  REPLICA_POLL_LIMIT=5
+  replica_poll "MTLS authenticated gateways ready" 200 "" http://127.0.0.1:8080/readyz
+  if dc exec -T control-plane curl -s http://127.0.0.1:9092/metrics </dev/null 2>/dev/null \
+    | grep -q 'aegis_grpc_identity_rejections_total'; then
+    pass "MTLS aegis_grpc_identity_rejections_total is exposed"
+  else
+    fail "MTLS metric" "aegis_grpc_identity_rejections_total not exposed on the control-plane metrics port"
+  fi
+else
+  fail "MTLS operator login" "could not obtain session and CSRF token from control plane"
 fi
 
 # --- 6. GRACE: gateway stops cleanly (only with --stop-check) --------------
