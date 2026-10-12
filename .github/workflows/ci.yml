@@ -1,0 +1,77 @@
+name: CI
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  build:
+    name: Build & vet
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      - name: gofmt (non-generated code)
+        run: |
+          unformatted=$(gofmt -l $(git ls-files '*.go' | grep -v '^pkg/api/'))
+          if [ -n "$unformatted" ]; then echo "gofmt needed:"; echo "$unformatted"; exit 1; fi
+      - run: go build ./...
+      - run: go vet ./...
+      - name: No insecure gRPC credentials in production code
+        run: |
+          if git grep -n 'insecure.NewCredentials' -- 'cmd/*.go' 'internal/*.go' ':!*_test.go'; then exit 1; fi
+
+  test:
+    name: Tests (race)
+    runs-on: ubuntu-latest
+    needs: build
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-go@v5
+        with:
+          go-version-file: go.mod
+      # Serial packages: audit-spool tests use the real filesystem and fail closed at >=90% disk.
+      # Skipped: tests that need a live compose stack, and the latency budget (inflated by -race).
+      - name: go test
+        run: >
+          go test -race -count=1 -p 1 ./...
+          -skip 'TestBackendBypassPrevention|TestMVPEndToEnd|TestPolicyEngine_LatencyBudget'
+      - name: Policy latency budget (no race detector)
+        run: go test -count=1 -run TestPolicyEngine_LatencyBudget ./benchmarks
+
+  policy:
+    name: OPA policy tests
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: open-policy-agent/setup-opa@v2
+        with:
+          version: 1.2.0
+      - run: opa test policies/rego policies/tests -v
+
+  deploy-lint:
+    name: Compose & manifest lint
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - name: docker compose config
+        run: |
+          for p in mvp hardened distributed; do
+            docker compose -f deployments/compose/docker-compose.$p.yml config -q
+          done
+      - name: shell syntax
+        run: bash -n scripts/compose-smoke.sh deployments/kubernetes/secrets/create-secrets.sh
+      - name: kustomize build
+        run: |
+          kubectl kustomize deployments/kubernetes/base > /dev/null
+          kubectl kustomize deployments/kubernetes/overlays/production > /dev/null
