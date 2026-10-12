@@ -14,24 +14,26 @@
 - **Emergency Suspected Compromise:** Incident Level (SEV-1 / Fast-Path Invalidation). Immediate key revocation and fleet reconfiguration.
 
 ### Rotation Cadence Table
-| Credential Type | Algorithm / Standard | Rotation Cadence | Max Overlap Window | SLO Target Impact |
+| Credential Type | Algorithm / Standard | Rotation Cadence | Minimum Overlap | Hot reload? |
 |---|---|---|---|---|
-| **User Ingress Bearer JWT** | `EdDSA` / `RS256` / `ES256` | **30 Days** | 24 Hours ($> 2 \times \text{max token TTL}$) | 0% 401 Error Spikes (0 req/s drop) |
-| **Snapshot Signing Key** | `Ed25519` | **90 Days** | 60 Minutes | 0 Rejected Snapshots / 0 Lease Timeouts |
-| **Workload mTLS Intermediate CA** | `ECDSA P-256` / `x509` | **180 Days** | 7 Days | 0 Handshake Failures on `:8443` |
-| **Emergency Compromise** | Any | **Immediate (< 15 min)** | 0 Seconds (Cutoff) | Bounded 401s for revoked key |
+| **JWT verification keyset** | `Ed25519` | **30 Days** | reload interval + max token TTL + 30s | Yes (directory poll and SIGHUP) |
+| **Snapshot verification keyset** | `Ed25519` | **90 Days** | reload interval + 30s, plus a republish (see 4.2) | Yes (directory poll and SIGHUP) |
+| **Workload mTLS CA / certificates** | `ECDSA P-256` / `x509` | **180 Days** | 7 Days | **No. Restart required (section 4.3)** |
+| **Emergency Compromise** | Any | **Immediate (< 15 min)** | 0 Seconds (Cutoff) | Yes for keysets |
 
 ---
 
 ## 2. Prerequisites & Cryptographic Invariants
 
-1. **Zero-Repair / Zero-Downtime Rule:** Key rotation must NEVER replace a verification key instantaneously without an active overlap window where both $\{K_{\text{old}}, K_{\text{new}}\}$ are trusted simultaneously.
-2. **Key Material Isolation:** Gateway instances MUST ONLY receive public keys (`crypto.PublicKey`, `ed25519.PublicKey`) and public X.509 certificates. Gateway ConfigMaps and secrets must NEVER contain private keys.
-3. **Clock Leeway Adherence:** Gateway `TokenValidator` enforces a 30-second clock skew leeway. Overlap windows must account for token expiration TTL + 30 seconds before retiring old keys.
-4. **Required Tooling:**
-   - `kubectl` v1.28+ authenticated to the production cluster.
-   - `curl` or `httpie` for control plane management API calls.
-   - `openssl` v3.0+ or `cfssl` for generating PKI materials.
+1. **Overlap rule:** never replace a verification key in one step. Both the old and new public keys must be trusted at the same time for at least `AEGIS_KEYSET_RELOAD_INTERVAL` (poll interval) + max token TTL + 30 seconds (gateway clock-skew leeway) before the old key is removed.
+2. **Separate keys:** the JWT issuer key and the snapshot signing key are different keys with different keysets. Never reuse one for the other.
+3. **Key material isolation:** gateways receive public keys only. Private keys live only with the signer (the issuer for JWTs, the control plane for snapshots). Keep private keys out of ConfigMaps, tickets and this document.
+4. **Keysets are directories.** Gateways read `AEGIS_JWT_KEYSET_DIR` and `AEGIS_SNAPSHOT_KEYSET_DIR`. Every regular file in the directory whose name does not start with `.` is one public key. Names are free-form: `keyset.pub.0`, `keyset.pub.1` and `current.pub` all work. Dot files (including Kubernetes `..data` symlink internals) and non-regular entries are ignored.
+5. **Reload behavior:**
+   - The directory is re-read every `AEGIS_KEYSET_RELOAD_INTERVAL` (default 10s; values are clamped to 1s-10m; the compose profile uses 2s) and immediately on `SIGHUP`.
+   - If any file fails to parse, or the directory is empty, the whole reload is rejected and the **last good set stays in force**. The failure is logged and counted in `aegis_keyset_reload_total{family,result="error"}`.
+6. **Signers load private keys from files:** the control plane uses `AEGIS_SIGNING_KEY_PATH`, the demo issuer uses `AEGIS_ISSUER_PRIVATE_KEY_PATH`. A configured path that cannot be loaded is fatal at startup. The built-in demo seed (used only when the path is unset) is for development and must not run in production. Signers do not hot reload: switching a signer key means restarting that signer.
+7. **Required tooling:** `kubectl` authenticated to the cluster, `curl`, and `go` (to run the keypair generator from this repository).
 
 ---
 
@@ -50,26 +52,24 @@
                         YES   /                     \  NO (Routine Cadence)
                              v                       v
                +---------------------------+   +---------------------------------+
-               | Fast-Path Emergency Cut   |   | Phase 1: Expand Keyset          |
-               | (Section 6)               |   | Deploy {K_old, K_new} to Gateways|
-               | - Invalidate old key now  |   +---------------------------------+
-               | - Terminate active sessions|                   |
-               | - Re-issue new credentials|                   v
+               | Fast-Path Emergency Cut   |   | Phase 1: Expand keyset          |
+               | (Section 6)               |   | add the new public key file     |
                +---------------------------+   +---------------------------------+
-                                               | Phase 2: Switch Active Signer   |
-                                               | CP / Issuer signs with K_new    |
+                                                               |
+                                                               v
+                                               +---------------------------------+
+                                               | Phase 2: Switch signer          |
+                                               | restart signer with new key     |
                                                +---------------------------------+
                                                                |
                                                                v
                                                +---------------------------------+
-                                               | Wait Token TTL + Clock Leeway   |
-                                               | In-flight tokens drain naturally|
+                                               | Wait reload + token TTL + 30s   |
                                                +---------------------------------+
                                                                |
                                                                v
                                                +---------------------------------+
-                                               | Phase 3: Prune Retired Keyset   |
-                                               | Retire K_old from Gateway Config|
+                                               | Phase 3: Prune old public key   |
                                                +---------------------------------+
                                                                |
                                                                v
@@ -82,184 +82,147 @@
 
 ## 4. Step-by-Step Execution Procedures
 
-### 4.1. User Ingress JWT Issuer Key Rotation
+Object names used below:
 
-#### Phase 1: Keyset Expansion (Deploy $K_{\text{new}}$ Verification Key)
-1. Generate new Ed25519 keypair for the auth issuer:
+| Purpose | Kubernetes object (namespace `aegis-system`) | Compose |
+|---|---|---|
+| JWT public keyset | ConfigMap `gateway-jwt-keyset` | `${AEGIS_KEYS_DIR}/keyset-jwt` mounted at `/keysets/jwt` |
+| Snapshot public keyset | ConfigMap `gateway-snapshot-keyset` | `${AEGIS_KEYS_DIR}/keyset-snapshot` mounted at `/keysets/snapshot` |
+| Snapshot signing private key | Secret `aegis-control-plane-signing-key` (key `snapshot-current.key`) | `${AEGIS_KEYS_DIR}/snapshot-current.key` |
+| JWT issuer private key | issuer deployment's own secret (the demo issuer is a compose/demo component) | `${AEGIS_KEYS_DIR}/jwt-current.key` |
+
+`AEGIS_KEYS_DIR` defaults to `deployments/keys` (`../keys` relative to the compose files). `deployments/kubernetes/secrets/create-secrets.sh` creates the Kubernetes objects; see `deployments/kubernetes/secrets/README.md`.
+
+### 4.1. JWT Issuer Key Rotation
+
+#### Phase 1: Expand (trust both public keys)
+1. Generate a new Ed25519 keypair (writes `<prefix>.key` private and `<prefix>.pub` public, both base64):
    ```bash
-   openssl genpkey -algorithm ED25519 -out jwt-issuer-new.key
-   openssl pkey -in jwt-issuer-new.key -pubout -out jwt-issuer-new.pub
+   go run ./scripts/certificates -keypair jwt-new
    ```
-2. Update the Gateway ConfigMap to include both public keys:
+2. Add the new public key next to the current one (name it `keyset.pub.1`). Kubernetes:
    ```bash
-   kubectl create configmap gateway-jwt-keyset \
-     --namespace aegis-system \
-     --from-file=keyset.pub.0=jwt-issuer-current.pub \
-     --from-file=keyset.pub.1=jwt-issuer-new.pub \
+   kubectl -n aegis-system get configmap gateway-jwt-keyset -o yaml   # note the current entry name, keyset.pub.0
+   kubectl -n aegis-system create configmap gateway-jwt-keyset \
+     --from-file=keyset.pub.0=jwt-current.pub \
+     --from-file=keyset.pub.1=jwt-new.pub \
      --dry-run=client -o yaml | kubectl apply -f -
    ```
-3. Trigger rolling reload of gateway replicas:
+   Compose: copy `jwt-new.pub` into `deployments/keys/keyset-jwt/` under a new name.
+3. No gateway restart is needed. Wait for the reload interval (a mounted ConfigMap also takes up to the kubelet sync period to appear), or force it:
    ```bash
-   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
-   kubectl rollout status statefulset/aegis-gateway -n aegis-system --timeout=120s
+   kubectl -n aegis-system exec aegis-gateway-0 -- kill -HUP 1   # optional; adjust to the gateway PID if different
    ```
-4. Confirm gateway logs show multi-key keyset loaded:
+4. Confirm both keys are loaded:
    ```bash
-   kubectl logs -n aegis-system -l app=aegis-gateway --tail=50 | grep "TokenValidator: loaded"
-   # Expected: "TokenValidator: loaded 2 trusted public verification keys"
-   ```
-
-#### Phase 2: Switch Active Signing Key in Auth Issuer
-1. Update Auth Issuer service secret with `jwt-issuer-new.key`:
-   ```bash
-   kubectl create secret generic auth-issuer-signing-key \
-     --namespace aegis-system \
-     --from-file=active.key=jwt-issuer-new.key \
-     --dry-run=client -o yaml | kubectl apply -f -
-   kubectl rollout restart deployment/demo-issuer -n aegis-system
-   ```
-2. Monitor gateway Prometheus metrics:
-   ```bash
-   # Ensure zero increase in 401 Unauthorized responses
-   rate(http_requests_total{status_code="401"}[1m]) == 0
+   curl -s http://gateway-replica-0:9091/metrics | grep -E 'aegis_keyset_keys\{family="jwt"\}|aegis_keyset_reload_total'
+   # Expected: aegis_keyset_keys{family="jwt"} 2, no new result="error"
    ```
 
-#### Phase 3: Prune Retired Key (After Max Token TTL + 30s)
-1. Wait for standard token TTL to elapse (e.g., 1 hour):
+#### Phase 2: Switch the signer
+1. Point the issuer at the new private key (`AEGIS_ISSUER_PRIVATE_KEY_PATH`) and restart it. For compose, replace the mounted `jwt-current.key` and run `docker compose restart demo-issuer`.
+2. Confirm tokens signed by the new key are accepted and watch for a rise in 401 responses.
+
+#### Phase 3: Prune the old key
+1. Wait at least `AEGIS_KEYSET_RELOAD_INTERVAL` + max token TTL + 30s after the switch (in-flight tokens signed by the old key must expire first).
+2. Remove the old entry:
    ```bash
-   sleep 3600
-   ```
-2. Remove retired `jwt-issuer-current.pub` from gateway keyset:
-   ```bash
-   kubectl create configmap gateway-jwt-keyset \
-     --namespace aegis-system \
-     --from-file=keyset.pub.0=jwt-issuer-new.pub \
+   kubectl -n aegis-system create configmap gateway-jwt-keyset \
+     --from-file=keyset.pub.1=jwt-new.pub \
      --dry-run=client -o yaml | kubectl apply -f -
-   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
    ```
+3. Confirm `aegis_keyset_keys{family="jwt"} 1` after the next reload. Never leave the directory empty; an empty set is rejected and the old set stays active.
 
 ---
 
 ### 4.2. Control Plane Snapshot Signing Key Rotation
 
-#### Phase 1: Deploy New Control Plane Public Key to Gateways
-1. Generate new Ed25519 signing keypair for Control Plane:
-   ```bash
-   openssl genpkey -algorithm ED25519 -out snapshot-signer-new.key
-   openssl pkey -in snapshot-signer-new.key -pubout -out snapshot-signer-new.pub
-   ```
-2. Append `snapshot-signer-new.pub` to gateway snapshot trusted keys ConfigMap:
-   ```bash
-   kubectl patch configmap aegis-gateway-config -n aegis-system --type merge -p \
-     '{"data":{"SNAPSHOT_TRUSTED_KEYS":"current-key-pub,new-key-pub"}}'
-   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
-   ```
+The gateway snapshot keyset is separate from the JWT keyset and uses `AEGIS_SNAPSHOT_KEYSET_DIR`.
 
-#### Phase 2: Activate New Signing Key on Control Plane
-1. Inject `snapshot-signer-new.key` into Control Plane:
+#### Phase 1: Expand
+1. Generate a keypair: `go run ./scripts/certificates -keypair snapshot-new`.
+2. Add the new public key to `gateway-snapshot-keyset` as `keyset.pub.1` next to `keyset.pub.0` (same `kubectl create configmap ... --dry-run=client -o yaml | kubectl apply -f -` pattern, with the name `gateway-snapshot-keyset`). Compose: copy the `.pub` into `deployments/keys/keyset-snapshot/`.
+3. Confirm `aegis_keyset_keys{family="snapshot"} 2` on every gateway.
+
+#### Phase 2: Switch the signer
+1. Replace the control plane signing key and restart it:
    ```bash
-   kubectl create secret generic control-plane-signing-key \
-     --namespace aegis-system \
-     --from-file=signing.key=snapshot-signer-new.key \
+   kubectl -n aegis-system create secret generic aegis-control-plane-signing-key \
+     --from-file=snapshot-current.key=snapshot-new.key \
      --dry-run=client -o yaml | kubectl apply -f -
-   kubectl rollout restart deployment/aegis-control-plane -n aegis-system
+   kubectl -n aegis-system rollout restart deployment/aegis-control-plane
    ```
-2. Verify Control Plane publishes snapshot $N+1$ signed with new key:
-   ```bash
-   kubectl logs -n aegis-system -l app=aegis-control-plane --tail=50 | grep "Published snapshot"
-   # Expected: "Published snapshot version=<N+1> signature_verified=true"
-   ```
-3. Verify gateways acknowledge receipt:
-   ```bash
-   kubectl logs -n aegis-system -l app=aegis-gateway --tail=50 | grep "Snapshot activated"
-   # Expected: "Snapshot activated version=<N+1> status=ACK_STATUS_APPLIED"
-   ```
+   The control plane reads the key from `AEGIS_SIGNING_KEY_PATH` (`/etc/aegis/signing/snapshot-current.key` in Kubernetes). An unreadable or invalid file stops the control plane at startup.
+2. Publish a fresh snapshot so the active snapshot is signed by the new key, and confirm gateways acknowledge it (`/control/v1/gateways` shows the new version applied).
 
-#### Phase 3: Retire Old Key from Gateways
-1. Remove old public key from `aegis-gateway-config`:
-   ```bash
-   kubectl patch configmap aegis-gateway-config -n aegis-system --type merge -p \
-     '{"data":{"SNAPSHOT_TRUSTED_KEYS":"new-key-pub"}}'
-   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
-   ```
+#### Phase 3: Prune
+1. After the new snapshot is active everywhere, and at least one reload interval + 30s later, remove `keyset.pub.0` from `gateway-snapshot-keyset`.
+2. Confirm `aegis_keyset_keys{family="snapshot"} 1` and no `result="error"` increase.
 
 ---
 
-### 4.3. Workload mTLS Intermediate CA Rotation
+### 4.3. Workload mTLS CA / certificate rotation (NOT hot reloaded)
 
-#### Phase 1: Install New Intermediate CA in Workload Trust Pool
-1. Generate Intermediate CA 2 signed by Root CA:
+mTLS CA bundles and workload certificates (gateway server and client certs, control plane server cert, per-pod control-plane client certs, backend certs) are read at process start. They are **not** hot reloaded: after changing the Secret or ConfigMap, restart the affected workloads. Hot reload of mTLS material is out of scope for the current release.
+
+1. Generate the new intermediate or leaf certificates and bundle old and new CAs into a combined trust bundle.
+2. Update the relevant objects (`aegis-root-ca`, `aegis-gateway-workload-tls`, `aegis-gateway-cp-clients`, `aegis-control-plane-tls`, `aegis-backend-*-tls`).
+3. Restart in dependency order: backends, control plane, then gateways:
    ```bash
-   openssl req -new -newkey ec:<(openssl ecparam -name prime256v1) -nodes \
-     -keyout intermediate-ca-2.key -out intermediate-ca-2.csr -subj "/CN=Aegis Workload Intermediate CA 2"
-   openssl x509 -req -in intermediate-ca-2.csr -CA root-ca.crt -CAkey root-ca.key \
-     -CAcreateserial -out intermediate-ca-2.crt -days 180 -extfile <(printf "basicConstraints=critical,CA:TRUE,pathlen:0\nkeyUsage=critical,digitalSignature,keyCertSign,cRLSign")
+   kubectl -n aegis-system rollout restart deployment/aegis-control-plane
+   kubectl -n aegis-system rollout restart statefulset/aegis-gateway
+   kubectl -n aegis-system rollout status statefulset/aegis-gateway --timeout=180s
    ```
-2. Bundle `intermediate-ca-1.crt` and `intermediate-ca-2.crt` into Gateway Workload CA pool:
-   ```bash
-   cat intermediate-ca-1.crt intermediate-ca-2.crt > combined-ca-bundle.crt
-   kubectl create configmap aegis-workload-ca-bundle \
-     --namespace aegis-system \
-     --from-file=ca.crt=combined-ca-bundle.crt \
-     --dry-run=client -o yaml | kubectl apply -f -
-   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
-   ```
-
-#### Phase 2: Issue New Workload Certificates from CA 2
-1. Re-issue certificates for backend microservices (`orders`, `payments`, `admin`) using `intermediate-ca-2.crt`.
-2. Microservices restart with new certificates. Gateways accept handshakes seamlessly.
-
-#### Phase 3: Retire Intermediate CA 1
-1. Replace `aegis-workload-ca-bundle` with `intermediate-ca-2.crt` only.
-2. Roll out gateway restart. Workloads presenting CA 1 certs will now be rejected.
+4. After every workload presents certificates from the new CA, replace the bundle with the new CA only and restart again.
 
 ---
 
 ## 5. Verification & Exit Criteria
 
-Before closing the maintenance ticket, execute the following operational checks:
-
 ```bash
-# 1. Verify Gateway Readiness Probes
+# 1. Gateway readiness
 kubectl get pods -n aegis-system -l app=aegis-gateway
-# All replicas must be 1/1 Running with 0 Restarts
+# All replicas Running with no unexpected restarts
 
-# 2. Query Gateway Metrics for Authentication Status
-curl -s http://gateway-replica-0:9091/metrics | grep "aegis_auth_verifications_total"
-# Ensure error count is zero and success counters increment
+# 2. Keyset state (gateway metrics on :9091)
+curl -s http://gateway-replica-0:9091/metrics | grep -E 'aegis_keyset_(keys|reload_total|last_success_timestamp_seconds)'
+# Expected: keys count matches the phase you are in; reload_total{result="error"} not increasing
 
-# 3. Test Ingress Endpoints with Rotated Token
+# 3. Authentication status
+curl -s http://gateway-replica-0:9091/metrics | grep aegis_auth_verifications_total
+# Success counters increment; errors do not
+
+# 4. Request with a freshly issued token
 curl -k -H "Authorization: Bearer $(get-new-token)" https://gateway.aegis.local:8080/api/orders
 # Must return HTTP 200 OK
 
-# 4. Verify Monotonic Lease Renewals
-curl -s http://gateway-replica-0:9091/metrics | grep "aegis_snapshot_lease_valid"
-# Must report 1 (healthy lease <= 10s age)
+# 5. Snapshot lease
+curl -s http://gateway-replica-0:9091/metrics | grep aegis_snapshot_lease_valid
+# Must report 1
 ```
 
 ---
 
 ## 6. Emergency Key Compromise Fast-Path Invalidation
 
-If an active signing key is compromised or exfiltrated:
+If an active signing key is compromised:
 
-1. **Immediate Keyset Cutoff (No Overlap):**
+1. **Immediate cutoff (no overlap):** replace the affected keyset with the emergency replacement public key only. Gateways reload within `AEGIS_KEYSET_RELOAD_INTERVAL`; send `SIGHUP` to force it. No pod deletion is required.
    ```bash
-   # Immediately replace gateway keyset with Emergency New Key only
-   kubectl create configmap gateway-jwt-keyset -n aegis-system \
+   kubectl -n aegis-system create configmap gateway-jwt-keyset \
      --from-file=keyset.pub.0=emergency-new.pub --dry-run=client -o yaml | kubectl apply -f -
-   # Force delete gateway pods to terminate active in-memory connections immediately
-   kubectl delete pods -n aegis-system -l app=aegis-gateway --grace-period=0 --force
    ```
-2. **Execute Principal Quarantine in Redis:**
+   Then switch the signer to the matching private key at once (section 4.1 phase 2).
+2. **Quarantine affected principals:**
    ```bash
    curl -X POST http://control-plane:8084/control/v1/quarantine \
-     -H "Content-Type: application/json" \
+     -H "Content-Type: application/json" -H "Idempotency-Key: $(uuidgen)" \
      -d '{"principal_id":"compromised-actor","reason":"EMERGENCY_KEY_LEAK","ttl_seconds":86400}'
    ```
-3. **Verify Compromised Tokens Rejected:**
+   (Requires an authenticated `sec-ops` session.) Quarantines are written to Postgres first and survive a Redis loss; see RB-DR-01.
+3. **Verify compromised tokens are rejected:**
    ```bash
    curl -i -H "Authorization: Bearer <compromised-token>" http://gateway:8080/api/orders
    # Expected: HTTP 401 Unauthorized / HTTP 403 Forbidden
    ```
-4. **Conduct Post-Incident Forensic Audit:** Review PostgreSQL `audit_events` partition for all access during the suspected exposure window.
+4. **Post-incident audit:** review the PostgreSQL `audit_events` partition for all access during the suspected exposure window.

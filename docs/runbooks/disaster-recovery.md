@@ -15,7 +15,7 @@
   - Audit Trail: **< 1 second** (Guaranteed by pre-forward synchronous `fsync` to local WAL spool).
 - **Recovery Time Objective (RTO):**
   - Gateway Ingress Service: **< 5 minutes** (Cold cluster restart to full readiness).
-  - Cache Reconstruction: **< 60 seconds** (Pipelined quarantine restore).
+  - Cache Reconstruction: **< 60 seconds** (Postgres-driven restore, marker written last).
 
 ### Failure Scenarios Covered
 1. **Catastrophic Redis Memory Wipeout:** Cache nodes crash and restart empty.
@@ -27,33 +27,91 @@
 
 ## 2. Redis State Reconstruction Procedure
 
-When Redis restarts with empty memory, gateways fail closed to prevent quarantined actors from accessing backends. Gateways MUST NOT be marked ready until active security state is repopulated.
+Postgres is the source of truth for security state; Redis is the fast copy that gateways read. The control plane requires Postgres: it exits at startup if Postgres is unreachable, and there is no in-memory mode.
 
-### Step-by-Step Restoration
-1. **Extract Active Quarantines from PostgreSQL:**
+### 2.1 Mechanism
+
+- **Durable tables** (database `aegis`, migration `000005_create_security_state.sql`):
+  - `principal_quarantines(principal_id PK, reason, created_by, created_at, expires_at)`
+  - `revoked_tokens(jti PK, reason, created_by, created_at, expires_at)`
+- **Write-through ordering:** quarantine, unquarantine and token-revocation handlers write Postgres first, then Redis. If Postgres fails, the call returns `503 DEPENDENCY_FAILURE` and nothing changed. If Postgres succeeds but Redis fails, the call also returns `503 DEPENDENCY_FAILURE`; the durable row exists and the next reconcile re-asserts it into Redis, so retrying the call is safe.
+- **Marker key:** `aegis:security-state:generation`. It has no TTL and is written only after a restore finishes (it is written last, so a failed restore leaves it absent). Gateways fail closed while it is missing.
+- **Reconstruct:** the control plane checks the marker every 2s. When it is missing (for example after a Redis wipe), the control plane reloads every unexpired row from both tables, writes each key with its remaining TTL, then writes the marker. On a first start with no marker it also imports pre-existing Redis quarantines and revocations into Postgres (backfill) before writing the marker.
+- **Reconcile:** every 30s the control plane re-asserts missing rows into Redis and prunes stray quarantine keys that have no Postgres row. Stray revoked-token (`revocation:jti:*`) keys are not pruned; they expire by their own TTL.
+
+### 2.2 What a Redis wipe looks like
+
+| Component | Symptom | Timing |
+|---|---|---|
+| Gateways | Protected requests are denied with `SECURITY_STATE_MISSING`; `/readyz` returns `503 SECURITY_STATE_MISSING` | About 1-3s (marker poll every 1s with a 200ms timeout; treated as missing after 3 stale intervals) |
+| Control plane | `/readyz` returns `503 SECURITY_STATE_MISSING` until reconstruct finishes (`503 DEPENDENCY_FAILURE` if Postgres is unreachable) | Detected within 2s |
+| Recovery | Control plane restores state and writes the marker; gateways become ready on their next poll | SLO: under 60s |
+
+### 2.3 Automatic recovery (normal path)
+
+No manual action is needed while the control plane is running and Postgres is reachable.
+
+1. Confirm the loss:
    ```bash
-   psql -h postgres -U aegis -d aegis_control -c "
-     SELECT principal_id, reason, GREATEST(EXTRACT(EPOCH FROM (expires_at - NOW())), 60)::int AS remaining_ttl
-     FROM principal_quarantines
-     WHERE expires_at > NOW();
-   " -A -F"," -t > active_quarantines.csv
+   redis-cli -h redis EXISTS aegis:security-state:generation
+   # 0 = marker missing; reconstruct pending or failing
    ```
-2. **Execute Pipelined Batch Reconstruction:**
-   Trigger the control plane DR reconstruction routine or execute via `redis-cli`:
+2. Watch the control plane become ready:
    ```bash
-   cat active_quarantines.csv | awk -F',' '{print "SET quarantine:principal:"$1" "$2" EX "$3}' | redis-cli -h redis --pipe
+   curl -i http://control-plane:8084/readyz
+   # 503 SECURITY_STATE_MISSING while restoring, 200 READY afterwards
    ```
-3. **Verify Restoration via Store API:**
+3. Confirm the reconstruct counter and the marker:
    ```bash
-   curl -s http://control-plane:8084/control/v1/quarantine | jq '.principals | length'
-   # Expected: Matches number of active records in PostgreSQL
+   curl -s http://control-plane:9092/metrics | grep aegis_securitystate_reconstruct_total
+   # result="ok" increments on success; result="error" means check Postgres and the control plane log
+   redis-cli -h redis EXISTS aegis:security-state:generation   # expected: 1
    ```
-4. **Allow Gateway Readiness Probes to Pass:**
+   (9092 is the default control plane metrics port; use your configured `AEGIS_METRICS_PORT`.)
+4. Verify the restored quarantines against Postgres:
    ```bash
-   # Gateways will query Redis CheckRevocation successfully and /readyz will return 200 OK
+   psql -h postgres -U aegis -d aegis -t -c \
+     "SELECT count(*) FROM principal_quarantines WHERE expires_at > NOW();"
+   curl -s http://control-plane:8084/control/v1/quarantine | jq '.quarantines | length'
+   # Expected: both counts match.
+   ```
+   The response shape is `{"quarantines":[{"principal_id","reason","status","quarantined_at","expires_at","actor"}]}`. There is no `principals` key. The endpoint needs an authenticated session with the `sec-ops`, `auditor` or `viewer` role.
+5. Verify gateways:
+   ```bash
    curl -i http://gateway:8080/readyz
-   # Expected: HTTP 200 OK {"status":"UP"}
+   # Expected: HTTP 200 once the marker is back
    ```
+
+### 2.4 Manual drill
+
+To rehearse recovery in a non-production environment, wipe Redis and time the recovery:
+
+```bash
+redis-cli -h redis FLUSHALL
+# Gateways answer SECURITY_STATE_MISSING within ~1-3s; the control plane restores within the 60s SLO.
+```
+
+Do not run this in production outside an announced drill: protected requests fail closed until the marker returns.
+
+### 2.5 Residual windows
+
+Two narrow windows exist and are both bounded by the 30s reconcile interval (see the header comment in `internal/control/securitystate.go`):
+- **Resurrection race:** a reconcile that read a quarantine row just before an unquarantine deleted it can re-create the Redis key; the next reconcile prunes it.
+- **Partial restore:** if Redis loses individual keys while the marker still exists (old marker, lost keys), those keys are re-asserted by the next reconcile, not by the marker check.
+
+### 2.6 Manual fallback (control plane cannot start)
+
+Prefer restarting the control plane. If that is impossible, rebuild by hand and write the marker last, only after every key is restored; otherwise gateways resume with incomplete state.
+
+```bash
+psql -h postgres -U aegis -d aegis -A -F"," -t -c "
+  SELECT principal_id, reason, GREATEST(EXTRACT(EPOCH FROM (expires_at - NOW())), 1)::int
+  FROM principal_quarantines WHERE expires_at > NOW();" > active_quarantines.csv
+# Quarantine keys are quarantine:principal:<principal_id>; revoked tokens are revocation:jti:<jti>
+# (restore the latter from revoked_tokens the same way, each with its remaining TTL).
+# Last step, only when everything above succeeded:
+redis-cli -h redis SET aegis:security-state:generation "manual-$(date -u +%FT%TZ)"
+```
 
 ---
 
@@ -140,7 +198,8 @@ kubectl rollout status statefulset/aegis-gateway -n aegis-system --timeout=180s
 ## 6. Post-Recovery Verification Checklist
 
 - [ ] All 3 gateway pods report `1/1 Running` and `readyz` returns 200 OK.
-- [ ] Redis contains all unexpired principal quarantines (`quarantine:principal:*`).
+- [ ] `redis-cli EXISTS aegis:security-state:generation` returns 1 and control plane `/readyz` returns 200.
+- [ ] `GET /control/v1/quarantine` `.quarantines | length` matches unexpired rows in `principal_quarantines`.
 - [ ] Active snapshot version in gateways strictly matches control plane published version.
 - [ ] Test mTLS request to backend microservices succeeds with HTTP 200 OK.
 - [ ] Audit worker cursor is actively advancing with 0 ingestion errors.
