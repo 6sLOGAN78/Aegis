@@ -253,4 +253,3 @@ func (r *SnapshotRepo) ListSnapshots(ctx context.Context) ([]*snapshotv1.Snapsho
 
 	return envelopes, nil
 }
-

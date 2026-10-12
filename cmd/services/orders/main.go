@@ -37,7 +37,7 @@ func HandleOrders(w http.ResponseWriter, r *http.Request) {
 	}
 
 	// Extract caller context if present
-	_ , _ = middleware.FromContext(r.Context())
+	_, _ = middleware.FromContext(r.Context())
 
 	w.Header().Set("Content-Type", "application/json")
 	_ = json.NewEncoder(w).Encode(sampleOrders)

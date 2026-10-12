@@ -149,4 +149,3 @@ func TestTokenValidator_MultiKeyRotation(t *testing.T) {
 	_, err = validator.ValidateBearerToken("Bearer " + noneSigned)
 	require.ErrorIs(t, err, ErrInvalidAlgorithm)
 }
-

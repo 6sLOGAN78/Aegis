@@ -8,8 +8,8 @@ import (
 	"fmt"
 	"net/http"
 	"net/http/httptest"
-	"strings"
 	"regexp"
+	"strings"
 	"testing"
 	"time"
 

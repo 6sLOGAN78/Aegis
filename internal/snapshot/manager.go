@@ -26,9 +26,9 @@ type ActiveState struct {
 // Manager manages live configuration snapshots on the gateway replica (CTRL-02, Invariant 9).
 // It coordinates out-of-band validation, in-memory precompilation, and lock-free atomic swaps.
 type Manager struct {
-	active              atomic.Pointer[ActiveState]
-	lastLeaseRenewedAt  atomic.Int64 // UnixNano
-	verifier            *Verifier
+	active             atomic.Pointer[ActiveState]
+	lastLeaseRenewedAt atomic.Int64 // UnixNano
+	verifier           *Verifier
 }
 
 // NewManager creates a new Manager configured with a snapshot Verifier.
@@ -74,7 +74,6 @@ func (m *Manager) LastLeaseRenewedAt() time.Time {
 	}
 	return time.Unix(0, nano)
 }
-
 
 // ValidateAndActivate validates an incoming snapshot envelope out-of-band, precompiles Rego policies,
 // constructs the new router, and performs a lock-free atomic swap to activate the new configuration.

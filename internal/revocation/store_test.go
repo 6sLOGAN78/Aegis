@@ -182,4 +182,3 @@ func TestReconstructQuarantines(t *testing.T) {
 	require.NoError(t, errOther)
 	assert.False(t, revokedOther)
 }
-

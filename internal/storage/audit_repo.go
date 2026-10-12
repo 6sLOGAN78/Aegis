@@ -136,7 +136,7 @@ WHERE timestamp >= $1 AND timestamp <= $2`
 	events := make([]controlv1.AuditEvent, 0, limit)
 	for rows.Next() {
 		var (
-			eventIDUUID, reqIDUUID openapi_types.UUID
+			eventIDUUID, reqIDUUID                                       openapi_types.UUID
 			eventType, principalID, serviceID, routeID, decision, reason string
 			principalKind, method, path                                  *string
 			rolesBytes                                                   []byte
@@ -240,7 +240,7 @@ LIMIT 1;`
 // GetAuditEvent retrieves a single audit event by its event ID.
 func (r *AuditRepo) GetAuditEvent(ctx context.Context, eventID string) (*controlv1.AuditEvent, error) {
 	var (
-		eventIDUUID, reqIDUUID openapi_types.UUID
+		eventIDUUID, reqIDUUID                                       openapi_types.UUID
 		eventType, principalID, serviceID, routeID, decision, reason string
 		principalKind, method, path                                  *string
 		rolesBytes                                                   []byte

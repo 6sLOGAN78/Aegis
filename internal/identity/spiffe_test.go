@@ -21,10 +21,10 @@ func parseURI(raw string) *url.URL {
 
 func TestSPIFFE_ExtractValid(t *testing.T) {
 	tests := []struct {
-		name          string
-		uri           string
-		trustDomain   string
-		expectedID    string
+		name        string
+		uri         string
+		trustDomain string
+		expectedID  string
 	}{
 		{
 			name:        "standard workload URI",
@@ -72,7 +72,7 @@ func TestSPIFFE_NilCert(t *testing.T) {
 
 func TestSPIFFE_MissingURI(t *testing.T) {
 	cert := &x509.Certificate{
-		Subject: pkix.Name{CommonName: "orders.aegis.local"},
+		Subject:  pkix.Name{CommonName: "orders.aegis.local"},
 		DNSNames: []string{"orders.aegis.local"},
 		URIs:     []*url.URL{},
 	}
