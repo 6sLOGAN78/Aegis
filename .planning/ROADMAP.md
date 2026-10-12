@@ -342,7 +342,7 @@ Plans:
 **Goal:** Rotation and DR code that today has only test callers runs in production. Covers B8: the gateway loads trusted keysets via AddTrustedKey/SetTrustedKeys (verifier.go) so signing keys rotate with zero downtime, and ReconstructQuarantines (store.go) runs at startup before readiness so quarantines survive a Redis loss. Also covers B2: the Kubernetes manifests run the current binaries (statefulset.yaml container port and probe paths match the real listeners and health endpoints, the audit spool uses a persistent volume instead of emptyDir, and configmap keys match the env vars the binaries read, e.g. AEGIS_WORKLOAD_ADDR). Full production K8S-01 (default-deny NetworkPolicies, topology spread) stays v2. Also covers CR-02 (accepted risk AR-01 in 10-SECURITY.md): the control-plane gRPC snapshot server (cmd/control-plane/main.go, `grpc.NewServer()` with no transport credentials) requires mTLS — server cert plus client-cert verification against the Aegis root CA (existing deployments/certs/gateway-server.*, gateway-client.*, root-ca.crt) — gateways dial with their client cert, and the GatewayId in Ack/Pong/heartbeats is bound to the authenticated client certificate identity (mismatch rejected), so an unauthenticated host can no longer spoof replica health, acks or staleness. Compose profiles, Kubernetes manifests and the smoke/integration tests are updated so all profiles run with the authenticated stream; a plaintext or wrong-CA client is rejected.
 **Requirements**: REV-03, AUTH-01, CTRL-02, CTRL-03, CTRL-05
 **Depends on:** Phase 10
-**Plans:** 14/15 plans executed
+**Plans:** 15/15 plans complete
 
 Plans:
 
@@ -377,7 +377,7 @@ Plans:
 
 **Wave 6** *(blocked on Wave 5 completion)*
 
-- [ ] 11-15-PLAN.md — Phase gate: full suite and live smoke on mvp, hardened, distributed
+- [x] 11-15-PLAN.md — Phase gate: full suite and live smoke on mvp, hardened, distributed
 
 **Cross-cutting constraints:**
 
