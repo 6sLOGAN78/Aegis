@@ -1,6 +1,15 @@
 // Package keyset loads a directory of Ed25519 public keys and keeps a
 // consumer's trusted set in sync with it (polling plus SIGHUP). Every regular
 // non-dot file in the directory is a key. A bad set never replaces a good one.
+//
+// Fail-safe trade-off (WR-05): a reload with any invalid file is rejected as a
+// whole, so a key removed in the same change (for example an emergency prune
+// of a compromised key) stays trusted until the directory is fixed. Partial
+// sets are deliberately not applied. Instead the condition is loud: every
+// rejected attempt logs the offending file, increments
+// aegis_keyset_reload_total{result="error"} and holds
+// aegis_keyset_reload_failing{family} at 1 until a reload succeeds, and
+// Failing reports it to callers.
 package keyset
 
 import (
@@ -43,6 +52,54 @@ type Reloader struct {
 	mu       sync.Mutex
 	lastHash [sha256.Size]byte
 	loaded   bool
+	loadedAt time.Time
+	// consecutive rejected reloads and when the current failure run started.
+	failures     int
+	failingSince time.Time
+	lastErr      error
+}
+
+// Failing reports whether the latest reload attempt was rejected, how many
+// attempts in a row have failed, and the last error. While failing, the
+// previously applied set (possibly including keys an operator removed) is
+// still trusted.
+func (r *Reloader) Failing() (failing bool, consecutive int, lastErr error) {
+	r.mu.Lock()
+	defer r.mu.Unlock()
+	return r.failures > 0, r.failures, r.lastErr
+}
+
+func (r *Reloader) setFailingGauge(v float64) {
+	if r.metrics != nil && r.metrics.KeysetReloadFailing != nil {
+		r.metrics.KeysetReloadFailing.WithLabelValues(r.family).Set(v)
+	}
+}
+
+// markFailed records a rejected reload. Called with r.mu held.
+func (r *Reloader) markFailed(err error) {
+	now := time.Now()
+	if r.failures == 0 {
+		r.failingSince = now
+	}
+	r.failures++
+	r.lastErr = err
+	r.count("error")
+	r.setFailingGauge(1)
+	if r.loaded {
+		log.Printf("keyset[%s]: RELOAD REJECTED (attempt %d in a row, failing for %s): %v; still trusting the last good set loaded at %s, so keys removed since then remain trusted until the directory is fixed",
+			r.family, r.failures, now.Sub(r.failingSince).Round(time.Second), err, r.loadedAt.UTC().Format(time.RFC3339))
+		return
+	}
+	log.Printf("keyset[%s]: load rejected (attempt %d in a row): %v", r.family, r.failures, err)
+}
+
+// markHealthy clears the failure state. Called with r.mu held.
+func (r *Reloader) markHealthy() {
+	if r.failures > 0 {
+		log.Printf("keyset[%s]: reload recovered after %d rejected attempt(s)", r.family, r.failures)
+	}
+	r.failures, r.lastErr, r.failingSince = 0, nil, time.Time{}
+	r.setFailingGauge(0)
 }
 
 // New creates a Reloader. family is "jwt" or "snapshot".
@@ -147,14 +204,14 @@ func (r *Reloader) count(result string) {
 }
 
 // Reload re-reads the directory and applies it when changed. On error the
-// previously applied set is retained.
+// previously applied set is retained and the failure is logged, counted and
+// reflected in aegis_keyset_reload_failing (WR-05).
 func (r *Reloader) Reload() error {
 	r.mu.Lock()
 	defer r.mu.Unlock()
 	es, err := readDir(r.dir)
 	if err != nil {
-		log.Printf("keyset[%s]: reload rejected, keeping last good set: %v", r.family, err)
-		r.count("error")
+		r.markFailed(err)
 		return err
 	}
 	h := sha256.New()
@@ -166,11 +223,13 @@ func (r *Reloader) Reload() error {
 	var sum [sha256.Size]byte
 	copy(sum[:], h.Sum(nil))
 	if r.loaded && sum == r.lastHash {
+		r.markHealthy()
 		r.count("unchanged")
 		return nil
 	}
 	r.apply(keys)
-	r.lastHash, r.loaded = sum, true
+	r.lastHash, r.loaded, r.loadedAt = sum, true, time.Now()
+	r.markHealthy()
 	r.count("ok")
 	if r.metrics != nil {
 		if r.metrics.KeysetKeys != nil {

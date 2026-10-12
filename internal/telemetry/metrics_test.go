@@ -300,6 +300,7 @@ func TestPhase11MetricsPreInitialised(t *testing.T) {
 		},
 		"aegis_keyset_keys":                                      {"family=jwt", "family=snapshot"},
 		"aegis_keyset_last_success_timestamp_seconds":            {"family=jwt", "family=snapshot"},
+		"aegis_keyset_reload_failing":                            {"family=jwt", "family=snapshot"},
 		"aegis_security_state_ready":                             {""},
 		"aegis_securitystate_reconstruct_total":                  {"result=ok", "result=error"},
 		"aegis_securitystate_last_reconstruct_timestamp_seconds": {""},

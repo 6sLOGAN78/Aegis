@@ -304,3 +304,52 @@ func val(w writer) float64 {
 	}
 	return m.Gauge.GetValue()
 }
+
+// WR-05: a prune shipped together with an invalid file is rejected as a whole
+// (no partial sets), so the removed key stays trusted. The condition must be
+// loud: the error names the offending file, every attempt is counted, and
+// aegis_keyset_reload_failing stays at 1 until a reload succeeds.
+func TestReloaderRejectedPruneIsReportedUntilFixed(t *testing.T) {
+	dir := t.TempDir()
+	compromised, _ := newKey(t)
+	good, _ := newKey(t)
+	writeKey(t, dir, "keyset.pub.0", compromised)
+	writeKey(t, dir, "keyset.pub.1", good)
+	s := &sink{}
+	m := telemetry.NewMetrics()
+	r := New("jwt", dir, time.Hour, s.apply, WithMetrics(m))
+	require.NoError(t, r.Load())
+	failing, n, _ := r.Failing()
+	assert.False(t, failing)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, 0.0, val(m.KeysetReloadFailing.WithLabelValues("jwt")))
+
+	// Operator prunes the compromised key, but an editor backup lands too.
+	require.NoError(t, os.Remove(filepath.Join(dir, "keyset.pub.0")))
+	require.NoError(t, os.WriteFile(filepath.Join(dir, "keyset.pub.1~"), []byte("garbage"), 0o600))
+
+	for i := 1; i <= 3; i++ {
+		err := r.Reload()
+		require.Error(t, err)
+		assert.Contains(t, err.Error(), "keyset.pub.1~", "error must name the offending file")
+		failing, n, lastErr := r.Failing()
+		assert.True(t, failing)
+		assert.Equal(t, i, n)
+		assert.Equal(t, err, lastErr)
+		assert.Equal(t, 1.0, val(m.KeysetReloadFailing.WithLabelValues("jwt")))
+		assert.Equal(t, float64(i), val(m.KeysetReloadTotal.WithLabelValues("jwt", "error")))
+	}
+	keys, _ := s.snapshot()
+	require.Len(t, keys, 2, "last good set (fail-safe) is kept, never a partial set")
+
+	// Fixing the directory applies the prune and clears the signal.
+	require.NoError(t, os.Remove(filepath.Join(dir, "keyset.pub.1~")))
+	require.NoError(t, r.Reload())
+	keys, _ = s.snapshot()
+	require.Len(t, keys, 1)
+	assert.True(t, keys[0].Equal(good))
+	failing, n, _ = r.Failing()
+	assert.False(t, failing)
+	assert.Equal(t, 0, n)
+	assert.Equal(t, 0.0, val(m.KeysetReloadFailing.WithLabelValues("jwt")))
+}

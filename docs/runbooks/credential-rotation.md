@@ -31,7 +31,8 @@
 4. **Keysets are directories.** Gateways read `AEGIS_JWT_KEYSET_DIR` and `AEGIS_SNAPSHOT_KEYSET_DIR`. Every regular file in the directory whose name does not start with `.` is one public key. Names are free-form: `keyset.pub.0`, `keyset.pub.1` and `current.pub` all work. Dot files (including Kubernetes `..data` symlink internals) and non-regular entries are ignored.
 5. **Reload behavior:**
    - The directory is re-read every `AEGIS_KEYSET_RELOAD_INTERVAL` (default 10s; values are clamped to 1s-10m; the compose profile uses 2s) and immediately on `SIGHUP`.
-   - If any file fails to parse, or the directory is empty, the whole reload is rejected and the **last good set stays in force**. The failure is logged and counted in `aegis_keyset_reload_total{family,result="error"}`.
+   - If any file fails to parse, or the directory is empty, the whole reload is rejected and the **last good set stays in force**. Partial sets are never applied. Every rejected attempt logs the offending file name (`keyset[<family>]: RELOAD REJECTED ...`), increments `aegis_keyset_reload_total{family,result="error"}`, and holds `aegis_keyset_reload_failing{family}` at `1` until a reload succeeds.
+   - **A rejected reload also blocks removals.** If a change prunes a key (routine phase 3 or an emergency cutoff) and the same or a later change leaves any bad entry in the directory (an editor backup such as `keyset.pub.1~`, a README, a half-written file), every gateway keeps trusting the removed key. Treat `aegis_keyset_reload_failing == 1` as an incident: alert on it (for example `max by (family) (aegis_keyset_reload_failing) == 1 for 2m`), and follow section 5.1.
 6. **Signers load private keys from files:** the control plane uses `AEGIS_SIGNING_KEY_PATH`, the demo issuer uses `AEGIS_ISSUER_PRIVATE_KEY_PATH`. A configured path that cannot be loaded is fatal at startup. The built-in demo seed (used only when the path is unset) is for development and must not run in production. Signers do not hot reload: switching a signer key means restarting that signer.
 7. **Required tooling:** `kubectl` authenticated to the cluster, `curl`, and `go` (to run the keypair generator from this repository).
 
@@ -186,7 +187,9 @@ kubectl get pods -n aegis-system -l app=aegis-gateway
 
 # 2. Keyset state (gateway metrics on :9091)
 curl -s http://gateway-replica-0:9091/metrics | grep -E 'aegis_keyset_(keys|reload_total|last_success_timestamp_seconds)'
-# Expected: keys count matches the phase you are in; reload_total{result="error"} not increasing
+curl -s http://gateway-replica-0:9091/metrics | grep aegis_keyset_reload_failing
+# Expected: keys count matches the phase you are in; reload_total{result="error"} not increasing;
+# aegis_keyset_reload_failing is 0 for both families on every replica (see 5.1 if not)
 
 # 3. Authentication status
 curl -s http://gateway-replica-0:9091/metrics | grep aegis_auth_verifications_total
@@ -201,6 +204,25 @@ curl -s http://gateway-replica-0:9091/metrics | grep aegis_snapshot_lease_valid
 # Must report 1
 ```
 
+### 5.1. Keyset reload is failing (`aegis_keyset_reload_failing == 1`)
+
+The gateway is still serving the **last good** key set. Any key removed since that set was loaded is still trusted.
+
+1. Find the offending file on an affected gateway:
+   ```bash
+   kubectl -n aegis-system logs aegis-gateway-0 -c gateway | grep 'RELOAD REJECTED' | tail -n 3
+   # The message names the file, for example: invalid key file "keyset.pub.1~"
+   kubectl -n aegis-system get configmap gateway-jwt-keyset gateway-snapshot-keyset -o yaml   # list the entries
+   ```
+2. Remove or fix that entry in the ConfigMap (Compose: in `deployments/keys/keyset-<family>/`). Every remaining entry must be a valid Ed25519 public key (PEM `PUBLIC KEY` or base64 of the 32 raw bytes). Keep at least one key.
+   ```bash
+   kubectl -n aegis-system create configmap gateway-jwt-keyset \
+     --from-file=keyset.pub.1=jwt-new.pub --dry-run=client -o yaml | kubectl apply -f -
+   ```
+3. Wait for the reload interval plus the kubelet sync period, or send `SIGHUP` to the gateway process.
+4. Confirm `aegis_keyset_reload_failing{family}` is `0` and `aegis_keyset_keys{family}` matches the intended set on **every** replica. The log line `keyset[<family>]: reload recovered after N rejected attempt(s)` marks the recovery.
+5. If the failure began during an emergency cutoff (section 6), the compromised key was trusted for the whole failing period. Include that window in the post-incident audit.
+
 ---
 
 ## 6. Emergency Key Compromise Fast-Path Invalidation
@@ -213,6 +235,7 @@ If an active signing key is compromised:
      --from-file=keyset.pub.0=emergency-new.pub --dry-run=client -o yaml | kubectl apply -f -
    ```
    Then switch the signer to the matching private key at once (section 4.1 phase 2).
+   Confirm `aegis_keyset_reload_failing{family} 0` and `aegis_keyset_keys{family} 1` on every gateway. A rejected reload keeps the compromised key trusted (section 5.1).
 2. **Quarantine affected principals:**
    ```bash
    curl -X POST http://control-plane:8084/control/v1/quarantine \

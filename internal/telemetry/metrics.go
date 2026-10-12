@@ -35,6 +35,7 @@ type Metrics struct {
 	KeysetReloadTotal                     *prometheus.CounterVec
 	KeysetKeys                            *prometheus.GaugeVec
 	KeysetLastSuccessTimestamp            *prometheus.GaugeVec
+	KeysetReloadFailing                   *prometheus.GaugeVec
 	SecurityStateReady                    prometheus.Gauge
 	SecurityStateReconstructTotal         *prometheus.CounterVec
 	SecurityStateLastReconstructTimestamp prometheus.Gauge
@@ -199,6 +200,13 @@ func NewMetrics() *Metrics {
 			},
 			[]string{"family"},
 		),
+		KeysetReloadFailing: prometheus.NewGaugeVec(
+			prometheus.GaugeOpts{
+				Name: "aegis_keyset_reload_failing",
+				Help: "1 while the latest keyset reload attempt for a family was rejected and the last good (possibly stale) set is still trusted, otherwise 0.",
+			},
+			[]string{"family"},
+		),
 		SecurityStateReady: prometheus.NewGauge(
 			prometheus.GaugeOpts{
 				Name: "aegis_security_state_ready",
@@ -249,6 +257,7 @@ func NewMetrics() *Metrics {
 		m.KeysetReloadTotal,
 		m.KeysetKeys,
 		m.KeysetLastSuccessTimestamp,
+		m.KeysetReloadFailing,
 		m.SecurityStateReady,
 		m.SecurityStateReconstructTotal,
 		m.SecurityStateLastReconstructTimestamp,
@@ -261,6 +270,7 @@ func NewMetrics() *Metrics {
 		}
 		m.KeysetKeys.WithLabelValues(fam).Set(0)
 		m.KeysetLastSuccessTimestamp.WithLabelValues(fam).Set(0)
+		m.KeysetReloadFailing.WithLabelValues(fam).Set(0)
 	}
 	for _, res := range reconstructResults {
 		m.SecurityStateReconstructTotal.WithLabelValues(res).Add(0)
