@@ -53,6 +53,8 @@ type SecurityStateRepository interface {
 const (
 	defaultReconcileInterval   = 30 * time.Second
 	defaultMarkerCheckInterval = 2 * time.Second
+	// backgroundReconstructTimeout bounds a marker-loss reconstruct (matches the startup bound).
+	backgroundReconstructTimeout = 30 * time.Second
 )
 
 // SecurityState reconstructs, reconciles and reports on Redis security state.
@@ -311,7 +313,11 @@ func (s *SecurityState) Run(ctx context.Context) {
 		case <-markerT.C:
 			s.checkMarker(ctx)
 		case <-reconT.C:
-			if err := s.Reconcile(ctx); err != nil && ctx.Err() == nil {
+			// Bound each pass: Reconcile holds the mutex that quarantine/revoke writes wait on.
+			rctx, cancel := context.WithTimeout(ctx, s.reconcileEvery)
+			err := s.Reconcile(rctx)
+			cancel()
+			if err != nil && ctx.Err() == nil {
 				log.Printf("security state reconcile failed: %v", err)
 				s.record(err)
 			}
@@ -330,7 +336,10 @@ func (s *SecurityState) checkMarker(ctx context.Context) {
 	if ready {
 		return
 	}
-	if err := s.Reconstruct(ctx); err != nil && ctx.Err() == nil {
+	// Bounded like the startup reconstruct, since writes wait on the same mutex.
+	rctx, cancel := context.WithTimeout(ctx, backgroundReconstructTimeout)
+	defer cancel()
+	if err := s.Reconstruct(rctx); err != nil && ctx.Err() == nil {
 		log.Printf("security state reconstruct failed: %v", err)
 	}
 }
