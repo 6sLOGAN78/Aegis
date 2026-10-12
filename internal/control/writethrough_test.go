@@ -6,8 +6,10 @@ import (
 	"errors"
 	"net/http"
 	"net/http/httptest"
+	"strings"
 	"testing"
 	"time"
+	"unicode/utf8"
 
 	"aegis/internal/storage"
 
@@ -192,4 +194,43 @@ func TestWriteThroughRequarantineSurvivesConcurrentReconcilePrune(t *testing.T) 
 	assert.True(t, e.redisK(key), "fresh re-quarantine must not be pruned by a concurrent reconcile")
 	assert.Contains(t, e.repo.q, "evil")
 	assert.Equal(t, "again", e.repo.q["evil"].Reason)
+}
+
+// WR-03: inputs that cannot fit the security-state schema, or whose TTL
+// would overflow, are rejected with 400 before any Postgres or Redis write.
+func TestWriteThroughRevokeRejectsOutOfBoundsInput(t *testing.T) {
+	e := newWTEnv(t)
+	long := strings.Repeat("j", maxJTILen+1)
+	rec := e.do(http.MethodPost, "/control/v1/revocations", `{"jti":"`+long+`","ttl_seconds":600}`)
+	assert.Equal(t, http.StatusBadRequest, rec.Code)
+	assert.Empty(t, e.repo.t)
+	assert.False(t, e.redisK("revocation:jti:"+long))
+
+	for _, ttl := range []string{"2592001", "9300000000", "9223372036854775807"} {
+		rec = e.do(http.MethodPost, "/control/v1/revocations", `{"jti":"abc","ttl_seconds":`+ttl+`}`)
+		assert.Equal(t, http.StatusBadRequest, rec.Code, "ttl_seconds=%s", ttl)
+	}
+	assert.Empty(t, e.repo.t)
+	assert.False(t, e.redisK("revocation:jti:abc"))
+
+	exact := strings.Repeat("j", maxJTILen)
+	rec = e.do(http.MethodPost, "/control/v1/revocations", `{"jti":"`+exact+`","ttl_seconds":2592000}`)
+	require.Equal(t, http.StatusOK, rec.Code)
+	require.Contains(t, e.repo.t, exact)
+	assert.True(t, e.repo.t[exact].ExpiresAt.After(time.Now().Add(29*24*time.Hour)))
+}
+
+func TestOperatorActorTruncatedToColumnWidth(t *testing.T) {
+	mk := func(name string) *http.Request {
+		r := httptest.NewRequest(http.MethodPost, "/", nil)
+		return r.WithContext(context.WithValue(r.Context(), SessionContextKey, &Session{Username: name}))
+	}
+	assert.Equal(t, "sec-ops", operatorActor(httptest.NewRequest(http.MethodPost, "/", nil)))
+	assert.Equal(t, "admin", operatorActor(mk("admin")))
+	got := operatorActor(mk(strings.Repeat("a", 100)))
+	assert.Len(t, got, maxActorLen)
+	// Multi-byte runes are never split.
+	got = operatorActor(mk(strings.Repeat("a", 63) + "éé"))
+	assert.Equal(t, strings.Repeat("a", 63), got)
+	assert.True(t, utf8.ValidString(got))
 }

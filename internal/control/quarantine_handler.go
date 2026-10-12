@@ -7,6 +7,7 @@ import (
 	"net/url"
 	"strings"
 	"time"
+	"unicode/utf8"
 
 	"aegis/internal/identity"
 	"aegis/internal/storage"
@@ -24,7 +25,32 @@ type RevokeTokenRequest struct {
 const (
 	quarantineTrustDomain = "aegis.local"
 	maxPrincipalIDLen     = 128
+	// maxJTILen matches revoked_tokens.jti VARCHAR(128) (WR-03).
+	maxJTILen = 128
+	// maxActorLen matches created_by VARCHAR(64) (WR-03).
+	maxActorLen = 64
+	// maxRevocationTTLSeconds bounds ttl_seconds (30 days) so the duration
+	// cannot overflow and the PG row's expires_at is never in the past.
+	maxRevocationTTLSeconds = 30 * 24 * 60 * 60
 )
+
+// operatorActor returns the session username used as created_by, truncated
+// at a UTF-8 boundary to fit created_by VARCHAR(64) so a long operator name
+// never turns every write into a 503 (WR-03).
+func operatorActor(r *http.Request) string {
+	actor := "sec-ops"
+	if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
+		actor = sess.Username
+	}
+	if len(actor) <= maxActorLen {
+		return actor
+	}
+	cut := maxActorLen
+	for cut > 0 && !utf8.RuneStart(actor[cut]) {
+		cut--
+	}
+	return actor[:cut]
+}
 
 // canonicalPrincipalID decodes (once) and validates an operator-supplied
 // principal id so the Redis key matches what the gateway checks. SPIFFE ids
@@ -150,10 +176,7 @@ func (s *APIServer) quarantineCore(w http.ResponseWriter, r *http.Request, princ
 		ttl = time.Until(*req.ExpiresAt)
 	}
 
-	actor := "sec-ops"
-	if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
-		actor = sess.Username
-	}
+	actor := operatorActor(r)
 
 	if msg := s.serialiseSecurityWrite(func() string {
 		if s.secRepo != nil {
@@ -241,6 +264,14 @@ func (s *APIServer) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", "JTI is required")
 		return
 	}
+	if len(req.JTI) > maxJTILen {
+		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("JTI must be at most %d bytes", maxJTILen))
+		return
+	}
+	if req.TTLSeconds > maxRevocationTTLSeconds {
+		writeErrorResponse(w, r, http.StatusBadRequest, "BAD_REQUEST", fmt.Sprintf("ttl_seconds must be at most %d", maxRevocationTTLSeconds))
+		return
+	}
 
 	ttl := 24 * time.Hour
 	if req.TTLSeconds > 0 {
@@ -249,10 +280,7 @@ func (s *APIServer) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 
 	if msg := s.serialiseSecurityWrite(func() string {
 		if s.secRepo != nil {
-			actor := "sec-ops"
-			if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
-				actor = sess.Username
-			}
+			actor := operatorActor(r)
 			reason := req.Reason
 			if reason == "" {
 				reason = "TOKEN_REVOKED"

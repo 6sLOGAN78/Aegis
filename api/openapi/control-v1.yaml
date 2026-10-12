@@ -1141,10 +1141,16 @@ components:
       properties:
         jti:
           type: string
+          minLength: 1
+          maxLength: 128
         reason:
           type: string
         ttl_seconds:
           type: integer
+          maximum: 2592000
+          description: >-
+            Revocation lifetime in seconds. Omitted or <= 0 uses the 24 hour
+            default; values above 2592000 (30 days) are rejected with 400.
 
     RevokeTokenResponse:
       type: object

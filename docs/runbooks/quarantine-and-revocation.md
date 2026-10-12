@@ -92,6 +92,7 @@ curl -s -X POST "${CP_URL}/control/v1/revocations" \
 ```
 
 - `ttl_seconds` defaults to 24 hours if omitted; set it at least as long as the remaining token lifetime.
+- `ttl_seconds` above 2592000 (30 days) and a `jti` longer than 128 bytes are rejected with `400 BAD_REQUEST` before anything is written.
 - Tokens that carry **no `jti`** are denied by the gateway with `401 TOKEN_MISSING_JTI`, so a revoked token cannot be replayed by stripping the claim.
 - Revoked jtis are enforced across all replicas within the 5 second convergence target (ADR-0005).
 
