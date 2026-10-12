@@ -187,3 +187,43 @@ func TestWriteKeypair(t *testing.T) {
 		t.Fatal("mode")
 	}
 }
+
+// WR-08: private keys end up 0600 even when the file already existed with a
+// looser mode (for example 0664 after a git checkout), both when rewritten
+// and when kept.
+func TestPrivateKeysTightenedTo0600(t *testing.T) {
+	out, keys := t.TempDir(), t.TempDir()
+	if err := run(out, keys); err != nil {
+		t.Fatal(err)
+	}
+	var privs []string
+	for _, dir := range []string{out, keys} {
+		m, err := filepath.Glob(filepath.Join(dir, "*.key"))
+		if err != nil {
+			t.Fatal(err)
+		}
+		privs = append(privs, m...)
+	}
+	if len(privs) < 10 {
+		t.Fatalf("expected generated private keys, got %v", privs)
+	}
+	for _, p := range privs {
+		if err := os.Chmod(p, 0664); err != nil {
+			t.Fatal(err)
+		}
+	}
+	if err := run(out, keys); err != nil {
+		t.Fatal(err)
+	}
+	for _, p := range privs {
+		if got := mode(t, p); got != 0600 {
+			t.Errorf("%s mode %o, want 0600", p, got)
+		}
+	}
+	for _, dir := range []string{out, keys} {
+		left, _ := filepath.Glob(filepath.Join(dir, ".*.tmp-*"))
+		if len(left) != 0 {
+			t.Errorf("temp files left behind: %v", left)
+		}
+	}
+}

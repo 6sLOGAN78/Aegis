@@ -27,8 +27,42 @@ func writeCertFile(path string, data []byte) error {
 	return os.WriteFile(path, data, 0644)
 }
 
+// writeKeyFile writes private key material with mode 0600. os.WriteFile only
+// applies the mode when it creates the file, so overwriting a key that was
+// checked out of git as 0664 would keep it group/world readable (WR-08).
+// Instead the data goes to a temp file in the same directory (created 0600)
+// that is renamed over the destination, and the final mode is enforced.
 func writeKeyFile(path string, data []byte) error {
-	return os.WriteFile(path, data, 0600)
+	tmp, err := os.CreateTemp(filepath.Dir(path), "."+filepath.Base(path)+".tmp-*")
+	if err != nil {
+		return err
+	}
+	tmpName := tmp.Name()
+	defer func() { _ = os.Remove(tmpName) }() // no-op after a successful rename
+	if err := tmp.Chmod(0600); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if _, err := tmp.Write(data); err != nil {
+		_ = tmp.Close()
+		return err
+	}
+	if err := tmp.Close(); err != nil {
+		return err
+	}
+	if err := os.Rename(tmpName, path); err != nil {
+		return err
+	}
+	return os.Chmod(path, 0600)
+}
+
+// restrictKeyFile tightens an existing private key (one the generator keeps
+// rather than rewrites) to 0600.
+func restrictKeyFile(path string) error {
+	if err := os.Chmod(path, 0600); err != nil {
+		return fmt.Errorf("restrict %s to 0600: %w", path, err)
+	}
+	return nil
 }
 
 // writeTLSPair writes <name>.crt (0644) and <name>.key (0600) into dir.
@@ -79,6 +113,9 @@ func loadOrCreateCA(outDir string) (*pki.CA, error) {
 		ca, err := pki.LoadCA(crt, key)
 		if err != nil {
 			return nil, fmt.Errorf("load existing root CA: %w", err)
+		}
+		if err := restrictKeyFile(keyPath); err != nil {
+			return nil, err
 		}
 		fmt.Println("  [=] Reusing existing Root CA (root-ca.crt, root-ca.key)")
 		return ca, nil
@@ -210,6 +247,11 @@ func writeKeys(keysDir string) error {
 	for _, p := range pairs {
 		k, pb := filepath.Join(keysDir, p.key), filepath.Join(keysDir, p.pub)
 		if fileExists(k) || fileExists(pb) {
+			if fileExists(k) {
+				if err := restrictKeyFile(k); err != nil {
+					return err
+				}
+			}
 			fmt.Printf("  [=] Keeping existing %s\n", p.key)
 			continue
 		}
