@@ -187,6 +187,13 @@ func (s *SnapshotDistributionServer) StreamSnapshots(stream snapshotv1.SnapshotD
 
 // GetActiveSnapshot returns the latest active snapshot envelope for cold-start initialization.
 func (s *SnapshotDistributionServer) GetActiveSnapshot(ctx context.Context, req *snapshotv1.GetActiveSnapshotRequest) (*snapshotv1.SnapshotEnvelope, error) {
+	// Same gateway identity gate as StreamSnapshots: any other cert from the root CA must not read policy.
+	if _, reason, idErr := gatewayIdentityFromContext(ctx); idErr != nil {
+		s.countRejection(reason)
+		log.Printf("control: rejected GetActiveSnapshot: %v", idErr)
+		return nil, idErr
+	}
+
 	s.mu.RLock()
 	defer s.mu.RUnlock()
 

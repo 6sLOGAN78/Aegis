@@ -227,3 +227,21 @@ func TestMTLS_NewServerTransportCredentials(t *testing.T) {
 	_, err = control.NewServerTransportCredentials(filepath.Join(dir, "server.crt"), filepath.Join(dir, "server.key"), bad)
 	assert.Error(t, err)
 }
+
+func TestMTLS_GetActiveSnapshotRequiresGatewayIdentity(t *testing.T) {
+	e := newMTLSEnv(t, true)
+	e.dist.BroadcastSnapshot(&snapshotv1.SnapshotEnvelope{Version: 1})
+	ctx, cancel := context.WithTimeout(context.Background(), 5*time.Second)
+	defer cancel()
+
+	// A workload cert from the same root CA is not a gateway and must not read the snapshot.
+	workload := e.pki.ClientCredsForSPIFFE("spiffe://aegis.local/ns/apps/sa/orders")
+	_, err := e.client(t, workload).GetActiveSnapshot(ctx, &snapshotv1.GetActiveSnapshotRequest{})
+	require.Error(t, err)
+	assert.Equal(t, codes.PermissionDenied, status.Code(err))
+	assert.Equal(t, 1.0, rejections(e, "invalid_identity"))
+
+	env, err := e.client(t, e.pki.ClientCreds("gateway-1")).GetActiveSnapshot(ctx, &snapshotv1.GetActiveSnapshotRequest{})
+	require.NoError(t, err)
+	assert.Equal(t, int64(1), env.GetVersion())
+}
