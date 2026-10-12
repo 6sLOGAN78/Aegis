@@ -79,24 +79,12 @@ func main() {
 		audience = "aegis-gateway"
 	}
 
-	pubKey := ed25519.PublicKey(ed25519.NewKeyFromSeed(defaultDemoSeed).Public().(ed25519.PublicKey))
-	if pubKeyB64 := os.Getenv("AEGIS_ISSUER_PUBLIC_KEY"); pubKeyB64 != "" {
-		if b, err := base64.StdEncoding.DecodeString(pubKeyB64); err == nil && len(b) == ed25519.PublicKeySize {
-			pubKey = ed25519.PublicKey(b)
-		} else {
-			log.Printf("Warning: failed to decode AEGIS_ISSUER_PUBLIC_KEY, using default demo key: %v", err)
-		}
-	}
-
-	// Pinned Control Plane Ed25519 Public Key (CTRL-02, Invariant 4); single-key
-	// fallback used only when AEGIS_SNAPSHOT_KEYSET_DIR is not configured.
-	controlPlanePubKey := pubKey
-	if cpKeyB64 := os.Getenv("AEGIS_CONTROL_PLANE_PUBLIC_KEY"); cpKeyB64 != "" {
-		if b, err := base64.StdEncoding.DecodeString(cpKeyB64); err == nil && len(b) == ed25519.PublicKeySize {
-			controlPlanePubKey = ed25519.PublicKey(b)
-		} else {
-			log.Printf("Warning: failed to decode AEGIS_CONTROL_PLANE_PUBLIC_KEY, using default demo key: %v", err)
-		}
+	// Single-key fallbacks, used only when the keyset dirs are not set. A
+	// configured but malformed key is fatal; the demo key is used only when
+	// nothing is configured (WR-04, D-09).
+	pubKey, controlPlanePubKey, err := loadSingleKeys(os.Getenv)
+	if err != nil {
+		log.Fatalf("Failed to load trusted public keys: %v", err)
 	}
 
 	snapVerifier := snapshot.NewVerifier(controlPlanePubKey)

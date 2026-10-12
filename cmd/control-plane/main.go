@@ -50,8 +50,9 @@ func loadGRPCCredentials(getenv func(string) string) (credentials.TransportCrede
 
 // loadSigningKey loads the snapshot signing key. A configured
 // AEGIS_SIGNING_KEY_PATH that cannot be loaded is an error (no fallback,
-// D-09). usedSeed is true only when the demo seed is used because nothing
-// was configured.
+// D-09), and so is a configured AEGIS_SIGNING_KEY_SEED shorter than
+// ed25519.SeedSize (WR-04). usedSeed is true only when the demo seed is used
+// because nothing was configured.
 func loadSigningKey(getenv func(string) string) (key ed25519.PrivateKey, usedSeed bool, err error) {
 	if keyPath := getenv("AEGIS_SIGNING_KEY_PATH"); keyPath != "" {
 		k, err := keyfile.LoadEd25519Private(keyPath)
@@ -61,9 +62,11 @@ func loadSigningKey(getenv func(string) string) (key ed25519.PrivateKey, usedSee
 		return k, false, nil
 	}
 	if seedStr := getenv("AEGIS_SIGNING_KEY_SEED"); seedStr != "" {
-		if seed := []byte(seedStr); len(seed) >= ed25519.SeedSize {
-			return ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]), false, nil
+		seed := []byte(seedStr)
+		if len(seed) < ed25519.SeedSize {
+			return nil, false, fmt.Errorf("AEGIS_SIGNING_KEY_SEED is set but has %d bytes, want at least %d", len(seed), ed25519.SeedSize)
 		}
+		return ed25519.NewKeyFromSeed(seed[:ed25519.SeedSize]), false, nil
 	}
 	return ed25519.NewKeyFromSeed(defaultDemoSeed), true, nil
 }
@@ -130,7 +133,7 @@ func main() {
 		log.Fatalf("Failed to load signing key: %v", err)
 	}
 	if usedSeed {
-		log.Printf("Warning: using demo signing seed (AEGIS_SIGNING_KEY_PATH not set); never use in production")
+		log.Printf("Warning: using demo signing seed (AEGIS_SIGNING_KEY_PATH and AEGIS_SIGNING_KEY_SEED not set); never use in production")
 	}
 
 	keyID := os.Getenv("AEGIS_SIGNING_KEY_ID")

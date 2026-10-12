@@ -13,6 +13,7 @@ import (
 	"google.golang.org/grpc/credentials"
 
 	"aegis/internal/identity"
+	"aegis/internal/keyfile"
 	"aegis/internal/keyset"
 	"aegis/internal/snapshot"
 	"aegis/internal/telemetry"
@@ -67,6 +68,29 @@ func setupKeysets(
 		log.Printf("Warning: AEGIS_SNAPSHOT_KEYSET_DIR not set; using single-key fallback (AEGIS_CONTROL_PLANE_PUBLIC_KEY or demo key) without rotation support")
 	}
 	return nil
+}
+
+// loadSingleKeys returns the single-key fallback trust anchors: the JWT
+// issuer key (AEGIS_ISSUER_PUBLIC_KEY) and the snapshot signing key
+// (AEGIS_CONTROL_PLANE_PUBLIC_KEY, defaulting to the issuer key). A variable
+// that is set but does not parse as an Ed25519 public key (PEM or base64) is
+// an error: falling back to the publicly known demo key on a typo would trust
+// tokens and snapshots signed by anyone with repo access (WR-04, D-09). The
+// demo key is used only when the variable is unset.
+func loadSingleKeys(getenv func(string) string) (issuer, controlPlane ed25519.PublicKey, err error) {
+	issuer = ed25519.NewKeyFromSeed(defaultDemoSeed).Public().(ed25519.PublicKey)
+	if v := getenv("AEGIS_ISSUER_PUBLIC_KEY"); v != "" {
+		if issuer, err = keyfile.ParseEd25519Public([]byte(v)); err != nil {
+			return nil, nil, fmt.Errorf("AEGIS_ISSUER_PUBLIC_KEY is set but invalid: %w", err)
+		}
+	}
+	controlPlane = issuer
+	if v := getenv("AEGIS_CONTROL_PLANE_PUBLIC_KEY"); v != "" {
+		if controlPlane, err = keyfile.ParseEd25519Public([]byte(v)); err != nil {
+			return nil, nil, fmt.Errorf("AEGIS_CONTROL_PLANE_PUBLIC_KEY is set but invalid: %w", err)
+		}
+	}
+	return issuer, controlPlane, nil
 }
 
 // resolveGatewayIdentity derives the gateway id from the control-plane client

@@ -110,6 +110,17 @@ func TestLoadSigningKeySeedAndDemo(t *testing.T) {
 	}
 }
 
+// WR-04: a configured seed shorter than ed25519.SeedSize is an error, never a
+// silent fall-through to the demo seed.
+func TestLoadSigningKeyShortSeedIsFatal(t *testing.T) {
+	for _, seed := range []string{"x", strings.Repeat("s", 31)} {
+		k, used, err := loadSigningKey(envFrom(map[string]string{"AEGIS_SIGNING_KEY_SEED": seed}))
+		if err == nil || used || k != nil {
+			t.Fatalf("seed len %d: expected error, got used=%v err=%v", len(seed), used, err)
+		}
+	}
+}
+
 func TestRequirePostgresFailureIsError(t *testing.T) {
 	boom := errors.New("boom")
 	_, err := requirePostgres(context.Background(), func(context.Context) (*int, error) { return nil, boom })
