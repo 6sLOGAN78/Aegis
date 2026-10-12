@@ -64,10 +64,17 @@ kubectl -n "$NS" create secret generic aegis-control-plane-signing-key \
   --from-file=snapshot-current.key="$KEYS/snapshot-current.key" --dry-run=client -o yaml | kubectl apply -f -
 
 # --- Secret: database credentials (control plane and audit-worker sidecar) ---
+# The password never appears in any argv (ps, /proc/<pid>/cmdline, exec
+# audit logs): it is written with the printf builtin into a 0600 file in a
+# 0700 temp dir and passed with --from-file, then removed on exit.
+DB_SECRET_DIR="$(umask 077 && mktemp -d)"
+trap 'rm -rf "$DB_SECRET_DIR"' EXIT
+(umask 077 && printf '%s' "$AEGIS_DB_PASSWORD" >"$DB_SECRET_DIR/AEGIS_DB_PASSWORD")
 kubectl -n "$NS" create secret generic aegis-db-credentials \
   --from-literal=AEGIS_DB_USER="$AEGIS_DB_USER" \
-  --from-literal=AEGIS_DB_PASSWORD="$AEGIS_DB_PASSWORD" \
+  --from-file=AEGIS_DB_PASSWORD="$DB_SECRET_DIR/AEGIS_DB_PASSWORD" \
   --dry-run=client -o yaml | kubectl apply -f -
+rm -rf "$DB_SECRET_DIR"
 
 # --- Secrets: backends ---
 kubectl -n "$APPS_NS" create secret generic aegis-backend-orders-tls \
