@@ -197,12 +197,20 @@ func (s *Store) ListQuarantined(ctx context.Context) ([]QuarantinedPrincipal, er
 		getCmds[i] = pipe.Get(ctx, key)
 		ttlCmds[i] = pipe.TTL(ctx, key)
 	}
-	// redis.Nil only means a key expired after SCAN; any other error must surface rather than read as TTL 0.
-	if _, err := pipe.Exec(ctx); err != nil && !errors.Is(err, redis.Nil) {
-		return nil, fmt.Errorf("failed to read quarantine state: %w", err)
-	}
+	// Exec reports only the first failed command, so a GET's redis.Nil (key expired after SCAN) could
+	// mask a real error; check every command and never let a failed read surface as TTL 0.
+	_, _ = pipe.Exec(ctx)
 
 	for i, key := range keys {
+		if err := getCmds[i].Err(); err != nil {
+			if errors.Is(err, redis.Nil) {
+				continue // key expired between SCAN and GET
+			}
+			return nil, fmt.Errorf("failed to read quarantine state: %w", err)
+		}
+		if err := ttlCmds[i].Err(); err != nil {
+			return nil, fmt.Errorf("failed to read quarantine TTL: %w", err)
+		}
 		principalID := strings.TrimPrefix(key, "quarantine:principal:")
 		reason := getCmds[i].Val()
 		ttl := ttlCmds[i].Val()
