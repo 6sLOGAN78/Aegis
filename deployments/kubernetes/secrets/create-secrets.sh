@@ -1,8 +1,12 @@
 #!/usr/bin/env bash
 # Creates the Secrets and ConfigMaps the Aegis manifests reference (Phase 11, D-20).
 #
-# Sources: deployments/certs and deployments/keys (generated dev material).
+# Sources: AEGIS_CERTS_DIR and AEGIS_KEYS_DIR, defaulting to the dev material
+# committed in deployments/certs and deployments/keys (D-24). The committed keys
+# are public to anyone with repo access: production MUST point both variables
+# at its own freshly generated material.
 # Usage:   AEGIS_DB_PASSWORD=... [AEGIS_DB_USER=aegis] [NS=aegis-system] [APPS_NS=aegis-apps] \
+#          [AEGIS_CERTS_DIR=/secure/certs] [AEGIS_KEYS_DIR=/secure/keys] \
 #          deployments/kubernetes/secrets/create-secrets.sh
 # Idempotent: every object goes through `--dry-run=client -o yaml | kubectl apply -f -`.
 set -euo pipefail
@@ -10,18 +14,72 @@ set -euo pipefail
 NS="${NS:-aegis-system}"
 APPS_NS="${APPS_NS:-aegis-apps}"
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
-CERTS="$ROOT/deployments/certs"
-KEYS="$ROOT/deployments/keys"
+DEV_CERTS="$ROOT/deployments/certs"
+DEV_KEYS="$ROOT/deployments/keys"
+CERTS="${AEGIS_CERTS_DIR:-$DEV_CERTS}"
+KEYS="${AEGIS_KEYS_DIR:-$DEV_KEYS}"
 : "${AEGIS_DB_PASSWORD:?set AEGIS_DB_PASSWORD}"
 AEGIS_DB_USER="${AEGIS_DB_USER:-aegis}"
 
-printf '\033[1m*** DEV KEYS ONLY: these objects come from deployments/certs and deployments/keys. Never use them in production. ***\033[0m\n' >&2
+for d in "$CERTS" "$KEYS"; do
+  [ -d "$d" ] || { echo "refusing to run: key material dir $d does not exist" >&2; exit 1; }
+done
+CERTS="$(cd "$CERTS" && pwd -P)"
+KEYS="$(cd "$KEYS" && pwd -P)"
 
-# Guard: the root CA private key is never packaged into any object.
-if grep -nE -e '--from-file=[^ ]*root-ca\.key' "${BASH_SOURCE[0]}" >/dev/null; then
-  echo "refusing to run: the root CA private key must never be packaged" >&2
-  exit 1
+if [ "$CERTS" = "$(cd "$DEV_CERTS" && pwd -P)" ] || [ "$KEYS" = "$(cd "$DEV_KEYS" && pwd -P)" ]; then
+  printf '\033[1m*** DEV KEYS ONLY: these objects come from the committed deployments/certs and deployments/keys, whose private keys anyone with repo access holds. Never use them in production: set AEGIS_CERTS_DIR and AEGIS_KEYS_DIR to your own material. ***\033[0m\n' >&2
+else
+  echo "Using key material from AEGIS_CERTS_DIR=$CERTS and AEGIS_KEYS_DIR=$KEYS" >&2
 fi
+
+# Every --from-file source below, split by destination. Keep these lists in
+# sync with the kubectl commands (tests/manifests enforces it).
+SECRET_INPUTS=(
+  "$CERTS/gateway-server.crt" "$CERTS/gateway-server.key"
+  "$CERTS/gateway-client.crt" "$CERTS/gateway-client.key"
+  "$CERTS/assertion-ed25519.key"
+  "$CERTS/cp-client-aegis-gateway-0.crt" "$CERTS/cp-client-aegis-gateway-0.key"
+  "$CERTS/cp-client-aegis-gateway-1.crt" "$CERTS/cp-client-aegis-gateway-1.key"
+  "$CERTS/cp-client-aegis-gateway-2.crt" "$CERTS/cp-client-aegis-gateway-2.key"
+  "$CERTS/control-plane-server.crt" "$CERTS/control-plane-server.key"
+  "$KEYS/snapshot-current.key"
+  "$CERTS/orders.crt" "$CERTS/orders.key"
+  "$CERTS/payments.crt" "$CERTS/payments.key"
+  "$CERTS/admin.crt" "$CERTS/admin.key"
+)
+CONFIGMAP_INPUTS=(
+  "$CERTS/root-ca.crt"
+  "$KEYS/keyset-jwt/current.pub"
+  "$KEYS/keyset-snapshot/current.pub"
+  "$CERTS/assertion-ed25519.pub"
+)
+
+# Guard: the root CA private key is never packaged into any object, and no
+# private key ever lands in a ConfigMap. Checks the actual inputs: by name,
+# by resolved path and by content against $CERTS/root-ca.key when present.
+ROOT_CA_KEY="$CERTS/root-ca.key"
+for f in "${SECRET_INPUTS[@]}" "${CONFIGMAP_INPUTS[@]}"; do
+  [ -r "$f" ] || { echo "refusing to run: missing or unreadable input $f" >&2; exit 1; }
+  real="$(cd "$(dirname "$f")" && pwd -P)/$(basename "$f")"
+  [ -L "$f" ] && real="$(readlink -f "$f")"
+  case "$(basename "$real")" in
+    root-ca\.key | *root-ca*.key)
+      echo "refusing to run: $f resolves to the root CA private key, which must never be packaged" >&2
+      exit 1
+      ;;
+  esac
+  if [ -f "$ROOT_CA_KEY" ] && cmp -s "$f" "$ROOT_CA_KEY"; then
+    echo "refusing to run: $f has the same content as the root CA private key" >&2
+    exit 1
+  fi
+done
+for f in "${CONFIGMAP_INPUTS[@]}"; do
+  if grep -q 'PRIVATE KEY' "$f"; then
+    echo "refusing to run: ConfigMap input $f contains a private key" >&2
+    exit 1
+  fi
+done
 
 # --- ConfigMaps (public material) ---
 kubectl -n "$NS" create configmap aegis-root-ca \

@@ -680,3 +680,42 @@ func TestSecretsScriptSyntax(t *testing.T) {
 	assert.GreaterOrEqual(t, creates, 11)
 	assert.Contains(t, s, "root-ca\\.key", "guard against packaging the root CA key must exist")
 }
+
+// WR-07: the root-CA / private-key guard in create-secrets.sh checks the
+// SECRET_INPUTS and CONFIGMAP_INPUTS lists, so every --from-file source of a
+// kubectl create command must be listed in the matching array, and the key
+// material dirs must be overridable.
+func TestSecretsScriptGuardCoversEveryInput(t *testing.T) {
+	data, err := os.ReadFile(filepath.Join(secretsDir, "create-secrets.sh"))
+	require.NoError(t, err)
+	s := string(data)
+	assert.Contains(t, s, `CERTS="${AEGIS_CERTS_DIR:-`)
+	assert.Contains(t, s, `KEYS="${AEGIS_KEYS_DIR:-`)
+
+	arrayBody := func(name string) string {
+		i := strings.Index(s, name+"=(")
+		require.GreaterOrEqual(t, i, 0, "%s array missing", name)
+		j := strings.Index(s[i:], "\n)")
+		require.Greater(t, j, 0)
+		return s[i : i+j]
+	}
+	secretInputs, cmInputs := arrayBody("SECRET_INPUTS"), arrayBody("CONFIGMAP_INPUTS")
+
+	srcRe := regexp.MustCompile(`--from-file=[^=\s]+="(\$(?:CERTS|KEYS)/[^"]+)"`)
+	flat := strings.ReplaceAll(s, "\\\n", " ")
+	checked := 0
+	for _, line := range strings.Split(flat, "\n") {
+		if !strings.Contains(line, "kubectl -n") || !strings.Contains(line, " create ") {
+			continue
+		}
+		list := cmInputs
+		if strings.Contains(line, "create secret") {
+			list = secretInputs
+		}
+		for _, m := range srcRe.FindAllStringSubmatch(line, -1) {
+			checked++
+			assert.Contains(t, list, `"`+m[1]+`"`, "%s is packaged but not covered by the guard", m[1])
+		}
+	}
+	assert.GreaterOrEqual(t, checked, 24)
+}
