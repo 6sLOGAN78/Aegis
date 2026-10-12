@@ -3,10 +3,19 @@ COMPOSE_HARDENED_FILE := deployments/compose/docker-compose.hardened.yml
 COMPOSE_DISTRIBUTED_FILE := deployments/compose/docker-compose.distributed.yml
 PROFILE ?= mvp
 
-.PHONY: certs test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down compose-test compose-smoke test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 manifest-build manifest-test help
+.DEFAULT_GOAL := help
+
+.PHONY: certs generate lint test test-quick test-security test-workload test-bypass test-phase2 test-full compose-build compose-up compose-down compose-test compose-smoke test-e2e up-hardened down-hardened test-failure distributed-up distributed-down distributed-logs distributed-status bench bench-k6 manifest-build manifest-test help
 
 certs:
 	go run ./scripts/certificates/main.go
+
+generate:
+	bash scripts/generate.sh
+
+lint:
+	@test -z "$$(git ls-files '*.go' | grep -v '^pkg/api/' | xargs gofmt -l)" || { echo "gofmt needed:"; git ls-files '*.go' | grep -v '^pkg/api/' | xargs gofmt -l; exit 1; }
+	go vet ./...
 
 test: test-quick
 
@@ -78,8 +87,8 @@ bench-k6:
 	docker run --rm -i --network host -v $(PWD)/benchmarks/k6:/scripts grafana/k6:latest run /scripts/distributed_cluster.js
 
 manifest-build:
-	docker run --rm -v $(PWD):/work -w /work bitnami/kubectl:latest kustomize build deployments/kubernetes/base > /dev/null
-	docker run --rm -v $(PWD):/work -w /work bitnami/kubectl:latest kustomize build deployments/kubernetes/overlays/production > /dev/null
+	docker run --rm -v $(PWD):/work -w /work bitnami/kubectl:latest kustomize deployments/kubernetes/base > /dev/null
+	docker run --rm -v $(PWD):/work -w /work bitnami/kubectl:latest kustomize deployments/kubernetes/overlays/production > /dev/null
 
 manifest-test:
 	go test -v ./tests/manifests/...
@@ -87,6 +96,8 @@ manifest-test:
 help:
 	@echo "Aegis Zero-Trust Access Gateway Automation Targets:"
 	@echo "  make certs              - Generate local development PKI certificates and assertion keys"
+	@echo "  make generate           - Regenerate pkg/api from api/proto and api/openapi"
+	@echo "  make lint               - gofmt check (non-generated code) and go vet"
 	@echo "  make test               - Run quick package and OPA policy unit tests"
 	@echo "  make test-quick         - Run quick internal/services tests and OPA policy tests"
 	@echo "  make test-security      - Run automated negative security test suite"
