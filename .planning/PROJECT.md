@@ -27,6 +27,8 @@ Default-deny, fail-closed authorization and workload authentication where invali
 - [x] Operator dashboard (React/TypeScript) and management REST APIs (`/control/v1`) with RBAC and CSRF protection — *Validated in Phase 4 (OPS-01..OPS-04)*
 - [x] Multi-replica distributed deployment behind a load balancer with convergence tracking and graceful drain — *Validated in Phase 5 (DIST-01, DIST-03)*
 - [x] Production hardening manifests (K8s PSS Restricted), zero-downtime key rotation drills, DR restore verification, and SRE runbooks — *Validated in Phase 6*
+- [x] Production wiring of key rotation and DR: gateway hot-reloads JWT/snapshot keysets from mounted dirs (no restart); quarantines and jti revocations are durable in Postgres, restored to Redis before readiness, with fail-closed `SECURITY_STATE_MISSING` while the marker is absent — *Validated in Phase 11 (REV-03, AUTH-01, CTRL-02, CTRL-03, CTRL-05; live compose + browser UAT)*
+- [x] Authenticated gateway↔control-plane gRPC stream: mTLS with client-cert verification, GatewayId bound to the cert SPIFFE `/gw/<id>`, non-gateway certs denied on every RPC — *Validated in Phase 11 (closes AR-01 / CR-02)*
 
 ### Active
 
@@ -86,4 +88,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-07 after Phase 6 completion*
+*Last updated: 2026-10-12 after Phase 11 completion (last v1.0 phase; live Kubernetes bring-up still pending in 11-HUMAN-UAT.md)*
