@@ -133,3 +133,22 @@ func resolveGatewayIdentity(getenv func(string) string) (string, credentials.Tra
 	}
 	return gatewayID, creds, nil
 }
+
+// loadAssertionKey returns the workload-assertion signing key. A configured
+// path or AEGIS_ASSERTION_PRIVATE_KEY that cannot be read or parsed is an
+// error; the demo seed is used only when neither is set (usedDemo=true).
+func loadAssertionKey(path string, getenv func(string) string) (key ed25519.PrivateKey, usedDemo bool, err error) {
+	if path != "" {
+		if key, err = keyfile.LoadEd25519Private(path); err != nil {
+			return nil, false, fmt.Errorf("assertion private key %s is configured but invalid: %w", path, err)
+		}
+		return key, false, nil
+	}
+	if v := getenv("AEGIS_ASSERTION_PRIVATE_KEY"); v != "" {
+		if key, err = keyfile.ParseEd25519Private([]byte(v)); err != nil {
+			return nil, false, fmt.Errorf("AEGIS_ASSERTION_PRIVATE_KEY is set but invalid: %w", err)
+		}
+		return key, false, nil
+	}
+	return ed25519.NewKeyFromSeed(defaultDemoSeed), true, nil
+}

@@ -2,11 +2,8 @@ package main
 
 import (
 	"context"
-	"crypto/ed25519"
 	"crypto/tls"
 	"crypto/x509"
-	"encoding/base64"
-	"encoding/pem"
 	"errors"
 	"fmt"
 	"log"
@@ -202,36 +199,12 @@ func main() {
 	}()
 
 	// Initialize Assertion Signing Key
-	var assertionPrivKey ed25519.PrivateKey
-	if cfg.AssertionPrivateKeyPath != "" {
-		keyBytes, err := os.ReadFile(cfg.AssertionPrivateKeyPath)
-		if err == nil {
-			block, _ := pem.Decode(keyBytes)
-			if block != nil {
-				keyBytes = block.Bytes
-			}
-			if len(keyBytes) == ed25519.PrivateKeySize {
-				assertionPrivKey = ed25519.PrivateKey(keyBytes)
-			} else if b, err := base64.StdEncoding.DecodeString(strings.TrimSpace(string(keyBytes))); err == nil && len(b) == ed25519.PrivateKeySize {
-				assertionPrivKey = ed25519.PrivateKey(b)
-			} else if parsedKey, err := x509.ParsePKCS8PrivateKey(keyBytes); err == nil {
-				if edKey, ok := parsedKey.(ed25519.PrivateKey); ok {
-					assertionPrivKey = edKey
-				}
-			}
-		} else {
-			log.Printf("Warning: failed to read assertion private key from %s: %v", cfg.AssertionPrivateKeyPath, err)
-		}
+	assertionPrivKey, usedDemoAssertionKey, err := loadAssertionKey(cfg.AssertionPrivateKeyPath, os.Getenv)
+	if err != nil {
+		log.Fatalf("Failed to load assertion signing key: %v", err)
 	}
-	if assertionPrivKey == nil {
-		if b64 := os.Getenv("AEGIS_ASSERTION_PRIVATE_KEY"); b64 != "" {
-			if b, err := base64.StdEncoding.DecodeString(b64); err == nil && len(b) == ed25519.PrivateKeySize {
-				assertionPrivKey = ed25519.PrivateKey(b)
-			}
-		}
-	}
-	if assertionPrivKey == nil {
-		assertionPrivKey = ed25519.NewKeyFromSeed(defaultDemoSeed)
+	if usedDemoAssertionKey {
+		log.Printf("Warning: no assertion private key configured; using the demo key (dev only)")
 	}
 	assertionMinter := identity.NewAssertionMinter(assertionPrivKey)
 
