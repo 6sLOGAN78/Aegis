@@ -50,6 +50,10 @@ findings:
   info: 6
   total: 17
 status: issues_found
+fix_scope: critical_warning
+fix_status: all_fixed
+fixed: 11
+skipped: 0
 ---
 
 # Phase 11: Code Review Report
@@ -58,6 +62,24 @@ status: issues_found
 **Depth:** standard
 **Files Reviewed:** 40
 **Status:** issues_found
+
+## Fix Outcomes
+
+Scope: Critical + Warning. Info findings (IN-01..IN-06) were out of scope and are left open.
+
+| Finding | Outcome | Commit |
+|---------|---------|--------|
+| CR-01 | fixed: `GetActiveSnapshot` requires gateway identity | 341b8d5 |
+| WR-01 | fixed: write-through serialised with Reconcile under the SecurityState mutex; regression test; multi-replica gap documented in `internal/control/securitystate.go` | 2ada0e2 |
+| WR-02 | fixed: per-command error checks in `ListQuarantined` | f4ba125 |
+| WR-03 | fixed: jti <= 128 and ttl_seconds <= 2592000 rejected with 400 before any write; created_by truncated to 64 bytes; OpenAPI schema updated | b598012 |
+| WR-04 | fixed: malformed configured gateway public keys and a short `AEGIS_SIGNING_KEY_SEED` are fatal; demo fallback only when unset | 3889925 |
+| WR-05 | fixed (fail-safe kept): rejected reloads log the offending file on every attempt, count errors, and set `aegis_keyset_reload_failing`; runbook section 5.1. Partial sets are still never applied. | 4591e4f |
+| WR-06 | fixed: DB password passed via a 0600 temp file and `--from-file` | 41e06da |
+| WR-07 | fixed (partial by design): dev keys stay tracked per D-24; `AEGIS_CERTS_DIR`/`AEGIS_KEYS_DIR` overrides, a real input guard, and a prominent README warning were added | 4f48ec8 |
+| WR-08 | fixed: private keys written via 0600 temp file + rename; kept keys tightened to 0600 | 63ffb18 |
+| WR-09 | fixed: half-present pairs derive the missing public key or fail; mismatched pairs fail | b63447c |
+| WR-10 | fixed: `KEYS_BACKUP` deleted only after a fully successful restore | a1c58f5 |
 
 ## Narrative Findings (AI reviewer)
 
@@ -84,6 +106,8 @@ Known and tracked items are not repeated here: Postgres TLS, the DEDUPE flake, t
 
 ### CR-01: `GetActiveSnapshot` has no gateway identity binding, so any CA-issued client cert can read the full snapshot
 
+**Outcome:** fixed in 341b8d5
+
 **File:** `internal/control/server.go:189-198` (with `cmd/control-plane/main.go:347`)
 **Issue:** Phase 11 added `gatewayIdentityFromContext` and calls it only in `StreamSnapshots` (line 85). `GetActiveSnapshot` is registered on the same gRPC server with no interceptor, so it only needs the transport-level `RequireAndVerifyClientCert` against `AEGIS_GRPC_CLIENT_CA_PATH`. In every profile, that CA is the shared `root-ca.crt`, which also issues `workload-orders.crt` (`spiffe://aegis.local/workload/orders`, ClientAuth EKU) and `gateway-client.crt`. A workload pod, or anyone holding a workload key, can therefore call `GetActiveSnapshot` and receive every route, Rego policy module and identity mapping. The `/gw/<id>` restriction the phase claims (CTRL-03/CTRL-05, D-14) is bypassed through the unary RPC. `aegis_grpc_identity_rejections_total` never counts these calls.
 **Fix:** Enforce identity on every RPC with server interceptors so new RPCs cannot skip it:
@@ -102,6 +126,8 @@ A stronger option is to add `grpc.ChainUnaryInterceptor` and `grpc.ChainStreamIn
 
 ### WR-01: Reconcile prune can delete a freshly re-applied quarantine (fail-open window not covered by the documented trade-off)
 
+**Outcome:** fixed in 2ada0e2 (serialised in-process; multi-replica control planes still need a cross-replica guard, see the securitystate.go header)
+
 **File:** `internal/control/securitystate.go:229-271`
 **Issue:** Reconcile takes the Redis snapshot (`redisQ`) first, then lists PG rows at line 255, then deletes every key in `redisQ` that has no row. Consider this interleaving:
 1. Redis snapshot contains K.
@@ -114,6 +140,8 @@ K then stays unquarantined until the next reconcile, up to 30s. The header comme
 **Fix:** Before deleting a stray key, re-check the PG row for that principal, for example with `GetQuarantine(ctx, id)` or a `SELECT 1 ... WHERE principal_id=$1 AND expires_at>NOW()`. Alternatively, delete atomically only if the value or generation still matches the snapshot: store a per-write nonce as the Redis value and use a Lua compare-and-delete. At minimum, document this fail-open direction next to the resurrection note.
 
 ### WR-02: `ListQuarantined` treats a whole-pipeline `redis.Nil` as success, which can hide real errors and turn TTL into 0
+
+**Outcome:** fixed in f4ba125
 
 **File:** `internal/revocation/store.go:199-220`
 **Issue:** `pipe.Exec` returns the first failed command's error. If an early `GET` returns `redis.Nil` because a key expired between SCAN and GET, any later command failure (connection reset, timeout, OOM) is hidden. Those commands report `Val()==0`, so `TTL` is 0, not -2, and the entry is returned with `TTL: 0`. In `backfillFromRedis` (securitystate.go:197-199), `ttl <= 0` becomes 24h. A long-running quarantine (for example 30 days) is then written to Postgres with a 24h expiry, and that PG row becomes the source of truth. The quarantine is silently shortened. The comment on `backfillFromRedis` says TTL read errors are "never swallowed", which is not true on this path.
@@ -134,6 +162,8 @@ Also, in backfill, skip `ttl == 0` instead of promoting it to 24h. Keep the 24h 
 
 ### WR-03: Revocation and quarantine inputs are not validated against the new schema limits; TTL can overflow
 
+**Outcome:** fixed in b598012
+
 **File:** `internal/control/quarantine_handler.go:221-254`, `internal/control/quarantine_handler.go:140-151`, `migrations/000005_create_security_state.sql:4,11,13`
 **Issue:**
 - `revoked_tokens.jti` is `VARCHAR(128)`, but `HandleRevokeToken` only checks `JTI == ""`. Any jti longer than 128 characters now fails the PG write and returns a misleading `503 DEPENDENCY_FAILURE`, so the token cannot be revoked. Before this phase the Redis-only path accepted it.
@@ -143,6 +173,8 @@ Also, in backfill, skip `ttl == 0` instead of promoting it to 24h. Keep the 24h 
 **Fix:** Validate before any write: `len(req.JTI) <= 128` (400 otherwise), clamp `TTLSeconds` to a sane maximum (for example 30 days or the max token lifetime) and reject values above it, and truncate or validate `actor` to 64 characters, or widen the column to `TEXT`. Also return 400, not 503, for constraint violations.
 
 ### WR-04: Single-key fallbacks still fail open to the publicly known demo key on a parse error
+
+**Outcome:** fixed in 3889925
 
 **File:** `cmd/gateway/main.go:83-100`, `cmd/control-plane/main.go:63-68`
 **Issue:** Phase 11 introduced `internal/keyfile`, whose contract is "never falls back to a default key", and D-09 (a configured key that fails to load is an error). Both binaries still have these paths:
@@ -154,11 +186,15 @@ These paths are dormant only when the keyset dirs and the key path are set, as i
 
 ### WR-05: Keyset "keep last good" policy can keep a removed (compromised) key trusted indefinitely
 
+**Outcome:** fixed in 4591e4f (made loud and observable; the keep-last-good semantics are intentionally unchanged)
+
 **File:** `internal/keyset/reloader.go:80-121,146-160`
 **Issue:** Any unreadable or unparseable file makes `readDir` fail the whole reload, and the previous set is kept. This includes editor backups such as `next.pub~`, a `README`, a half-written file, or a non-key entry added to the ConfigMap. If an operator prunes a compromised key and the same ConfigMap update (or a later one) contains one bad entry, every gateway keeps trusting the compromised key. The only signals are a log line and `aegis_keyset_reload_total{result="error"}`. The emergency-revocation step of the rotation runbook fails open without any visible failure.
 **Fix:** Treat removals separately from parse failures. For example, apply the intersection of the last good set and the currently present valid files when the reload is partial, so a key whose file was deleted is always dropped. Alternatively, ignore files that do not match an explicit pattern such as `*.pub` or `keyset.pub.*`, and make `/readyz` or an alert fire when the reload error state persists.
 
 ### WR-06: Database password passed on the kubectl command line
+
+**Outcome:** fixed in 41e06da
 
 **File:** `deployments/kubernetes/secrets/create-secrets.sh:66-70`
 **Issue:** `--from-literal=AEGIS_DB_PASSWORD="$AEGIS_DB_PASSWORD"` puts the password in kubectl's argv. Any local user can read it through `ps` or `/proc/<pid>/cmdline`, and audit or exec loggers can record it.
@@ -172,11 +208,15 @@ kubectl -n "$NS" create secret generic aegis-db-credentials \
 
 ### WR-07: New private keys committed to git and the only Kubernetes provisioning path packages them
 
+**Outcome:** fixed in 4f48ec8 (committed dev keys intentionally remain tracked per D-24; untracking and .gitignore were not applied)
+
 **File:** `deployments/kubernetes/secrets/create-secrets.sh:12-14,40-64`, `deployments/keys/jwt-current.key`, `deployments/keys/snapshot-current.key`, `deployments/certs/cp-client-*.key`, `deployments/certs/control-plane-server.key`
 **Issue:** This phase commits the JWT signing key, the snapshot signing key, all control-plane client keys and the control-plane server key. The repo has no `.gitignore`. `root-ca.key` was already tracked before this phase. `create-secrets.sh` hard-codes `CERTS`/`KEYS` to these tracked directories and has no override, so every cluster built with the base kustomization trusts keys that anyone with repo read access holds. With them, someone can forge user JWTs and signed snapshots, and mint `/gw/` client certs from the committed root CA. The "DEV KEYS ONLY" banner is the only guard. The root-CA guard (lines 20-24) greps the script's own text, so it can never detect a real packaging mistake made elsewhere.
 **Fix:** Add `CERTS_DIR`/`KEYS_DIR` overrides and refuse to run against the tracked defaults unless `AEGIS_ALLOW_DEV_KEYS=1` is set. Untrack the `*.key` files and add a `.gitignore`. Have `scripts/certificates` generate the keys locally instead. Replace the self-grep guard with a real check, for example asserting that no generated object contains the root CA key bytes.
 
 ### WR-08: Generator writes keys with 0600 but never fixes the mode of existing files
+
+**Outcome:** fixed in 63ffb18
 
 **File:** `scripts/certificates/main.go:30-32,35-47`
 **Issue:** `os.WriteFile(path, data, 0600)` applies the mode only when it creates the file. All `*.key` files are tracked in git and are checked out as 0664 (confirmed on disk: `deployments/certs/*.key` and `deployments/keys/*.key` are `rw-rw-r--`). Re-running the generator overwrites the contents and leaves them group- and world-readable. Compose then bind-mounts them read-only, keeping the same modes.
@@ -184,11 +224,15 @@ kubectl -n "$NS" create secret generic aegis-db-credentials \
 
 ### WR-09: `writeKeys` skips regeneration when only one half of a pair exists, leaving a mismatched or missing public key
 
+**Outcome:** fixed in b63447c
+
 **File:** `scripts/certificates/main.go:210-219`
 **Issue:** `if fileExists(k) || fileExists(pb) { keep }`. If `jwt-current.key` exists but `keyset-jwt/current.pub` was deleted, nothing is written. The gateway keyset dir is then empty, so the gateway fails at startup with "keyset dir contains no keys". If only the `.pub` survives and the private key was lost, the issuer has no key at all. In both cases the generator prints "Keeping existing", which hides the inconsistency.
 **Fix:** If the private key exists, derive the public key from it (`priv.Public()`) and rewrite `current.pub` when it is missing or does not match. If only the public key exists, fail with an explicit error.
 
 ### WR-10: Smoke `restore_keys` deletes the backup even when the restore failed
+
+**Outcome:** fixed in a1c58f5
 
 **File:** `scripts/compose-smoke.sh:385-422`
 **Issue:** Each restore step only prints `WARN: could not restore ...` on failure. Line 420 then runs `rm -rf "${KEYS_BACKUP}"` unconditionally. If a restore fails (disk full, permissions, or a `cp` glob failure after `rm -f "${KEYS_DIR}/${fam}"/*` already emptied the keyset dir), the only copy of the original keys is destroyed. The stack is left with the rotation-drill keys, or an empty keyset dir that fails gateways closed at the next restart. When `AEGIS_KEYS_DIR` points outside the git tree, this cannot be recovered.
