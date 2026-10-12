@@ -2,10 +2,14 @@ package control
 
 import (
 	"bytes"
+	"context"
 	"errors"
 	"net/http"
 	"net/http/httptest"
 	"testing"
+	"time"
+
+	"aegis/internal/storage"
 
 	"github.com/google/uuid"
 	"github.com/stretchr/testify/assert"
@@ -107,4 +111,85 @@ func TestWriteThroughRevokePGFirst(t *testing.T) {
 	rec = e.do(http.MethodPost, "/control/v1/revocations", `{"jti":"abc","ttl_seconds":600}`)
 	assert.Equal(t, http.StatusOK, rec.Code)
 	assert.True(t, e.redisK("revocation:jti:abc"))
+}
+
+// hookedListRepo lets a test run code in the middle of the prune-side
+// ListUnexpiredQuarantines call of Reconcile (the second call per pass).
+type hookedListRepo struct {
+	*fakeSecRepo
+	calls int
+	hook  func(list func() []storage.QuarantineRecord) []storage.QuarantineRecord
+}
+
+func (h *hookedListRepo) ListUnexpiredQuarantines(ctx context.Context) ([]storage.QuarantineRecord, error) {
+	h.calls++
+	if h.hook != nil && h.calls == 2 {
+		hook := h.hook
+		h.hook = nil
+		return hook(func() []storage.QuarantineRecord {
+			out, _ := h.fakeSecRepo.ListUnexpiredQuarantines(ctx)
+			return out
+		}), nil
+	}
+	return h.fakeSecRepo.ListUnexpiredQuarantines(ctx)
+}
+
+// TestWriteThroughRequarantineSurvivesConcurrentReconcilePrune reproduces
+// WR-01: Reconcile snapshots Redis (K present), an operator unquarantines K,
+// Reconcile lists Postgres (K absent), the operator re-quarantines K (200),
+// and the prune then deletes the fresh Redis key. With the write-through
+// serialised against Reconcile, the operator writes wait for the pass to
+// finish and K stays quarantined.
+func TestWriteThroughRequarantineSurvivesConcurrentReconcilePrune(t *testing.T) {
+	e := newWTEnv(t)
+	repo := &hookedListRepo{fakeSecRepo: e.repo}
+	ss := NewSecurityState(repo, e.h.server.revStore)
+	e.h.server.SetSecurityState(ss)
+	ctx := context.Background()
+	require.NoError(t, ss.Reconstruct(ctx))
+
+	const key = "quarantine:principal:evil"
+	require.Equal(t, http.StatusOK, e.do(http.MethodPost, "/control/v1/principals/evil/quarantine", `{"reason":"x"}`).Code)
+	require.True(t, e.redisK(key))
+
+	unqDone := make(chan struct{})
+	listed := make(chan struct{})
+	opsDone := make(chan [2]int, 1)
+	repo.calls = 0
+	repo.hook = func(list func() []storage.QuarantineRecord) []storage.QuarantineRecord {
+		go func() {
+			c1 := e.do(http.MethodDelete, "/control/v1/principals/evil/quarantine", "").Code
+			close(unqDone)
+			<-listed
+			c2 := e.do(http.MethodPost, "/control/v1/principals/evil/quarantine", `{"reason":"again"}`).Code
+			opsDone <- [2]int{c1, c2}
+		}()
+		// Unserialised, the unquarantine completes here; serialised, it
+		// blocks on the SecurityState mutex until Reconcile returns.
+		select {
+		case <-unqDone:
+		case <-time.After(300 * time.Millisecond):
+		}
+		rows := list()
+		close(listed)
+		select {
+		case codes := <-opsDone:
+			opsDone <- codes
+		case <-time.After(300 * time.Millisecond):
+		}
+		return rows
+	}
+
+	require.NoError(t, ss.Reconcile(ctx))
+
+	var codes [2]int
+	select {
+	case codes = <-opsDone:
+	case <-time.After(5 * time.Second):
+		t.Fatal("operator writes did not complete")
+	}
+	assert.Equal(t, [2]int{http.StatusOK, http.StatusOK}, codes)
+	assert.True(t, e.redisK(key), "fresh re-quarantine must not be pruned by a concurrent reconcile")
+	assert.Contains(t, e.repo.q, "evil")
+	assert.Equal(t, "again", e.repo.q["evil"].Reason)
 }

@@ -11,6 +11,21 @@ package control
 // race (a Reconcile that read a row just before an unquarantine deleted it)
 // and the partial-restore window (old marker, lost keys) are therefore both
 // bounded by the reconcile interval.
+//
+// The opposite, fail-open race (WR-01) is closed within one process: Reconcile
+// snapshots Redis, lists Postgres and then prunes Redis keys without a row, so
+// an unquarantine + re-quarantine landing between the list and the prune would
+// have its fresh Redis key deleted. The HTTP write-through handlers therefore
+// run their Postgres+Redis writes via SerialiseWrite, under the same mutex as
+// Reconstruct and Reconcile, so no write can interleave with a reconcile pass.
+//
+// Remaining gap for multi-replica control planes: the mutex is per process.
+// With several control-plane replicas, a write handled by replica A can still
+// interleave with a Reconcile on replica B and lose a fresh quarantine key
+// until the next reconcile (bounded by the reconcile interval). Closing that
+// needs a cross-replica guard, for example a Postgres advisory lock held by
+// both the write-through path and Reconcile, or a per-write generation stored
+// as the Redis value and pruned only with a compare-and-delete.
 
 import (
 	"context"
@@ -51,7 +66,7 @@ type SecurityState struct {
 	clock          func() time.Time
 	metrics        *telemetry.Metrics
 
-	mu           sync.Mutex // serialises Reconstruct / Reconcile
+	mu           sync.Mutex // serialises Reconstruct / Reconcile / SerialiseWrite
 	backfillDone atomic.Bool
 }
 
@@ -221,6 +236,16 @@ func (s *SecurityState) backfillFromRedis(ctx context.Context) error {
 		}
 	}
 	return nil
+}
+
+// SerialiseWrite runs fn while holding the mutex that Reconstruct and
+// Reconcile hold, so an operator write-through (Postgres then Redis) can
+// never interleave with a reconcile pass and have its fresh Redis key pruned
+// (WR-01). fn must not call Reconstruct or Reconcile.
+func (s *SecurityState) SerialiseWrite(fn func()) {
+	s.mu.Lock()
+	defer s.mu.Unlock()
+	fn()
 }
 
 // Reconcile heals Redis from Postgres: deletes expired rows, re-asserts all

@@ -82,6 +82,19 @@ func pathPrincipalID(r *http.Request) string {
 	return id
 }
 
+// serialiseSecurityWrite runs a Postgres-then-Redis write-through under the
+// SecurityState mutex (when wired) so it cannot interleave with Reconcile's
+// list-then-prune and lose a fresh quarantine (WR-01). fn returns an error
+// message for a 503 response, or "" on success.
+func (s *APIServer) serialiseSecurityWrite(fn func() string) string {
+	if s.secState == nil {
+		return fn()
+	}
+	var msg string
+	s.secState.SerialiseWrite(func() { msg = fn() })
+	return msg
+}
+
 // HandleQuarantinePrincipal pushes an immediate principal block to Redis (<5s propagation).
 // It serves both POST /principals/{id}/quarantine and the body form POST /quarantine.
 func (s *APIServer) HandleQuarantinePrincipal(w http.ResponseWriter, r *http.Request) {
@@ -142,21 +155,24 @@ func (s *APIServer) quarantineCore(w http.ResponseWriter, r *http.Request, princ
 		actor = sess.Username
 	}
 
-	if s.secRepo != nil {
-		if err := s.secRepo.UpsertQuarantine(r.Context(), storage.QuarantineRecord{
-			PrincipalID: principalID, Reason: req.Reason, CreatedBy: actor,
-			CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(ttl),
-		}); err != nil {
-			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to persist quarantine")
-			return
+	if msg := s.serialiseSecurityWrite(func() string {
+		if s.secRepo != nil {
+			if err := s.secRepo.UpsertQuarantine(r.Context(), storage.QuarantineRecord{
+				PrincipalID: principalID, Reason: req.Reason, CreatedBy: actor,
+				CreatedAt: time.Now().UTC(), ExpiresAt: time.Now().UTC().Add(ttl),
+			}); err != nil {
+				return "Failed to persist quarantine"
+			}
 		}
-	}
-
-	if s.revStore != nil {
-		if err := s.revStore.QuarantinePrincipal(r.Context(), principalID, req.Reason, ttl); err != nil {
-			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to propagate quarantine to Redis: "+err.Error())
-			return
+		if s.revStore != nil {
+			if err := s.revStore.QuarantinePrincipal(r.Context(), principalID, req.Reason, ttl); err != nil {
+				return "Failed to propagate quarantine to Redis: " + err.Error()
+			}
 		}
+		return ""
+	}); msg != "" {
+		writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", msg)
+		return
 	}
 
 	now := time.Now().UTC()
@@ -187,18 +203,21 @@ func (s *APIServer) HandleUnquarantinePrincipal(w http.ResponseWriter, r *http.R
 		return
 	}
 
-	if s.secRepo != nil {
-		if err := s.secRepo.DeleteQuarantine(r.Context(), principalID); err != nil {
-			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to persist quarantine removal")
-			return
+	if msg := s.serialiseSecurityWrite(func() string {
+		if s.secRepo != nil {
+			if err := s.secRepo.DeleteQuarantine(r.Context(), principalID); err != nil {
+				return "Failed to persist quarantine removal"
+			}
 		}
-	}
-
-	if s.revStore != nil {
-		if err := s.revStore.RemoveQuarantine(r.Context(), principalID); err != nil {
-			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to remove quarantine from Redis: "+err.Error())
-			return
+		if s.revStore != nil {
+			if err := s.revStore.RemoveQuarantine(r.Context(), principalID); err != nil {
+				return "Failed to remove quarantine from Redis: " + err.Error()
+			}
 		}
+		return ""
+	}); msg != "" {
+		writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", msg)
+		return
 	}
 
 	resp := controlv1.UnquarantineResponse{
@@ -228,29 +247,32 @@ func (s *APIServer) HandleRevokeToken(w http.ResponseWriter, r *http.Request) {
 		ttl = time.Duration(req.TTLSeconds) * time.Second
 	}
 
-	if s.secRepo != nil {
-		actor := "sec-ops"
-		if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
-			actor = sess.Username
+	if msg := s.serialiseSecurityWrite(func() string {
+		if s.secRepo != nil {
+			actor := "sec-ops"
+			if sess, ok := GetSessionFromContext(r.Context()); ok && sess != nil {
+				actor = sess.Username
+			}
+			reason := req.Reason
+			if reason == "" {
+				reason = "TOKEN_REVOKED"
+			}
+			now := time.Now().UTC()
+			if err := s.secRepo.UpsertRevokedToken(r.Context(), storage.RevokedTokenRecord{
+				JTI: req.JTI, Reason: reason, CreatedBy: actor, CreatedAt: now, ExpiresAt: now.Add(ttl),
+			}); err != nil {
+				return "Failed to persist revocation"
+			}
 		}
-		reason := req.Reason
-		if reason == "" {
-			reason = "TOKEN_REVOKED"
+		if s.revStore != nil {
+			if err := s.revStore.RevokeJTI(r.Context(), req.JTI, ttl); err != nil {
+				return "Failed to record revocation in Redis: " + err.Error()
+			}
 		}
-		now := time.Now().UTC()
-		if err := s.secRepo.UpsertRevokedToken(r.Context(), storage.RevokedTokenRecord{
-			JTI: req.JTI, Reason: reason, CreatedBy: actor, CreatedAt: now, ExpiresAt: now.Add(ttl),
-		}); err != nil {
-			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to persist revocation")
-			return
-		}
-	}
-
-	if s.revStore != nil {
-		if err := s.revStore.RevokeJTI(r.Context(), req.JTI, ttl); err != nil {
-			writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", "Failed to record revocation in Redis: "+err.Error())
-			return
-		}
+		return ""
+	}); msg != "" {
+		writeErrorResponse(w, r, http.StatusServiceUnavailable, "DEPENDENCY_FAILURE", msg)
+		return
 	}
 
 	w.Header().Set("Content-Type", "application/json")
