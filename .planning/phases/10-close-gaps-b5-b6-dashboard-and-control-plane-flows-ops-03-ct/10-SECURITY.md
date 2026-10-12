@@ -35,7 +35,7 @@ created: 2026-10-11
 | Threat ID | Category | Component | Disposition | Mitigation | Status |
 |-----------|----------|-----------|-------------|------------|--------|
 | T-10-01 | Repudiation/Info | heartbeat ack | mitigate | Ack echoes lastStatus/lastErr — internal/snapshot/client.go:183-184,219,241; client_test.go:99,173 | closed |
-| T-10-02 | Spoofing | GatewayId in Ack/Pong | accept | See AR-01 (gRPC stream is NOT authenticated) | closed |
+| T-10-02 | Spoofing | GatewayId in Ack/Pong | mitigate | Closed by Phase 11 (CR-02): mTLS + GatewayId bound to cert SPIFFE id; see AR-01 closure evidence (gatewayIdentityFromContext, internal/control/mtls_test.go) | closed (Phase 11) |
 | T-10-03 | Tampering | Pong upgrading REJECTED | mitigate | GetReplicaStatuses preserves REJECTED — internal/control/server.go:114-117; TestControl_Pong_DoesNotMaskRejected | closed |
 | T-10-04 | DoS | concurrent stream Send | mitigate | All stream.Send in single Recv goroutine (client.go:169,221,237,252); `-race` passes | closed |
 | T-10-05 | Elevation | unverified lease triggers ack | mitigate | Ack only inside `VerifyLease(...) err == nil` — client.go:233-243 | closed |
@@ -57,7 +57,7 @@ created: 2026-10-11
 | T-10-21 | Repudiation | contract/server key mismatch | mitigate | `required: true` (control-v1.yaml:752-755) + test openapi_drift_test.go:101-126 | closed |
 | T-10-SC | Tampering | Go dependency supply chain | accept | See AR-03 | closed |
 | T-10-07-01 | Tampering | snapshot re-delivery short-circuit | mitigate | Skip only on Version AND PayloadSha256 match — client.go:310-315; manager.go:143; test :187 | closed |
-| T-10-07-02 | Spoofing | unauthenticated gRPC / GatewayId (CR-02) | accept | See AR-01 | closed |
+| T-10-07-02 | Spoofing | unauthenticated gRPC / GatewayId (CR-02) | mitigate | Closed by Phase 11: gRPC server requires client certs; gatewayIdentityFromContext; TestOperatorTelemetrySpoofedGatewayRejected | closed (Phase 11) |
 | T-10-07-03 | Repudiation | masking real rejections | mitigate | Older/invalid snapshots still REJECTED and echoed — client_test.go:173-187 | closed |
 | T-10-08-01 | Tampering | predictable idempotency keys | mitigate | crypto.getRandomValues fallback, no Math.random — src/api/idempotency.ts:9 | closed |
 | T-10-08-02 | DoS | key collision | mitigate | 122 random bits v4 (idempotency.ts:10-11); 1000-key uniqueness re-run by auditor (no committed test, by plan design) | closed |
@@ -80,13 +80,14 @@ created: 2026-10-11
 
 | Risk ID | Threat Ref | Rationale | Accepted By | Date |
 |---------|------------|-----------|-------------|------|
-| AR-01 | T-10-02, T-10-07-02 | **Security debt CR-02 — this entry is its only tracking record.** The gateway↔control-plane gRPC server has NO transport credentials (`grpc.NewServer()` at cmd/control-plane/main.go:288). The plan-time rationale for T-10-02 ("authenticated at gRPC layer (mTLS)") was factually wrong and is superseded here. Consequence: any host that can reach the gRPC port can assert an arbitrary GatewayId, ack status and AcknowledgedAt (server.go:98-100 only fills it when empty), so convergence/partition/staleness views can be spoofed (incl. keeping a dead gateway looking fresh, review IN-01). Snapshot integrity is NOT affected: gateways verify Ed25519 signatures. Scheduled into Phase 11 (ROADMAP.md, "CR-02"): mTLS on gRPC + bind GatewayId to client cert. | Phase 10 plans (10-01, 10-07); corrected by security audit | 2026-10-11 |
+| AR-01 | T-10-02, T-10-07-02 | **Security debt CR-02 — this entry is its only tracking record.** The gateway↔control-plane gRPC server has NO transport credentials (`grpc.NewServer()` at cmd/control-plane/main.go:288). The plan-time rationale for T-10-02 ("authenticated at gRPC layer (mTLS)") was factually wrong and is superseded here. Consequence: any host that can reach the gRPC port can assert an arbitrary GatewayId, ack status and AcknowledgedAt (server.go:98-100 only fills it when empty), so convergence/partition/staleness views can be spoofed (incl. keeping a dead gateway looking fresh, review IN-01). Snapshot integrity is NOT affected: gateways verify Ed25519 signatures. Scheduled into Phase 11 (ROADMAP.md, "CR-02"): mTLS on gRPC + bind GatewayId to client cert. **CLOSED 2026-10-12 by Phase 11 (CR-02): control-plane gRPC requires mTLS (tls.RequireAndVerifyClientCert against the Aegis root CA, internal/control/tlsconfig.go), GatewayId is bound to the client-cert SPIFFE /gw/<id> in gatewayIdentityFromContext (internal/control/server.go), PermissionDenied on Ack/Pong/heartbeat/request id mismatch, no plaintext client path (TestCredentials_NoInsecureCredentialsInProductionCode, internal/snapshot/tlsconfig_test.go). Evidence: internal/control/mtls_test.go (TestMTLS_PlaintextClientRejected, TestMTLS_NoCertClientRejected, TestMTLS_WrongCAClientRejected, TestMTLS_AckIDMismatch, TestMTLS_PongIDMismatch, TestMTLS_NonGatewaySPIFFERejected), tests/integration/operator_telemetry_test.go TestOperatorTelemetrySpoofedGatewayRejected. Live compose smoke evidence for the mTLS path is pending and will be recorded by plan 11-15; it is not claimed here.** | Phase 10 plans (10-01, 10-07); corrected by security audit | 2026-10-11 |
 | AR-02 | T-10-18 | Pre-existing in-memory idempotency store is unbounded; tracked as tech debt, out of phase scope. | Phase 10 plan 10-05 | 2026-10-11 |
 | AR-03 | T-10-SC | No new Go module: gopkg.in/yaml.v3 v3.0.1 moved indirect → direct; go.sum unchanged during phase (audit-confirmed). | Phase 10 plan 10-06 | 2026-10-11 |
 | AR-04 | T-10-09-02 | mvp and distributed demo profiles serve plain HTTP and set AEGIS_COOKIE_SECURE=false (mvp.yml:42, distributed.yml:78) by design; hardened profile does not opt out. | Phase 10 plan 10-09 | 2026-10-11 |
 | AR-05 | T-10-09-03 | Disabling Secure on demo profiles leaves CSRF defences intact: HttpOnly + SameSite=Strict (auth.go:96-97,123-124) and CSRF token unchanged. | Phase 10 plan 10-09 | 2026-10-11 |
 | AR-06 | T-10-10-01 | Gateways silent > AEGIS_GATEWAY_STALE_AFTER (default 15m, >60s enforced) are omitted from GET /gateways. Records remain in storage. Note (audit): omission also removes them from the ClusterTopology convergence denominator, so a long-crashed replica is not visible in the UI (review WR-03) — broader than "list view only". | Phase 10 plan 10-10; scope clarified by audit | 2026-10-11 |
 | AR-07 | T-10-11-SC | monaco-editor was already a dependency; diff only pins `^0.57.0` → `0.57.0` in package.json and lock root; lock resolves 0.57.0 with integrity hash. | Phase 10 plan 10-11 | 2026-10-11 |
+| AR-08 | residual of T-10-02 / T-10-07-02 | Kubernetes StatefulSet: the Secret `aegis-gateway-cp-clients` is mounted into every gateway pod, so a compromised pod can read sibling ordinal client certs and present a sibling's stream identity to the control plane. Impact limited to convergence telemetry; snapshot integrity stays protected by Ed25519 signatures (see deployments/kubernetes/secrets/README.md, D-21). Replicas must stay at 3 or fewer. | Phase 11 | 2026-10-12 |
 
 *Accepted risks do not resurface in future audit runs.*
 
@@ -97,6 +98,7 @@ created: 2026-10-11
 | Audit Date | Threats Total | Closed | Open | Run By |
 |------------|---------------|--------|------|--------|
 | 2026-10-11 | 36 | 36 (28 mitigated, 8 accepted) | 0 | gsd-security-auditor via /gsd-secure-phase 10 |
+| 2026-10-12 | 36 | 36 (30 mitigated, 6 accepted; T-10-02 and T-10-07-02 moved accept to mitigate, AR-01 closed; AR-08 added) | 0 | Phase 11 plan 11-14 (documentation update; live smoke evidence pending 11-15) |
 
 Auditor checks run: `go test -race ./internal/snapshot/ ./internal/control/` (pass); OpenAPIDrift + RequireIdempotencyKey tests (pass); 1000-key v4 uniqueness of `newIdempotencyKey()` with randomUUID absent (pass); `grep jsdelivr web/dashboard/dist` (empty).
 
