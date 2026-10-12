@@ -14,6 +14,7 @@ import (
 	"path/filepath"
 
 	"aegis/internal/identity"
+	"aegis/internal/keyfile"
 	"aegis/internal/pki"
 )
 
@@ -233,7 +234,10 @@ func run(outDir, keysDir string) error {
 }
 
 // writeKeys writes separate JWT and snapshot signing keypairs plus keyset
-// directories. Existing files are never overwritten.
+// directories. Existing complete pairs are never overwritten. A half-present
+// pair is never silently kept (WR-09): a private key without its public key
+// gets the public key derived from it, a public key without its private key is
+// an error, and a pair whose halves do not match is an error.
 func writeKeys(keysDir string) error {
 	for _, d := range []string{"keyset-jwt", "keyset-snapshot"} {
 		if err := os.MkdirAll(filepath.Join(keysDir, d), 0755); err != nil {
@@ -246,21 +250,58 @@ func writeKeys(keysDir string) error {
 	}
 	for _, p := range pairs {
 		k, pb := filepath.Join(keysDir, p.key), filepath.Join(keysDir, p.pub)
-		if fileExists(k) || fileExists(pb) {
-			if fileExists(k) {
-				if err := restrictKeyFile(k); err != nil {
+		hasKey, hasPub := fileExists(k), fileExists(pb)
+		switch {
+		case !hasKey && !hasPub:
+			if err := writeEd25519(k, pb); err != nil {
+				return err
+			}
+			fmt.Printf("  [+] Generated %s and %s\n", p.key, p.pub)
+		case !hasKey && hasPub:
+			return fmt.Errorf("%s exists but its private key %s is missing: restore the private key, or remove %s to generate a new pair (and update every keyset that trusts it)", p.pub, p.key, p.pub)
+		default:
+			if err := restrictKeyFile(k); err != nil {
+				return err
+			}
+			priv, err := loadPrivate(k)
+			if err != nil {
+				return err
+			}
+			derived := priv.Public().(ed25519.PublicKey)
+			if !hasPub {
+				if err := writeCertFile(pb, []byte(base64.StdEncoding.EncodeToString(derived)+"\n")); err != nil {
 					return err
 				}
+				fmt.Printf("  [+] Derived missing %s from existing %s\n", p.pub, p.key)
+				continue
+			}
+			raw, err := os.ReadFile(pb)
+			if err != nil {
+				return err
+			}
+			pub, err := keyfile.ParseEd25519Public(raw)
+			if err != nil {
+				return fmt.Errorf("%s: %w", p.pub, err)
+			}
+			if !pub.Equal(derived) {
+				return fmt.Errorf("%s does not match private key %s: fix or remove the mismatched file", p.pub, p.key)
 			}
 			fmt.Printf("  [=] Keeping existing %s\n", p.key)
-			continue
 		}
-		if err := writeEd25519(k, pb); err != nil {
-			return err
-		}
-		fmt.Printf("  [+] Generated %s and %s\n", p.key, p.pub)
 	}
 	return nil
+}
+
+func loadPrivate(path string) (ed25519.PrivateKey, error) {
+	raw, err := os.ReadFile(path)
+	if err != nil {
+		return nil, err
+	}
+	priv, err := keyfile.ParseEd25519Private(raw)
+	if err != nil {
+		return nil, fmt.Errorf("%s: %w", path, err)
+	}
+	return priv, nil
 }
 
 func main() {

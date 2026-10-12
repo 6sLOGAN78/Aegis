@@ -227,3 +227,62 @@ func TestPrivateKeysTightenedTo0600(t *testing.T) {
 		}
 	}
 }
+
+// WR-09: a half-present signing keypair is never silently kept.
+func TestWriteKeysHalfPresentPairs(t *testing.T) {
+	keys := t.TempDir()
+	if err := writeKeys(keys); err != nil {
+		t.Fatal(err)
+	}
+	jwtKey := filepath.Join(keys, "jwt-current.key")
+	jwtPub := filepath.Join(keys, "keyset-jwt/current.pub")
+	orig, err := os.ReadFile(jwtPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+
+	// Private key present, public key missing: derive it.
+	if err := os.Remove(jwtPub); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeys(keys); err != nil {
+		t.Fatal(err)
+	}
+	got, err := os.ReadFile(jwtPub)
+	if err != nil {
+		t.Fatal(err)
+	}
+	if !bytes.Equal(got, orig) {
+		t.Fatalf("derived pub %q, want %q", got, orig)
+	}
+
+	// Mismatched public key: error, file left as is.
+	other := filepath.Join(t.TempDir(), "o")
+	if err := writeEd25519(other+".key", other+".pub"); err != nil {
+		t.Fatal(err)
+	}
+	wrong, _ := os.ReadFile(other + ".pub")
+	if err := os.WriteFile(jwtPub, wrong, 0644); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeys(keys); err == nil {
+		t.Fatal("expected mismatch error")
+	}
+	if after, _ := os.ReadFile(jwtPub); !bytes.Equal(after, wrong) {
+		t.Fatal("mismatched pub must not be rewritten silently")
+	}
+	if err := os.WriteFile(jwtPub, orig, 0644); err != nil {
+		t.Fatal(err)
+	}
+
+	// Public key present, private key missing: error, nothing generated.
+	if err := os.Remove(jwtKey); err != nil {
+		t.Fatal(err)
+	}
+	if err := writeKeys(keys); err == nil {
+		t.Fatal("expected error for pub-only pair")
+	}
+	if fileExists(jwtKey) {
+		t.Fatal("private key must not be regenerated behind a kept public key")
+	}
+}
