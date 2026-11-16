@@ -30,6 +30,7 @@ type Metrics struct {
 	AuditDegraded               prometheus.Gauge
 	AuditFlushDuration          prometheus.Histogram
 	HTTPRejectedTotal           *prometheus.CounterVec
+	HTTPRequestDuration         *prometheus.HistogramVec
 
 	// Phase 11 metrics. Labels are closed enums only.
 	KeysetReloadTotal                     *prometheus.CounterVec
@@ -226,6 +227,14 @@ func NewMetrics() *Metrics {
 				Help: "Unix time of the last successful security state reconstruction.",
 			},
 		),
+		HTTPRequestDuration: prometheus.NewHistogramVec(
+			prometheus.HistogramOpts{
+				Name:    "aegis_http_request_duration_seconds",
+				Help:    "Gateway HTTP request duration by normalized method, route ID and status class.",
+				Buckets: []float64{.001, .0025, .005, .01, .025, .05, .1, .25, .5, 1, 2.5, 5, 10},
+			},
+			[]string{"method", "route_id", "status_class"},
+		),
 		GRPCIdentityRejectionsTotal: prometheus.NewCounterVec(
 			prometheus.CounterOpts{
 				Name: "aegis_grpc_identity_rejections_total",
@@ -254,6 +263,7 @@ func NewMetrics() *Metrics {
 		m.AuditDegraded,
 		m.AuditFlushDuration,
 		m.HTTPRejectedTotal,
+		m.HTTPRequestDuration,
 		m.KeysetReloadTotal,
 		m.KeysetKeys,
 		m.KeysetLastSuccessTimestamp,
@@ -300,6 +310,41 @@ func (m *Metrics) RecordRequest(method, routeID string, status int) {
 		routeID = "unknown"
 	}
 	m.HTTPRequestsTotal.WithLabelValues(method, routeID, strconv.Itoa(status)).Inc()
+}
+
+// normalizeMethod maps an HTTP method onto a closed set so attacker-chosen
+// methods cannot mint new series.
+func normalizeMethod(method string) string {
+	switch method {
+	case "GET", "POST", "PUT", "PATCH", "DELETE", "HEAD", "OPTIONS":
+		return method
+	}
+	return "OTHER"
+}
+
+// statusClass maps a status code onto a closed set of classes.
+func statusClass(status int) string {
+	switch {
+	case status >= 100 && status < 200:
+		return "1xx"
+	case status >= 200 && status < 300:
+		return "2xx"
+	case status >= 300 && status < 400:
+		return "3xx"
+	case status >= 400 && status < 500:
+		return "4xx"
+	case status >= 500 && status < 600:
+		return "5xx"
+	}
+	return "other"
+}
+
+// ObserveRequestDuration records a request latency with bounded labels.
+func (m *Metrics) ObserveRequestDuration(method, routeID string, status int, d time.Duration) {
+	if routeID == "" {
+		routeID = "unknown"
+	}
+	m.HTTPRequestDuration.WithLabelValues(normalizeMethod(method), routeID, statusClass(status)).Observe(d.Seconds())
 }
 
 // RecordPolicyEval records the latency duration of an in-memory OPA policy evaluation.

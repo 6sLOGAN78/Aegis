@@ -3,6 +3,7 @@ package telemetry
 import (
 	"context"
 	"net/http"
+	"time"
 )
 
 type routeIDHolder struct {
@@ -61,9 +62,12 @@ func MetricsMiddleware(m *Metrics) func(http.Handler) http.Handler {
 				statusCode:     http.StatusOK,
 			}
 
+			start := time.Now()
 			next.ServeHTTP(rec, r)
+			elapsed := time.Since(start)
 
 			m.RecordRequest(r.Method, holder.value, rec.statusCode)
+			m.ObserveRequestDuration(r.Method, holder.value, rec.statusCode, elapsed)
 		})
 	}
 }
