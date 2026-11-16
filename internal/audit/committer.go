@@ -518,7 +518,9 @@ func (c *Committer) attempt(batch []commitItem) (retained []commitItem) {
 }
 
 // retry keeps writing retained frames with backoff (100ms doubling to 1s). It blocks
-// the loop on purpose so the queues fill and EnqueueCompletion faults the gateway.
+// the loop on purpose. The write_error fault (which refuses allowed traffic) is set by
+// attempt; completions that overflow the queue during a retry are shed and counted,
+// never faulted (D-12a).
 // It returns false if shutdown interrupted it (retained frames are then dropped).
 func (c *Committer) retry(retained []commitItem) bool {
 	backoff := 100 * time.Millisecond
