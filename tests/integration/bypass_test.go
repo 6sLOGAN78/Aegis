@@ -23,8 +23,13 @@ import (
 const composeFilePath = "../../deployments/compose/docker-compose.mvp.yml"
 
 // ensureComposeCluster checks if the MVP compose cluster is reachable, starting it if necessary.
+// It needs a Docker daemon and may start containers, so it is skipped under
+// -short: the hermetic gate (go test -short ./...) must never touch Docker.
 func ensureComposeCluster(t *testing.T) {
 	t.Helper()
+	if testing.Short() {
+		t.Skip("skipping Docker Compose integration test in -short mode (run make test-e2e or go test without -short)")
+	}
 
 	// 1. Ensure development certificates exist before launching cluster
 	certPath := filepath.Join("../../deployments/certs", "root-ca.crt")
