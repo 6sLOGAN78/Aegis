@@ -83,6 +83,9 @@ type DiskSpool struct {
 	needsRotate atomic.Bool
 	lastWarnNS  atomic.Int64
 
+	// bytesHook, when set, is told how many bytes each successful write persisted.
+	bytesHook atomic.Pointer[func(int)]
+
 	// Test seams used only by WriteFrames. nil means the real f.Write / f.Sync.
 	writeFn func(*os.File, []byte) (int, error)
 	syncFn  func(*os.File) error
@@ -351,6 +354,7 @@ func (s *DiskSpool) AppendPreForward(event *CompletionEvent) error {
 	}
 
 	s.currentSize += int64(len(frame))
+	s.notifyBytesWritten(len(frame))
 
 	// 7. Rotate segment if size threshold exceeded
 	if s.currentSize >= s.cfg.MaxSegmentBytes {
@@ -458,6 +462,7 @@ func (s *DiskSpool) WriteFrames(frames [][]byte) error {
 	}
 
 	s.currentSize += int64(len(buf))
+	s.notifyBytesWritten(len(buf))
 
 	if s.currentSize >= s.cfg.MaxSegmentBytes {
 		// The batch is durable: a failed rotation must not turn it into a failure.
@@ -626,4 +631,22 @@ func ReadFramedRecord(r io.Reader) (*CompletionEvent, int64, error) {
 
 	totalBytes := int64(FrameHeaderSize + int(length) + 1)
 	return &event, totalBytes, nil
+}
+
+// SetBytesWrittenHook registers fn to be called with the number of bytes persisted by
+// every successful WriteFrames and AppendPreForward. Pass nil to clear. Safe to call
+// after construction; fn runs while the spool lock is held, so it must not call back
+// into the spool.
+func (s *DiskSpool) SetBytesWrittenHook(fn func(int)) {
+	if fn == nil {
+		s.bytesHook.Store(nil)
+		return
+	}
+	s.bytesHook.Store(&fn)
+}
+
+func (s *DiskSpool) notifyBytesWritten(n int) {
+	if h := s.bytesHook.Load(); h != nil {
+		(*h)(n)
+	}
 }
