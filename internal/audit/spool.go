@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bufio"
 	"encoding/binary"
 	"encoding/json"
 	"errors"
@@ -144,8 +145,14 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 			}
 		}
 
-		info, statErr := os.Stat(filepath.Join(cfg.SpoolDir, latest))
-		if statErr == nil && info.Size() < cfg.MaxSegmentBytes {
+		latestPath := filepath.Join(cfg.SpoolDir, latest)
+		info, statErr := os.Stat(latestPath)
+		// Reuse the newest segment only when it ends exactly on a frame boundary. A crash
+		// mid-write can leave a torn frame; appending behind it would hide later frames
+		// from a reader that trusts the torn header's length, so such a segment is left
+		// untouched and a fresh one is opened instead (nothing is truncated, so no
+		// acknowledged, fsynced frame can ever be cut).
+		if statErr == nil && info.Size() < cfg.MaxSegmentBytes && segmentEndsOnFrameBoundary(latestPath) {
 			f, openErr := os.OpenFile(filepath.Join(cfg.SpoolDir, latest), os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 			if openErr == nil {
 				activeFile = f
@@ -175,6 +182,28 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 		currentSize:    currentSize,
 		seq:            seq,
 	}, nil
+}
+
+// segmentEndsOnFrameBoundary reports whether every byte of the segment at path belongs
+// to a complete, CRC-valid frame. Any read error, torn or corrupt frame returns false.
+func segmentEndsOnFrameBoundary(path string) bool {
+	f, err := os.Open(path)
+	if err != nil {
+		return false
+	}
+	defer f.Close()
+	r := bufio.NewReader(f)
+	for {
+		_, _, err := ReadFramedRecord(r)
+		switch {
+		case err == nil, errors.Is(err, ErrInvalidRecordJSON):
+			continue
+		case errors.Is(err, io.EOF):
+			return true
+		default:
+			return false
+		}
+	}
 }
 
 // statfsRatio returns the used/total ratio of the filesystem holding the spool.

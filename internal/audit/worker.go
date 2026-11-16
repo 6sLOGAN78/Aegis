@@ -289,9 +289,10 @@ var readFramedRecord = ReadFramedRecord
 func (w *AuditWorker) SkippedFrames() int64 { return w.skipped.Load() }
 
 // processFile ingests one segment from startOffset. reachedEOF is true only when the
-// segment was read to a definite end. A torn tail on the newest segment returns
-// reachedEOF=false with a nil error and the offset at the torn frame's start so the
-// next pass retries it.
+// segment was read to a definite end. A torn or corrupt frame is resynced from its
+// start + 1; it counts as a torn tail only when no decodable frame follows it. A torn
+// tail on the newest segment returns reachedEOF=false with a nil error and the offset at
+// the torn frame's start so the next pass retries it.
 func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string, startOffset int64, isLatest bool) (int, int64, bool, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
@@ -310,6 +311,10 @@ func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string
 	processedCount := 0
 	reachedEOF := false
 	var readErr error
+	// badStart is the start of the first undecodable frame since the last frame that
+	// decoded; -1 when the reader is in sync. A frame header is not CRC-protected, so a
+	// torn or corrupt frame is only a tail when nothing decodable follows it.
+	badStart := int64(-1)
 
 loop:
 	for {
@@ -323,33 +328,41 @@ loop:
 			case errors.Is(err, io.EOF):
 				reachedEOF = true
 				break loop
-			case errors.Is(err, io.ErrUnexpectedEOF):
-				// Torn frame at the end of the file.
-				if isLatest {
-					log.Printf("AuditWorker: torn tail in %s at offset %d, will retry", fileName, currentOffset)
-				} else {
-					log.Printf("Warning: torn tail in historical segment %s at offset %d, treating as end of segment", fileName, currentOffset)
-					reachedEOF = true
+			case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, ErrCorruptedRecord):
+				// Torn (length runs past EOF) or corrupt frame. Never trust its length:
+				// rescan from just after this frame's start so frames inside the bogus
+				// length window are not skipped.
+				if badStart < 0 {
+					badStart = currentOffset
 				}
-				break loop
-			case errors.Is(err, ErrCorruptedRecord):
-				// Corrupted record detected: scan forward for next MagicHeader to resynchronize
-				log.Printf("Warning: corrupted WAL record in %s around offset %d, seeking resync", fileName, currentOffset)
+				if _, serr := f.Seek(currentOffset+1, io.SeekStart); serr != nil {
+					readErr = fmt.Errorf("resync seek in %s failed: %w", fileName, serr)
+					break loop
+				}
 				resyncPos, scanErr := scanToNextMagic(f)
 				if scanErr != nil {
 					if errors.Is(scanErr, io.EOF) {
-						// Nothing further to resync to: end of segment (historical) or a
-						// possibly still-growing tail (newest, retried next pass).
-						reachedEOF = !isLatest
+						// Nothing decodable follows: a genuine torn tail. The newest segment
+						// may still be growing, so it is retried from the first bad frame;
+						// a historical segment ends here.
+						currentOffset = badStart
+						if isLatest {
+							log.Printf("AuditWorker: torn tail in %s at offset %d, will retry", fileName, badStart)
+						} else {
+							log.Printf("Warning: torn tail in historical segment %s at offset %d, treating as end of segment", fileName, badStart)
+							reachedEOF = true
+						}
 						break loop
 					}
 					readErr = fmt.Errorf("resync scan of %s failed: %w", fileName, scanErr)
 					break loop
 				}
+				log.Printf("Warning: corrupted WAL record in %s at offset %d, resynced at %d", fileName, currentOffset, resyncPos)
 				currentOffset = resyncPos
 				continue
 			case errors.Is(err, ErrInvalidRecordJSON):
 				// CRC-valid frame with undecodable JSON: skip and count, never wedge.
+				badStart = -1
 				w.skipped.Add(1)
 				log.Printf("Warning: undecodable JSON in WAL frame of %s at offset %d, skipped", fileName, currentOffset)
 				currentOffset += bytesRead
@@ -360,6 +373,7 @@ loop:
 			}
 		}
 
+		badStart = -1
 		batch = append(batch, *evt)
 		currentOffset += bytesRead
 		processedCount++
