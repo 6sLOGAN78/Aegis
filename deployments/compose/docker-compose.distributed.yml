@@ -143,6 +143,7 @@ services:
       - AEGIS_WORKLOAD_PORT=9443
       - AEGIS_GATEWAY_ID=gateway-1
       - AEGIS_DRAIN_TIMEOUT=30s
+      - AEGIS_DRAIN_PROPAGATION_DELAY=5s
       - AEGIS_CONTROL_PLANE_GRPC_ADDR=control-plane:9090
       - AEGIS_REDIS_ADDR=redis:6379
       - AEGIS_SPOOL_DIR=/var/log/aegis/wal
@@ -168,7 +169,7 @@ services:
       - ${AEGIS_KEYS_DIR:-../keys}/keyset-snapshot:/keysets/snapshot:ro
       - aegis_wal_spool_1:/var/log/aegis/wal
     # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
-    stop_grace_period: 45s
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]
       interval: 5s
@@ -206,6 +207,7 @@ services:
       - AEGIS_WORKLOAD_PORT=9443
       - AEGIS_GATEWAY_ID=gateway-2
       - AEGIS_DRAIN_TIMEOUT=30s
+      - AEGIS_DRAIN_PROPAGATION_DELAY=5s
       - AEGIS_CONTROL_PLANE_GRPC_ADDR=control-plane:9090
       - AEGIS_REDIS_ADDR=redis:6379
       - AEGIS_SPOOL_DIR=/var/log/aegis/wal
@@ -231,7 +233,7 @@ services:
       - ${AEGIS_KEYS_DIR:-../keys}/keyset-snapshot:/keysets/snapshot:ro
       - aegis_wal_spool_2:/var/log/aegis/wal
     # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
-    stop_grace_period: 45s
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]
       interval: 5s
@@ -269,6 +271,7 @@ services:
       - AEGIS_WORKLOAD_PORT=9443
       - AEGIS_GATEWAY_ID=gateway-3
       - AEGIS_DRAIN_TIMEOUT=30s
+      - AEGIS_DRAIN_PROPAGATION_DELAY=5s
       - AEGIS_CONTROL_PLANE_GRPC_ADDR=control-plane:9090
       - AEGIS_REDIS_ADDR=redis:6379
       - AEGIS_SPOOL_DIR=/var/log/aegis/wal
@@ -294,7 +297,7 @@ services:
       - ${AEGIS_KEYS_DIR:-../keys}/keyset-snapshot:/keysets/snapshot:ro
       - aegis_wal_spool_3:/var/log/aegis/wal
     # Drain 30s + 5s audit pipeline shutdown + 5s metrics shutdown + margin.
-    stop_grace_period: 45s
+    stop_grace_period: 60s
     healthcheck:
       test: ["CMD-SHELL", "curl -sf http://127.0.0.1:8080/readyz"]
       interval: 5s
