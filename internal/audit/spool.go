@@ -764,6 +764,14 @@ func ReadFramedRecord(r io.Reader) (*CompletionEvent, int64, error) {
 		return nil, int64(FrameHeaderSize), fmt.Errorf("%w: partial record payload: %w", ErrCorruptedRecord, io.ErrUnexpectedEOF)
 	}
 
+	// The terminator is part of the frame. A frame torn exactly before its '\n' would
+	// otherwise decode and consume the first byte of the next frame, making the reader
+	// skip that next (valid) frame. Report it as corrupt so the caller resyncs from the
+	// frame start + 1 and finds the next magic at its true offset.
+	if buf[length] != '\n' {
+		return nil, int64(FrameHeaderSize), fmt.Errorf("%w: missing frame terminator", ErrCorruptedRecord)
+	}
+
 	payload := buf[:length]
 	actualCRC := crc32.ChecksumIEEE(payload)
 	if actualCRC != expectedCRC {

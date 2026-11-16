@@ -1,6 +1,7 @@
 package audit
 
 import (
+	"bytes"
 	"context"
 	"fmt"
 	"os"
@@ -150,3 +151,40 @@ func TestCompareSegmentNames_NumericNotString(t *testing.T) {
 }
 
 func zeroStatfs(string) (uint64, uint64, error) { return 0, 100, nil }
+
+// R2 WR-01: a torn frame cut exactly before its '\n' must not swallow the first byte of
+// the next frame. G is never acknowledged and is dropped; B and C are ingested.
+func TestAuditWorker_TornFrameMissingOnlyNewlineDoesNotSwallowNext(t *testing.T) {
+	for _, historical := range []bool{true, false} {
+		t.Run(fmt.Sprintf("historical=%v", historical), func(t *testing.T) {
+			dir := t.TempDir()
+			g := eventFrame(t, "G")
+			var data []byte
+			data = append(data, g[:len(g)-1]...)
+			data = append(data, eventFrame(t, "B")...)
+			data = append(data, eventFrame(t, "C")...)
+			writeSegment(t, dir, legacySegName(1, 1), data)
+			if historical {
+				writeSegment(t, dir, legacySegName(1, 2), eventFrame(t, "D"))
+			}
+			w, mock := newReadErrWorker(t, dir, false)
+			expectRoutes(mock, "B", "C")
+			want := 2
+			if historical {
+				expectRoutes(mock, "D")
+				want = 3
+			}
+			n, err := w.ProcessAvailable(context.Background())
+			require.NoError(t, err)
+			assert.Equal(t, want, n)
+			assert.NoError(t, mock.ExpectationsWereMet())
+		})
+	}
+}
+
+func TestReadFramedRecord_MissingTerminatorIsCorrupt(t *testing.T) {
+	fr := eventFrame(t, "G")
+	fr[len(fr)-1] = 0xAE
+	_, _, err := ReadFramedRecord(bytes.NewReader(fr))
+	assert.ErrorIs(t, err, ErrCorruptedRecord)
+}
