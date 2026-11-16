@@ -75,7 +75,10 @@ type DiskSpool struct {
 	currentSegment string
 	currentSize    int64
 	seq            int64
-	closed         bool
+	// lastTS is the highest timestamp used in any segment name; a new segment's
+	// timestamp is clamped above it so a wall clock stepping back cannot reorder names.
+	lastTS int64
+	closed bool
 
 	// writeFault, when set, makes CheckSaturation report saturation so the unchanged
 	// AppendPreForward refuses allowed traffic (fail-closed, D-12). It never blocks WriteFrames.
@@ -123,32 +126,28 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 	}
 	_ = os.Chmod(cfg.SpoolDir, 0700)
 
-	entries, err := os.ReadDir(cfg.SpoolDir)
+	walFiles, err := listSegments(cfg.SpoolDir)
 	if err != nil {
 		return nil, fmt.Errorf("failed to read spool directory %s: %w", cfg.SpoolDir, err)
 	}
 
-	var walFiles []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "wal-") && strings.HasSuffix(e.Name(), ".log") {
-			walFiles = append(walFiles, e.Name())
-		}
-	}
-	sort.Strings(walFiles)
-
 	var activeFile *os.File
 	var currentSegment string
 	var currentSize int64
-	var seq int64
+	var seq, lastTS int64
+
+	// The next segment must order after every existing one regardless of the wall clock:
+	// its sequence number is above the highest on disk and its timestamp is clamped above
+	// the highest on disk (so even a plain string sort agrees).
+	for _, name := range walFiles {
+		if fs, fts, ok := parseSegmentName(name); ok {
+			seq = max(seq, fs)
+			lastTS = max(lastTS, fts)
+		}
+	}
 
 	if len(walFiles) > 0 {
 		latest := walFiles[len(walFiles)-1]
-		parts := strings.Split(strings.TrimSuffix(latest, ".log"), "-")
-		if len(parts) >= 3 {
-			if parsedSeq, parseErr := strconv.ParseInt(parts[2], 10, 64); parseErr == nil {
-				seq = parsedSeq
-			}
-		}
 
 		latestPath := filepath.Join(cfg.SpoolDir, latest)
 		info, statErr := os.Stat(latestPath)
@@ -169,7 +168,8 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 
 	if activeFile == nil {
 		seq++
-		filename := fmt.Sprintf("wal-%020d-%06d.log", time.Now().UTC().UnixNano(), seq)
+		lastTS = nextSegmentTS(lastTS)
+		filename := segmentName(lastTS, seq)
 		path := filepath.Join(cfg.SpoolDir, filename)
 		f, openErr := os.OpenFile(path, os.O_CREATE|os.O_WRONLY|os.O_APPEND, 0600)
 		if openErr != nil {
@@ -186,7 +186,93 @@ func NewDiskSpool(cfg DiskSpoolConfig) (*DiskSpool, error) {
 		currentSegment: currentSegment,
 		currentSize:    currentSize,
 		seq:            seq,
+		lastTS:         lastTS,
 	}, nil
+}
+
+// parseSegmentName parses a WAL segment name of the form wal-<unixnanos>-<seq>.log.
+// Both fields are decimal; their zero padding is irrelevant.
+func parseSegmentName(name string) (seq, ts int64, ok bool) {
+	if !strings.HasPrefix(name, "wal-") || !strings.HasSuffix(name, ".log") {
+		return 0, 0, false
+	}
+	parts := strings.Split(strings.TrimSuffix(strings.TrimPrefix(name, "wal-"), ".log"), "-")
+	if len(parts) != 2 {
+		return 0, 0, false
+	}
+	ts, err := strconv.ParseInt(parts[0], 10, 64)
+	if err != nil || ts < 0 {
+		return 0, 0, false
+	}
+	seq, err = strconv.ParseInt(parts[1], 10, 64)
+	if err != nil || seq < 0 {
+		return 0, 0, false
+	}
+	return seq, ts, true
+}
+
+// compareSegmentNames is the single segment ordering used by the spool and the worker.
+// Segments order by sequence number, then timestamp, then name; the wall clock alone
+// never decides the order, so a clock stepping back cannot put a newer segment before
+// an older one. Sequence numbers are strictly increasing for every segment this spool
+// creates; the timestamp only breaks ties between legacy segments that reused a
+// sequence number. Unparseable names order before every valid one.
+func compareSegmentNames(a, b string) int {
+	sa, ta, oka := parseSegmentName(a)
+	sb, tb, okb := parseSegmentName(b)
+	switch {
+	case oka != okb:
+		if !oka {
+			return -1
+		}
+		return 1
+	case sa != sb:
+		if sa < sb {
+			return -1
+		}
+		return 1
+	case ta != tb:
+		if ta < tb {
+			return -1
+		}
+		return 1
+	}
+	return strings.Compare(a, b)
+}
+
+// segmentName formats a WAL segment name. The format is unchanged from earlier
+// releases, so segments already on disk keep parsing.
+func segmentName(ts, seq int64) string {
+	return fmt.Sprintf("wal-%020d-%06d.log", ts, seq)
+}
+
+// nextSegmentTS returns the wall clock in UnixNano, clamped to at least lastTS+1.
+func nextSegmentTS(lastTS int64) int64 {
+	ts := time.Now().UTC().UnixNano()
+	if ts <= lastTS {
+		ts = lastTS + 1
+	}
+	return ts
+}
+
+// listSegments returns the WAL segment names in dir in compareSegmentNames order.
+// Files that are not parseable segment names are ignored.
+func listSegments(dir string) ([]string, error) {
+	entries, err := os.ReadDir(dir)
+	if err != nil {
+		return nil, err
+	}
+	var names []string
+	for _, e := range entries {
+		if e.IsDir() {
+			continue
+		}
+		if _, _, ok := parseSegmentName(e.Name()); ok {
+			names = append(names, e.Name())
+		}
+	}
+	sort.Slice(names, func(i, j int) bool { return compareSegmentNames(names[i], names[j]) < 0 })
+	return names, nil
 }
 
 // segmentEndsOnFrameBoundary reports whether every byte of the segment at path belongs
@@ -595,7 +681,8 @@ func (s *DiskSpool) warnf(format string, args ...any) {
 // failed open leaves the current segment untouched and usable.
 func (s *DiskSpool) rotateSegment() error {
 	seq := s.seq + 1
-	filename := fmt.Sprintf("wal-%020d-%06d.log", time.Now().UTC().UnixNano(), seq)
+	ts := nextSegmentTS(s.lastTS)
+	filename := segmentName(ts, seq)
 	path := filepath.Join(s.cfg.SpoolDir, filename)
 	open := s.openFn
 	if open == nil {
@@ -613,6 +700,7 @@ func (s *DiskSpool) rotateSegment() error {
 		_ = s.activeFile.Close()
 	}
 	s.seq = seq
+	s.lastTS = ts
 	s.activeFile = f
 	s.currentSegment = filename
 	s.currentSize = 0

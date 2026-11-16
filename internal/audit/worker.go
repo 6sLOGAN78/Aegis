@@ -10,8 +10,6 @@ import (
 	"log"
 	"os"
 	"path/filepath"
-	"sort"
-	"strings"
 	"sync"
 	"sync/atomic"
 	"time"
@@ -203,18 +201,12 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 		return 0, fmt.Errorf("failed to load cursor offset: %w", err)
 	}
 
-	entries, err := os.ReadDir(w.cfg.SpoolDir)
+	// Same ordering as the spool (sequence number first, never the raw wall clock), so
+	// the last entry is always the segment the spool is writing to.
+	walFiles, err := listSegments(w.cfg.SpoolDir)
 	if err != nil {
 		return 0, fmt.Errorf("failed to list spool directory: %w", err)
 	}
-
-	var walFiles []string
-	for _, e := range entries {
-		if !e.IsDir() && strings.HasPrefix(e.Name(), "wal-") && strings.HasSuffix(e.Name(), ".log") {
-			walFiles = append(walFiles, e.Name())
-		}
-	}
-	sort.Strings(walFiles)
 
 	if len(walFiles) == 0 {
 		return 0, nil
@@ -234,9 +226,9 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 			}
 		}
 		if !found {
-			// If cursor file was pruned, find first file lexicographically greater
+			// If the cursor's segment was pruned, resume at the first segment ordered after it.
 			for i, f := range walFiles {
-				if f > cursorState.SegmentFile {
+				if compareSegmentNames(f, cursorState.SegmentFile) > 0 {
 					startIdx = i
 					startOffset = 0
 					found = true
@@ -271,6 +263,11 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 				return totalProcessed, fmt.Errorf("segment %s not fully read, cursor held", fileName)
 			}
 			nextFile := walFiles[i+1]
+			// Defensive: only ever advance forward, and never past the highest-ordered
+			// segment (the one the spool may be appending to), which is never pruned.
+			if compareSegmentNames(fileName, nextFile) >= 0 {
+				return totalProcessed, fmt.Errorf("segment order violated: %s does not precede %s, cursor held", fileName, nextFile)
+			}
 			if err := w.cursor.SaveOffset(nextFile, 0); err != nil {
 				return totalProcessed, fmt.Errorf("failed to advance cursor to next segment: %w", err)
 			}
@@ -308,10 +305,10 @@ func (w *AuditWorker) SetSkippedFrameHook(fn func()) {
 }
 
 // countSkip records a skipped frame at (fileName, offset) unless that position was
-// already counted. Segment names sort chronologically and offsets grow within a
-// segment, so the high-water mark dedupes retries. Caller holds w.mu.
+// already counted. Segments are ordered by compareSegmentNames and offsets grow within
+// a segment, so the high-water mark dedupes retries. Caller holds w.mu.
 func (w *AuditWorker) countSkip(fileName string, offset int64) {
-	if fileName < w.skipSeg || (fileName == w.skipSeg && offset <= w.skipOff) {
+	if c := compareSegmentNames(fileName, w.skipSeg); w.skipSeg != "" && (c < 0 || (c == 0 && offset <= w.skipOff)) {
 		return
 	}
 	w.skipSeg, w.skipOff = fileName, offset
