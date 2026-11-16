@@ -10,6 +10,7 @@ data:
   AEGIS_WORKLOAD_PORT: "8443"
   AEGIS_METRICS_PORT: "9091"
   AEGIS_DRAIN_TIMEOUT: "30s"
+  # Go duration or whole seconds; unparsable/negative fails startup, max 60s (capped).
   AEGIS_DRAIN_PROPAGATION_DELAY: "10s"
   AEGIS_UPSTREAM_SCHEME: "https"
   AEGIS_ISSUER: "aegis-issuer"

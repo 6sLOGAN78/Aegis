@@ -1005,7 +1005,15 @@ func main() {
 
 	// DIST-01: propagation delay between failing readiness and closing listeners
 	// (default 0 = no behaviour change).
-	drainDelay := parseDrainPropagationDelay(os.Getenv("AEGIS_DRAIN_PROPAGATION_DELAY"))
+	// Unparsable or negative values fail startup (fail closed); values above the
+	// documented 60s maximum are capped with a warning.
+	drainDelay, drainDelayWarning, err := parseDrainPropagationDelay(os.Getenv("AEGIS_DRAIN_PROPAGATION_DELAY"))
+	if err != nil {
+		log.Fatalf("Invalid gateway configuration: %v", err)
+	}
+	if drainDelayWarning != "" {
+		log.Printf("Warning: %s", drainDelayWarning)
+	}
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)

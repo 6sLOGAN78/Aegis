@@ -119,8 +119,33 @@ func TestWorkloadDrainConnectionClose(t *testing.T) {
 }
 
 func TestParseDrainPropagationDelay(t *testing.T) {
-	assert.Equal(t, time.Duration(0), parseDrainPropagationDelay(""))
-	assert.Equal(t, 5*time.Second, parseDrainPropagationDelay("5s"))
-	assert.Equal(t, time.Duration(0), parseDrainPropagationDelay("-1s"))
-	assert.Equal(t, time.Duration(0), parseDrainPropagationDelay("garbage"))
+	ok := map[string]time.Duration{
+		"":     0,
+		"5s":   5 * time.Second,
+		"10":   10 * time.Second, // bare integer = seconds (WR-04)
+		" 10 ": 10 * time.Second,
+		"0":    0,
+		"60s":  60 * time.Second,
+		"60":   60 * time.Second,
+	}
+	for in, want := range ok {
+		d, warn, err := parseDrainPropagationDelay(in)
+		assert.NoError(t, err, in)
+		assert.Empty(t, warn, in)
+		assert.Equal(t, want, d, in)
+	}
+
+	// WR-04: unparsable or negative values fail closed instead of silently becoming 0.
+	for _, in := range []string{"garbage", "10 s", "-1s", "-5", "1.5"} {
+		_, _, err := parseDrainPropagationDelay(in)
+		assert.Error(t, err, in)
+	}
+
+	// WR-04: values above the documented maximum are capped with a warning.
+	for _, in := range []string{"61s", "5m", "3600", "99999999999999999"} {
+		d, warn, err := parseDrainPropagationDelay(in)
+		assert.NoError(t, err, in)
+		assert.Equal(t, maxDrainPropagationDelay, d, in)
+		assert.Contains(t, warn, "capped", in)
+	}
 }
