@@ -13,6 +13,7 @@ import (
 	"sort"
 	"strings"
 	"sync"
+	"sync/atomic"
 	"time"
 
 	"github.com/google/uuid"
@@ -39,6 +40,8 @@ type AuditWorker struct {
 	cursor *CursorTracker
 	cfg    WorkerConfig
 	mu     sync.Mutex
+
+	skipped atomic.Int64
 }
 
 // NewAuditWorker instantiates a new background WAL ingestion worker.
@@ -248,14 +251,18 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 			offset = startOffset
 		}
 
-		processedInFile, nextOffset, err := w.processFile(ctx, fileName, filePath, offset)
+		processedInFile, nextOffset, reachedEOF, err := w.processFile(ctx, fileName, filePath, offset, isLatest)
 		totalProcessed += processedInFile
 		if err != nil {
 			return totalProcessed, err
 		}
 
-		// If historical segment completed and next segment exists, advance cursor to next segment
+		// A historical segment is advanced past and pruned ONLY on an explicit EOF with no
+		// error; anything else keeps the cursor and the file untouched (AUD-03).
 		if !isLatest && i+1 < len(walFiles) {
+			if !reachedEOF {
+				return totalProcessed, fmt.Errorf("segment %s not fully read, cursor held", fileName)
+			}
 			nextFile := walFiles[i+1]
 			if err := w.cursor.SaveOffset(nextFile, 0); err != nil {
 				return totalProcessed, fmt.Errorf("failed to advance cursor to next segment: %w", err)
@@ -274,46 +281,83 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 	return totalProcessed, nil
 }
 
-func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string, startOffset int64) (int, int64, error) {
+// readFramedRecord is the frame reader; a package var so tests can inject read errors
+// hermetically.
+var readFramedRecord = ReadFramedRecord
+
+// SkippedFrames returns the number of CRC-valid frames skipped for undecodable JSON.
+func (w *AuditWorker) SkippedFrames() int64 { return w.skipped.Load() }
+
+// processFile ingests one segment from startOffset. reachedEOF is true only when the
+// segment was read to a definite end. A torn tail on the newest segment returns
+// reachedEOF=false with a nil error and the offset at the torn frame's start so the
+// next pass retries it.
+func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string, startOffset int64, isLatest bool) (int, int64, bool, error) {
 	f, err := os.Open(filePath)
 	if err != nil {
-		return 0, startOffset, fmt.Errorf("failed to open segment %s: %w", filePath, err)
+		return 0, startOffset, false, fmt.Errorf("failed to open segment %s: %w", filePath, err)
 	}
 	defer f.Close()
 
 	if startOffset > 0 {
 		if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
-			return 0, startOffset, fmt.Errorf("failed to seek segment %s to %d: %w", filePath, startOffset, err)
+			return 0, startOffset, false, fmt.Errorf("failed to seek segment %s to %d: %w", filePath, startOffset, err)
 		}
 	}
 
 	var batch []CompletionEvent
 	currentOffset := startOffset
 	processedCount := 0
+	reachedEOF := false
+	var readErr error
 
+loop:
 	for {
 		if ctx.Err() != nil {
-			return processedCount, currentOffset, ctx.Err()
+			return processedCount, currentOffset, false, ctx.Err()
 		}
 
-		evt, bytesRead, err := ReadFramedRecord(f)
+		evt, bytesRead, err := readFramedRecord(f)
 		if err != nil {
-			if errors.Is(err, io.EOF) {
-				break
-			}
-			if errors.Is(err, ErrCorruptedRecord) {
+			switch {
+			case errors.Is(err, io.EOF):
+				reachedEOF = true
+				break loop
+			case errors.Is(err, io.ErrUnexpectedEOF):
+				// Torn frame at the end of the file.
+				if isLatest {
+					log.Printf("AuditWorker: torn tail in %s at offset %d, will retry", fileName, currentOffset)
+				} else {
+					log.Printf("Warning: torn tail in historical segment %s at offset %d, treating as end of segment", fileName, currentOffset)
+					reachedEOF = true
+				}
+				break loop
+			case errors.Is(err, ErrCorruptedRecord):
 				// Corrupted record detected: scan forward for next MagicHeader to resynchronize
 				log.Printf("Warning: corrupted WAL record in %s around offset %d, seeking resync", fileName, currentOffset)
 				resyncPos, scanErr := scanToNextMagic(f)
 				if scanErr != nil {
-					// Cannot resynchronize further in this file
-					break
+					if errors.Is(scanErr, io.EOF) {
+						// Nothing further to resync to: end of segment (historical) or a
+						// possibly still-growing tail (newest, retried next pass).
+						reachedEOF = !isLatest
+						break loop
+					}
+					readErr = fmt.Errorf("resync scan of %s failed: %w", fileName, scanErr)
+					break loop
 				}
 				currentOffset = resyncPos
 				continue
+			case errors.Is(err, ErrInvalidRecordJSON):
+				// CRC-valid frame with undecodable JSON: skip and count, never wedge.
+				w.skipped.Add(1)
+				log.Printf("Warning: undecodable JSON in WAL frame of %s at offset %d, skipped", fileName, currentOffset)
+				currentOffset += bytesRead
+				continue
+			default:
+				readErr = fmt.Errorf("read error in segment %s at offset %d: %w", fileName, currentOffset, err)
+				break loop
 			}
-			// Unexpected I/O error
-			break
 		}
 
 		batch = append(batch, *evt)
@@ -322,20 +366,23 @@ func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string
 
 		if len(batch) >= w.cfg.BatchSize {
 			if err := w.ProcessBatch(ctx, batch, fileName, currentOffset); err != nil {
-				return processedCount, currentOffset - bytesRead, err
+				return processedCount, currentOffset - bytesRead, false, err
 			}
 			batch = batch[:0]
 		}
 	}
 
-	// Flush remaining records in batch
+	// Flush frames read before the stop condition; the cursor only covers them.
 	if len(batch) > 0 {
 		if err := w.ProcessBatch(ctx, batch, fileName, currentOffset); err != nil {
-			return processedCount, currentOffset, err
+			return processedCount, currentOffset, false, err
 		}
 	}
+	if readErr != nil {
+		return processedCount, currentOffset, false, readErr
+	}
 
-	return processedCount, currentOffset, nil
+	return processedCount, currentOffset, reachedEOF, nil
 }
 
 func scanToNextMagic(f *os.File) (int64, error) {
@@ -343,7 +390,13 @@ func scanToNextMagic(f *os.File) (int64, error) {
 	headerBuf := make([]byte, 4)
 	for {
 		n, err := f.Read(buf)
-		if err != nil || n == 0 {
+		if err != nil {
+			if errors.Is(err, io.EOF) {
+				return 0, io.EOF
+			}
+			return 0, err
+		}
+		if n == 0 {
 			return 0, io.EOF
 		}
 		if buf[0] == 0xAE { // First byte of MagicHeader 0xAE615001
