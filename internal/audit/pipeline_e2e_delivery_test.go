@@ -130,20 +130,26 @@ func TestE2EAllowedNotDelayedByStuckDisk(t *testing.T) {
 		t.Fatal("the committer never reached the blocked fsync")
 	}
 
-	for i := 0; i < 100; i++ {
-		if faulted, _ := env.spool.WriteFaulted(); faulted {
-			break
-		}
+	for i := 0; i < 100 && env.rec.dropped("completion", "queue_full") == 0; i++ {
 		allowed()
 	}
-	faulted, reason := env.spool.WriteFaulted()
-	require.True(t, faulted, "queue overflow must set the spool write fault")
-	assert.Equal(t, dropQueueFull, reason)
+	// D-12a: overflow sheds and counts but never faults or unreadies the replica.
+	require.Greater(t, env.rec.dropped("completion", "queue_full"), 0)
+	faulted, _ := env.spool.WriteFaulted()
+	assert.False(t, faulted, "queue overflow must not set the spool write fault")
 	saturated, err := env.spool.CheckSaturation()
 	require.NoError(t, err)
+	assert.False(t, saturated)
+	assert.False(t, env.rec.everDegraded())
+
+	// A genuine hard-limit fault still fails closed.
+	env.pipeline.com.setFault(dropHardLimit)
+	faulted, reason := env.spool.WriteFaulted()
+	require.True(t, faulted)
+	assert.Equal(t, dropHardLimit, reason)
+	saturated, err = env.spool.CheckSaturation()
+	require.NoError(t, err)
 	assert.True(t, saturated)
-	assert.Greater(t, env.rec.dropped("completion", "queue_full"), 0)
-	assert.True(t, env.rec.degraded())
 
 	// Hold the recovery just before it clears the fault so the fail-closed gate can be
 	// observed deterministically once the disk is free again.

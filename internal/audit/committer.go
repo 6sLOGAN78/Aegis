@@ -209,10 +209,11 @@ func (c *Committer) SubmitDenial(ev *CompletionEvent) error {
 }
 
 // EnqueueCompletion queues a completion frame without ever blocking (D-08). When the
-// queue is full the loss is counted and the spool write fault is set (D-12).
+// queue is full the completion is shed and counted (enqueueAsync) and logged, but no
+// fault is set: the replica stays ready (D-12a, amends Phase 8 D-12).
 func (c *Committer) EnqueueCompletion(ev *CompletionEvent) {
 	if !c.enqueueAsync(ev, kindCompletion, true) {
-		c.setFault(dropQueueFull)
+		c.logf("audit: completion queue full, completion shed")
 	}
 }
 
@@ -541,15 +542,10 @@ func (c *Committer) retry(retained []commitItem) bool {
 	}
 }
 
-// clearWriteErrorFault ends a write_error fault after a successful retry. If the
-// completion queue is meanwhile more than half full the fault is handed to the
-// recovery tick as queue_full instead of reopening the gate immediately.
+// clearWriteErrorFault ends a write_error fault after a successful retry; queue
+// depth no longer influences faults (D-12a).
 func (c *Committer) clearWriteErrorFault(gen uint64) {
 	if faulted, reason := c.spool.WriteFaulted(); !faulted || reason != dropWriteError {
-		return
-	}
-	if len(c.completionCh) > cap(c.completionCh)/2 {
-		c.setFault(dropQueueFull)
 		return
 	}
 	c.clearFaultIfGen(gen)

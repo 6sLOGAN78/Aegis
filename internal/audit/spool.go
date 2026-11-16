@@ -30,6 +30,10 @@ var (
 	ErrSpoolSaturated  = errors.New("audit spool saturated (>= 90% capacity)")
 	ErrCorruptedRecord = errors.New("wal record checksum mismatch")
 
+	// ErrInvalidRecordJSON marks a CRC-valid frame whose payload is not decodable JSON.
+	// The frame is intact and its bytes are consumed, so a reader can skip it.
+	ErrInvalidRecordJSON = errors.New("wal record json invalid")
+
 	// ErrHardLimit is returned by WriteFrames when the spool has crossed the hard limit
 	// (default 95%). Nothing is written; the caller drops and counts the batch.
 	ErrHardLimit = errors.New("audit spool at hard limit")
@@ -78,6 +82,9 @@ type DiskSpool struct {
 	// bytes) and WriteFrames rotates before it writes anything.
 	needsRotate atomic.Bool
 	lastWarnNS  atomic.Int64
+
+	// bytesHook, when set, is told how many bytes each successful write persisted.
+	bytesHook atomic.Pointer[func(int)]
 
 	// Test seams used only by WriteFrames. nil means the real f.Write / f.Sync.
 	writeFn func(*os.File, []byte) (int, error)
@@ -347,6 +354,7 @@ func (s *DiskSpool) AppendPreForward(event *CompletionEvent) error {
 	}
 
 	s.currentSize += int64(len(frame))
+	s.notifyBytesWritten(len(frame))
 
 	// 7. Rotate segment if size threshold exceeded
 	if s.currentSize >= s.cfg.MaxSegmentBytes {
@@ -454,6 +462,7 @@ func (s *DiskSpool) WriteFrames(frames [][]byte) error {
 	}
 
 	s.currentSize += int64(len(buf))
+	s.notifyBytesWritten(len(buf))
 
 	if s.currentSize >= s.cfg.MaxSegmentBytes {
 		// The batch is durable: a failed rotation must not turn it into a failure.
@@ -606,7 +615,7 @@ func ReadFramedRecord(r io.Reader) (*CompletionEvent, int64, error) {
 	// Read payload + trailing newline
 	buf := make([]byte, length+1)
 	if _, err := io.ReadFull(r, buf); err != nil {
-		return nil, int64(FrameHeaderSize), fmt.Errorf("%w: partial record payload", ErrCorruptedRecord)
+		return nil, int64(FrameHeaderSize), fmt.Errorf("%w: partial record payload: %w", ErrCorruptedRecord, io.ErrUnexpectedEOF)
 	}
 
 	payload := buf[:length]
@@ -617,9 +626,27 @@ func ReadFramedRecord(r io.Reader) (*CompletionEvent, int64, error) {
 
 	var event CompletionEvent
 	if err := json.Unmarshal(payload, &event); err != nil {
-		return nil, int64(FrameHeaderSize + int(length) + 1), fmt.Errorf("failed to unmarshal record json: %w", err)
+		return nil, int64(FrameHeaderSize + int(length) + 1), fmt.Errorf("%w: %v", ErrInvalidRecordJSON, err)
 	}
 
 	totalBytes := int64(FrameHeaderSize + int(length) + 1)
 	return &event, totalBytes, nil
+}
+
+// SetBytesWrittenHook registers fn to be called with the number of bytes persisted by
+// every successful WriteFrames and AppendPreForward. Pass nil to clear. Safe to call
+// after construction; fn runs while the spool lock is held, so it must not call back
+// into the spool.
+func (s *DiskSpool) SetBytesWrittenHook(fn func(int)) {
+	if fn == nil {
+		s.bytesHook.Store(nil)
+		return
+	}
+	s.bytesHook.Store(&fn)
+}
+
+func (s *DiskSpool) notifyBytesWritten(n int) {
+	if h := s.bytesHook.Load(); h != nil {
+		(*h)(n)
+	}
 }
