@@ -53,6 +53,7 @@ var gatewayAllowlist = map[string]bool{
 	"AEGIS_METRICS_PORT":               true,
 	"AEGIS_ASSERTION_PRIVATE_KEY":      true,
 	"AEGIS_DRAIN_TIMEOUT":              true,
+	"AEGIS_DRAIN_PROPAGATION_DELAY":    true,
 	"AEGIS_UPSTREAM_SCHEME":            true,
 
 	// Phase 11: keyset directories and authenticated control-plane stream.
