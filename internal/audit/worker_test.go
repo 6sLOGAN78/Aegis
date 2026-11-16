@@ -265,18 +265,18 @@ func TestAuditWorker_CorruptedRecordRecovery(t *testing.T) {
 	require.NoError(t, f.Sync())
 	require.NoError(t, f.Close())
 
-	// Append clean record evt2
+	// Append clean record evt2. The spool never appends behind bytes it did not write,
+	// so evt2 lands in a fresh segment (12-REVIEW CR-01).
 	require.NoError(t, spool.AppendPreForward(evt2))
+	assert.NotEqual(t, activeSeg, spool.CurrentSegment(), "append must rotate away from the untracked tail")
 	require.NoError(t, spool.Close())
 
-	// Worker should ingest both clean records and skip corrupted bytes
-	b := mock.ExpectBatch()
-	b.ExpectExec("INSERT INTO audit_events").
-		WithArgs(anyAuditArgs()...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
-	b.ExpectExec("INSERT INTO audit_events").
-		WithArgs(anyAuditArgs()...).
-		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	// Worker should ingest both clean records and skip corrupted bytes (one batch per segment)
+	for i := 0; i < 2; i++ {
+		mock.ExpectBatch().ExpectExec("INSERT INTO audit_events").
+			WithArgs(anyAuditArgs()...).
+			WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	}
 
 	worker, err := NewAuditWorker(mock, WorkerConfig{
 		SpoolDir:      tmpSpoolDir,

@@ -381,7 +381,18 @@ func (s *DiskSpool) AppendPreForward(event *CompletionEvent) error {
 	copy(frame[12:], payload)
 	frame[FrameHeaderSize+len(payload)] = '\n'
 
-	// 5. Append to active segment file
+	// 5. Never append behind bytes this spool did not account for (a torn tail left by
+	// an earlier failed write or fsync): rotate first, as WriteFrames does, so a live
+	// append can never land behind a torn frame.
+	if s.hasUntrackedTailLocked() {
+		if rerr := s.rotateSegment(); rerr != nil {
+			s.needsRotate.Store(true)
+			return fmt.Errorf("failed to rotate away from an untrusted wal segment tail: %w", rerr)
+		}
+		s.needsRotate.Store(false)
+	}
+
+	// Append to active segment file
 	if _, err := s.activeFile.Write(frame); err != nil {
 		return fmt.Errorf("failed to append wal record: %w", err)
 	}

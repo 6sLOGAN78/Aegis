@@ -300,8 +300,17 @@ func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string
 	}
 	defer f.Close()
 
+	// Read against a stable size snapshot: bytes the writer appends during this pass are
+	// invisible until the next pass, so a frame still being written is consistently
+	// seen as incomplete rather than half-read.
+	fi, err := f.Stat()
+	if err != nil {
+		return 0, startOffset, false, fmt.Errorf("failed to stat segment %s: %w", filePath, err)
+	}
+	src := io.NewSectionReader(f, 0, fi.Size())
+
 	if startOffset > 0 {
-		if _, err := f.Seek(startOffset, io.SeekStart); err != nil {
+		if _, err := src.Seek(startOffset, io.SeekStart); err != nil {
 			return 0, startOffset, false, fmt.Errorf("failed to seek segment %s to %d: %w", filePath, startOffset, err)
 		}
 	}
@@ -319,27 +328,37 @@ func (w *AuditWorker) processFile(ctx context.Context, fileName, filePath string
 loop:
 	for {
 		if ctx.Err() != nil {
+			if badStart >= 0 {
+				currentOffset = badStart
+			}
 			return processedCount, currentOffset, false, ctx.Err()
 		}
 
-		evt, bytesRead, err := readFramedRecord(f)
+		evt, bytesRead, err := readFramedRecord(src)
 		if err != nil {
 			switch {
 			case errors.Is(err, io.EOF):
 				reachedEOF = true
 				break loop
 			case errors.Is(err, io.ErrUnexpectedEOF), errors.Is(err, ErrCorruptedRecord):
-				// Torn (length runs past EOF) or corrupt frame. Never trust its length:
-				// rescan from just after this frame's start so frames inside the bogus
-				// length window are not skipped.
+				// Torn (length runs past the snapshot) or corrupt frame. Never trust its
+				// length: rescan from just after this frame's start so frames inside the
+				// bogus length window are not skipped.
+				//
+				// The rescan is provisional. The cursor only moves past badStart once a
+				// CRC-valid frame lying wholly inside the snapshot decodes after it.
+				// Appends are sequential, so such a frame proves the writer has finished
+				// with (or abandoned) the bad frame. Without one, every exit path below
+				// resets to badStart, so on the active segment a frame that is still
+				// being written is retried from its start and never skipped.
 				if badStart < 0 {
 					badStart = currentOffset
 				}
-				if _, serr := f.Seek(currentOffset+1, io.SeekStart); serr != nil {
+				if _, serr := src.Seek(currentOffset+1, io.SeekStart); serr != nil {
 					readErr = fmt.Errorf("resync seek in %s failed: %w", fileName, serr)
 					break loop
 				}
-				resyncPos, scanErr := scanToNextMagic(f)
+				resyncPos, scanErr := scanToNextMagic(src)
 				if scanErr != nil {
 					if errors.Is(scanErr, io.EOF) {
 						// Nothing decodable follows: a genuine torn tail. The newest segment
@@ -386,6 +405,12 @@ loop:
 		}
 	}
 
+	// A provisional resync that never reached a decodable frame must not move the
+	// cursor: fall back to the first bad frame's start.
+	if badStart >= 0 {
+		currentOffset = badStart
+	}
+
 	// Flush frames read before the stop condition; the cursor only covers them.
 	if len(batch) > 0 {
 		if err := w.ProcessBatch(ctx, batch, fileName, currentOffset); err != nil {
@@ -399,7 +424,7 @@ loop:
 	return processedCount, currentOffset, reachedEOF, nil
 }
 
-func scanToNextMagic(f *os.File) (int64, error) {
+func scanToNextMagic(f io.ReadSeeker) (int64, error) {
 	buf := make([]byte, 1)
 	headerBuf := make([]byte, 4)
 	for {
