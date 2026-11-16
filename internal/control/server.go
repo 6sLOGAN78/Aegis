@@ -94,12 +94,18 @@ func (s *SnapshotDistributionServer) StreamSnapshots(stream snapshotv1.SnapshotD
 
 	s.mu.Lock()
 	s.clients[connID] = msgCh
+	if s.metrics != nil {
+		s.metrics.SetConnectedGateways(len(s.clients))
+	}
 	initialSnapshot := s.activeSnapshot
 	s.mu.Unlock()
 
 	defer func() {
 		s.mu.Lock()
 		delete(s.clients, connID)
+		if s.metrics != nil {
+			s.metrics.SetConnectedGateways(len(s.clients))
+		}
 		s.mu.Unlock()
 	}()
 
@@ -212,6 +218,9 @@ func (s *SnapshotDistributionServer) BroadcastSnapshot(env *snapshotv1.SnapshotE
 
 	s.mu.Lock()
 	s.activeSnapshot = env
+	if s.metrics != nil {
+		s.metrics.RecordSnapshotPublish()
+	}
 	msg := &snapshotv1.ControlPlaneMessage{
 		MessageId: uuid.NewString(),
 		Timestamp: timestamppb.Now(),
