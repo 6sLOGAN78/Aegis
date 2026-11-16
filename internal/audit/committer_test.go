@@ -447,7 +447,7 @@ func TestCommitterWaiterTimeout(t *testing.T) {
 
 // ---- Task 2 tests ----
 
-func TestCommitterQueueFullSetsFault(t *testing.T) {
+func TestCommitterQueueFullShedsWithoutFault(t *testing.T) {
 	spool := newTestSpool(t, 0.10)
 	release, entered := blockSync(spool)
 	defer release()
@@ -471,19 +471,29 @@ func TestCommitterQueueFullSetsFault(t *testing.T) {
 		require.Less(t, time.Since(begin), 50*time.Millisecond, "EnqueueCompletion must never block")
 	}
 	assert.GreaterOrEqual(t, rec.dropped("completion", "queue_full"), 10)
-	faulted, reason := spool.WriteFaulted()
-	assert.True(t, faulted)
-	assert.Equal(t, "queue_full", reason)
+	// D-12a: overflow is shed and counted but never faults or saturates the spool.
+	faulted, _ := spool.WriteFaulted()
+	assert.False(t, faulted)
 	saturated, err := spool.CheckSaturation()
 	require.NoError(t, err)
-	assert.True(t, saturated)
-	assert.True(t, rec.everDegraded())
-
-	// Recovery needs no new traffic.
+	assert.False(t, saturated)
+	assert.False(t, rec.everDegraded())
 	release()
-	eventually(t, func() bool { f, _ := spool.WriteFaulted(); return !f }, "fault clears without traffic")
-	eventually(t, func() bool { return !rec.degraded() }, "degraded gauge reset")
 	assert.NoError(t, spool.AppendPreForward(sampleCompletionEvent("allowed-again")))
+}
+
+// A write-error or hard-limit fault still saturates the spool (fail-closed, D-12a).
+func TestCommitterHardFaultsStillSaturate(t *testing.T) {
+	for _, reason := range []string{"hard_limit", "write_error"} {
+		spool := newTestSpool(t, 0.10)
+		rec := newFakeRecorder()
+		c := startCommitter(t, spool, rec, CommitterConfig{RecoveryInterval: time.Hour})
+		c.setFault(reason)
+		saturated, err := spool.CheckSaturation()
+		require.NoError(t, err)
+		assert.True(t, saturated, reason)
+		assert.True(t, rec.degraded(), reason)
+	}
 }
 
 func TestCommitterHardLimitBand(t *testing.T) {
