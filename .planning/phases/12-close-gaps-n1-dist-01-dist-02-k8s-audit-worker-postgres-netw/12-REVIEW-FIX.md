@@ -156,3 +156,66 @@ These are not trivial comment fixes, so they are out of scope for this pass:
 _Fixed: 2026-11-16T20:30:00Z_
 _Fixer: Claude (gsd-code-fixer)_
 _Iteration: 1_
+
+## R2: Fixes for 12-REVIEW-2.md (WAL re-review)
+
+**Source review:** 12-REVIEW-2.md (1 critical, 2 warning, 3 info)
+**In scope:** CR-01, WR-01, WR-02, plus IN-03 if trivial. All four are addressed.
+
+**Verification (final tree):** `go build ./...`, `go vet ./...` and `go test -short -count=1 ./...` pass. `go test -short -race -count=3 ./internal/audit/` passes, and `gofmt -l cmd internal tests scripts` is empty. Docker was not started. STATE.md and ROADMAP.md were not touched. Every new regression test failed before its fix and passes after it.
+
+| Finding | Disposition | Commit |
+|---------|-------------|--------|
+| R2-CR-01 | fixed: requires human verification | 9fe0fb3 |
+| R2-WR-01 | fixed | 2d01424 |
+| R2-WR-02 | fixed | d217589 |
+| R2-IN-03 | fixed (in the same commit as WR-02) | d217589 |
+| R2-IN-01, R2-IN-02 | left open (pre-existing; not trivial) | none |
+
+### R2-CR-01: Wall-clock segment names reorder when the clock steps back
+
+**Files modified:** `internal/audit/spool.go`, `internal/audit/worker.go`, `internal/audit/worker_segorder_test.go` (new)
+**Commit:** 9fe0fb3
+**Applied fix:**
+- **One shared ordering.** `compareSegmentNames` and `listSegments` are now used by both the spool and the worker. Segments are ordered by the parsed `(seq, ts, name)`, never by a string sort. Names that do not parse are ignored.
+- **Name format unchanged.** Names are still `wal-<ts>-<seq>.log`, so legacy segments keep parsing. Legacy segments that are already out of time order are read in seq order. Segments that reused a seq number (which the old code could produce after a step-back) are ordered by timestamp.
+- **Monotonic names.** `NewDiskSpool` takes `seq = max(seq on disk)` and keeps `lastTS = max(ts on disk)`. Both `NewDiskSpool` and `rotateSegment` clamp the next timestamp to at least `lastTS+1`. A new segment therefore orders after every existing one by seq, by timestamp, and as a plain string.
+- **Worker.**
+  - The cursor fallback (when the cursor's segment was pruned) and the skip high-water mark use the shared ordering.
+  - A defensive check refuses to advance or prune unless the next segment orders strictly after the current one.
+  - The highest-ordered segment is still never advanced past or pruned.
+- **Tests:**
+  - The reviewer's scenario: a future-dated newest segment with a torn tail, followed by a rotation, B and then C. The live segment survives and C is ingested.
+  - The stall variant: the cursor already sits on the future-dated segment.
+  - Legacy upgrade ordering: out-of-time-order names, a duplicate seq and a junk name.
+  - Numeric comparison of seq values wider than 6 digits.
+
+**Human verification:** please confirm the ordering rule. Seq is the primary key and the timestamp only breaks ties. If a legacy deployment already ran after a step-back, its cursor may sit on a segment that now orders differently. That deployment re-reads from there, and ON CONFLICT absorbs the duplicates.
+
+### R2-WR-01: `ReadFramedRecord` ignored the trailing `'\n'`
+
+**Files modified:** `internal/audit/spool.go`, `internal/audit/worker_segorder_test.go`
+**Commit:** 2d01424
+**Applied fix:** `buf[length] != '\n'` is now checked before the CRC and returns `ErrCorruptedRecord`, so the worker resyncs from the frame start + 1. The test covers a torn G that is missing only its newline, followed by B and C. It runs on both a historical and the newest segment: B and C are ingested and G is dropped. A unit test on the reader is also added.
+
+### R2-WR-02: CRC-bad and resynced-over frames were not counted
+
+**Files modified:** `internal/audit/worker.go`, `internal/telemetry/metrics.go` (help text), `cmd/audit-worker/main.go` (comment), `internal/audit/worker_segorder_test.go`
+**Commit:** d217589
+**Applied fix:**
+- A provisional resync is final when one of these happens: a CRC-valid frame decodes after it, a JSON skip follows it, or its bytes are abandoned as a historical torn tail. At that point `commitResync` counts the corrupt region once, at its first bad offset.
+- The count goes into the existing `SkippedFrames()` and `aegis_audit_worker_skipped_frames_total`. It stays unlabelled, so the hook signature and the scrape surface are unchanged.
+- The existing (segment, offset) high-water mark dedupes re-reads.
+- A torn tail on the newest segment may still complete, so it is not counted.
+- **Tests:** a CRC-bad A followed by B, with a forced failed batch and then a retry, gives a count of 1 and one hook call. A torn tail is not counted while its segment is the newest, and is counted once after rotation.
+
+### R2-IN-03: Repeated resync log line
+
+**Commit:** d217589
+**Applied fix:** the "corrupted WAL record ... skipped, resumed at" line is logged only when the skip is first counted. Historical torn-tail lines are logged the same way. A pending resync no longer logs on every 200 ms pass. The newest-segment "torn tail, will retry" line (original IN-04) is unchanged.
+
+---
+
+_R2 fixed: 2026-11-16_
+_Fixer: Claude (gsd-code-fixer)_
+_Iteration: 2_
