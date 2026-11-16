@@ -161,3 +161,40 @@ func TestAuditWorker_TornTailOnHistoricalSegmentEndsIt(t *testing.T) {
 	require.NoError(t, lerr)
 	assert.Equal(t, seg2Name, cur.SegmentFile)
 }
+
+// WR-07: a skipped poison frame is reported through the hook exactly once, even when a
+// later failure makes the worker re-read it before the cursor moves past it.
+func TestAuditWorker_PoisonFrameCountedOnceAcrossRetry(t *testing.T) {
+	dir := t.TempDir()
+	var data []byte
+	data = append(data, eventFrame(t, "g1")...)
+	data = append(data, rawFrame([]byte("{not json"))...)
+	data = append(data, eventFrame(t, "g2")...)
+	writeSegment(t, dir, "wal-00000000000000000001-000001.log", data)
+	w, mock := newReadErrWorker(t, dir, false)
+	hookCalls := 0
+	w.SetSkippedFrameHook(func() { hookCalls++ })
+
+	// First pass: the DB rejects the batch, so the cursor is not saved.
+	fb := mock.ExpectBatch()
+	fb.ExpectExec("INSERT INTO audit_events").
+		WithArgs(anyAuditArgs()...).
+		WillReturnError(errors.New("db down"))
+	fb.ExpectExec("INSERT INTO audit_events").
+		WithArgs(anyAuditArgs()...).
+		WillReturnResult(pgxmock.NewResult("INSERT", 1))
+	_, err := w.ProcessAvailable(context.Background())
+	require.Error(t, err)
+	cur, lerr := w.Cursor().LoadOffset()
+	require.NoError(t, lerr)
+	assert.Equal(t, int64(0), cur.Offset, "cursor held after the failed batch")
+
+	// Second pass re-reads the poison frame and succeeds.
+	expectInserts(mock, 2)
+	n, err := w.ProcessAvailable(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 2, n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, int64(1), w.SkippedFrames(), "skip counted once across the retry")
+	assert.Equal(t, 1, hookCalls, "metric hook called once across the retry")
+}

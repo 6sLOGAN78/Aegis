@@ -42,6 +42,13 @@ type AuditWorker struct {
 	mu     sync.Mutex
 
 	skipped atomic.Int64
+	// skipHook is told about every newly skipped frame (metric export, no event data).
+	skipHook atomic.Pointer[func()]
+	// skipSeg/skipOff are the furthest (segment, offset) whose skip was already counted.
+	// A retry that re-reads the same frame before the cursor moved does not count it
+	// again. Guarded by mu (processFile runs under it).
+	skipSeg string
+	skipOff int64
 }
 
 // NewAuditWorker instantiates a new background WAL ingestion worker.
@@ -286,7 +293,33 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 var readFramedRecord = ReadFramedRecord
 
 // SkippedFrames returns the number of CRC-valid frames skipped for undecodable JSON.
+// Each frame is counted once, even if a later failure makes the worker re-read it.
 func (w *AuditWorker) SkippedFrames() int64 { return w.skipped.Load() }
+
+// SetSkippedFrameHook registers fn to be called once per newly skipped frame (for
+// example telemetry.Metrics.RecordAuditWorkerSkippedFrame). Pass nil to clear. fn runs
+// with the worker lock held and must not call back into the worker.
+func (w *AuditWorker) SetSkippedFrameHook(fn func()) {
+	if fn == nil {
+		w.skipHook.Store(nil)
+		return
+	}
+	w.skipHook.Store(&fn)
+}
+
+// countSkip records a skipped frame at (fileName, offset) unless that position was
+// already counted. Segment names sort chronologically and offsets grow within a
+// segment, so the high-water mark dedupes retries. Caller holds w.mu.
+func (w *AuditWorker) countSkip(fileName string, offset int64) {
+	if fileName < w.skipSeg || (fileName == w.skipSeg && offset <= w.skipOff) {
+		return
+	}
+	w.skipSeg, w.skipOff = fileName, offset
+	w.skipped.Add(1)
+	if h := w.skipHook.Load(); h != nil {
+		(*h)()
+	}
+}
 
 // processFile ingests one segment from startOffset. reachedEOF is true only when the
 // segment was read to a definite end. A torn or corrupt frame is resynced from its
@@ -382,7 +415,7 @@ loop:
 			case errors.Is(err, ErrInvalidRecordJSON):
 				// CRC-valid frame with undecodable JSON: skip and count, never wedge.
 				badStart = -1
-				w.skipped.Add(1)
+				w.countSkip(fileName, currentOffset)
 				log.Printf("Warning: undecodable JSON in WAL frame of %s at offset %d, skipped", fileName, currentOffset)
 				currentOffset += bytesRead
 				continue

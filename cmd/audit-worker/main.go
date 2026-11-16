@@ -12,6 +12,7 @@ import (
 
 	"aegis/internal/audit"
 	"aegis/internal/storage"
+	"aegis/internal/telemetry"
 )
 
 func main() {
@@ -98,6 +99,23 @@ func main() {
 	worker, err := audit.NewAuditWorker(pool, workerCfg)
 	if err != nil {
 		log.Fatalf("Failed to initialize audit worker: %v", err)
+	}
+
+	// Poison-frame skips are permanent audit loss: export them as
+	// aegis_audit_worker_skipped_frames_total (no labels, no event data). The scrape
+	// listener is opt-in (AEGIS_AUDIT_WORKER_METRICS_ADDR, e.g. ":9092") so the
+	// sidecar's network surface is unchanged by default.
+	metrics := telemetry.NewMetrics()
+	worker.SetSkippedFrameHook(metrics.RecordAuditWorkerSkippedFrame)
+	if addr := os.Getenv("AEGIS_AUDIT_WORKER_METRICS_ADDR"); addr != "" {
+		metricsSrv := telemetry.NewServer(addr, metrics)
+		metricsSrv.Start()
+		defer func() {
+			ctx, cancel := context.WithTimeout(context.Background(), 2*time.Second)
+			defer cancel()
+			_ = metricsSrv.Shutdown(ctx)
+		}()
+		log.Printf("Audit Worker metrics listening on %s", addr)
 	}
 
 	// 4. Run Worker with graceful signal termination

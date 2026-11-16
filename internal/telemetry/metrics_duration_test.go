@@ -119,3 +119,22 @@ func TestHTTPRequestsTotal_MethodNormalized(t *testing.T) {
 	}
 	assert.Equal(t, map[string]float64{"OTHER": 2, "GET": 1}, methods)
 }
+
+// WR-07: the audit-worker skipped-frame counter is exported without labels.
+func TestAuditWorkerSkippedFramesCounter(t *testing.T) {
+	m := NewMetrics()
+	m.RecordAuditWorkerSkippedFrame()
+	m.RecordAuditWorkerSkippedFrame()
+	mfs, err := m.Registry.Gather()
+	require.NoError(t, err)
+	for _, mf := range mfs {
+		if mf.GetName() != "aegis_audit_worker_skipped_frames_total" {
+			continue
+		}
+		require.Len(t, mf.GetMetric(), 1)
+		assert.Empty(t, mf.GetMetric()[0].GetLabel())
+		assert.Equal(t, float64(2), mf.GetMetric()[0].GetCounter().GetValue())
+		return
+	}
+	t.Fatal("aegis_audit_worker_skipped_frames_total not registered")
+}

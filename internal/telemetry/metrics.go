@@ -21,6 +21,10 @@ type Metrics struct {
 	ConnectedGateways        prometheus.Gauge
 	SnapshotPublishTotal     prometheus.Counter
 
+	// AuditWorkerSkippedFramesTotal counts CRC-valid WAL frames the audit worker
+	// discarded because their JSON did not decode (permanent audit loss). No labels.
+	AuditWorkerSkippedFramesTotal prometheus.Counter
+
 	// Audit pipeline metrics (phase 08). Labels are closed enums only.
 	AuditRecordsWrittenTotal    *prometheus.CounterVec
 	AuditRecordsDroppedTotal    *prometheus.CounterVec
@@ -125,6 +129,12 @@ func NewMetrics() *Metrics {
 			prometheus.CounterOpts{
 				Name: "aegis_control_plane_snapshot_publish_total",
 				Help: "Total configuration snapshots published by the control plane.",
+			},
+		),
+		AuditWorkerSkippedFramesTotal: prometheus.NewCounter(
+			prometheus.CounterOpts{
+				Name: "aegis_audit_worker_skipped_frames_total",
+				Help: "CRC-valid WAL frames skipped by the audit worker because their JSON did not decode; each frame is counted once.",
 			},
 		),
 		AuditRecordsWrittenTotal: prometheus.NewCounterVec(
@@ -255,6 +265,7 @@ func NewMetrics() *Metrics {
 		m.SpoolBytesWrittenTotal,
 		m.ConnectedGateways,
 		m.SnapshotPublishTotal,
+		m.AuditWorkerSkippedFramesTotal,
 		m.AuditRecordsWrittenTotal,
 		m.AuditRecordsDroppedTotal,
 		m.AuditRecordsSuppressedTotal,
@@ -402,6 +413,12 @@ func (m *Metrics) SetConnectedGateways(n int) {
 // RecordSnapshotPublish increments the count of published configuration snapshots.
 func (m *Metrics) RecordSnapshotPublish() {
 	m.SnapshotPublishTotal.Inc()
+}
+
+// RecordAuditWorkerSkippedFrame counts one undecodable WAL frame skipped by the audit
+// worker. The worker calls it once per frame, never again on a retry.
+func (m *Metrics) RecordAuditWorkerSkippedFrame() {
+	m.AuditWorkerSkippedFramesTotal.Inc()
 }
 
 // RecordAuditWritten counts n audit records of the given kind durably written.
