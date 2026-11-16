@@ -125,6 +125,10 @@ type Committer struct {
 
 	probeHook atomic.Pointer[func()]
 	lastLogNS atomic.Int64
+	// The completion-shed path logs through its own limiter so a shed burst can never
+	// suppress the one-shot fault / write-error lines that share lastLogNS.
+	lastShedLogNS atomic.Int64
+	shedSinceLog  atomic.Int64
 }
 
 // NewCommitter applies defaults and starts the committer goroutine.
@@ -155,6 +159,18 @@ func (c *Committer) logf(format string, args ...any) {
 		return
 	}
 	log.Printf(format, args...)
+}
+
+// logShed reports shed completions at most once per second with the count shed since
+// the previous report. It has its own limiter, independent of logf.
+func (c *Committer) logShed() {
+	c.shedSinceLog.Add(1)
+	now := time.Now().UnixNano()
+	last := c.lastShedLogNS.Load()
+	if now-last < int64(time.Second) || !c.lastShedLogNS.CompareAndSwap(last, now) {
+		return
+	}
+	log.Printf("audit: completion queue full, %d completion(s) shed since last report", c.shedSinceLog.Swap(0))
 }
 
 // frame copies, normalizes (D-18) and frames ev.
@@ -213,7 +229,7 @@ func (c *Committer) SubmitDenial(ev *CompletionEvent) error {
 // fault is set: the replica stays ready (D-12a, amends Phase 8 D-12).
 func (c *Committer) EnqueueCompletion(ev *CompletionEvent) {
 	if !c.enqueueAsync(ev, kindCompletion, true) {
-		c.logf("audit: completion queue full, completion shed")
+		c.logShed()
 	}
 }
 
