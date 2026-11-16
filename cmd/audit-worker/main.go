@@ -101,7 +101,7 @@ func main() {
 		log.Fatalf("Failed to initialize audit worker: %v", err)
 	}
 
-	// Poison-frame skips are permanent audit loss: export them as
+	// Poison-frame and corrupt-region skips are permanent audit loss: export them as
 	// aegis_audit_worker_skipped_frames_total (no labels, no event data). The scrape
 	// listener is opt-in (AEGIS_AUDIT_WORKER_METRICS_ADDR, e.g. ":9092") so the
 	// sidecar's network surface is unchanged by default.

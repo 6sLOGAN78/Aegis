@@ -188,3 +188,53 @@ func TestReadFramedRecord_MissingTerminatorIsCorrupt(t *testing.T) {
 	_, _, err := ReadFramedRecord(bytes.NewReader(fr))
 	assert.ErrorIs(t, err, ErrCorruptedRecord)
 }
+
+// R2 WR-02: a fully written CRC-bad frame that is resynced over is permanent loss and must
+// be counted, once, even when a failed batch makes the worker re-read it.
+func TestAuditWorker_CRCBadFrameCountedOnceAcrossRetry(t *testing.T) {
+	dir := t.TempDir()
+	a := eventFrame(t, "A")
+	a[FrameHeaderSize+5] ^= 0x01 // bit rot in the payload
+	data := append(append([]byte{}, a...), eventFrame(t, "B")...)
+	writeSegment(t, dir, legacySegName(1, 1), data)
+	w, mock := newReadErrWorker(t, dir, false)
+	hookCalls := 0
+	w.SetSkippedFrameHook(func() { hookCalls++ })
+
+	fb := mock.ExpectBatch()
+	fb.ExpectExec("INSERT INTO audit_events").
+		WithArgs(anyAuditArgs()...).
+		WillReturnError(assert.AnError)
+	_, err := w.ProcessAvailable(context.Background())
+	require.Error(t, err)
+
+	expectRoutes(mock, "B")
+	n, err := w.ProcessAvailable(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, 1, n)
+	assert.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, int64(1), w.SkippedFrames(), "CRC-bad frame counted once")
+	assert.Equal(t, 1, hookCalls)
+}
+
+// R2 WR-02: bytes abandoned as a historical torn tail are counted; a torn tail on the
+// newest segment is only retried and is not counted.
+func TestAuditWorker_TornTailCountedOnlyWhenAbandoned(t *testing.T) {
+	dir := t.TempDir()
+	torn := append(eventFrame(t, "A"), tornBigFrame(t)...)
+	writeSegment(t, dir, legacySegName(1, 1), torn)
+	w, mock := newReadErrWorker(t, dir, false)
+	expectRoutes(mock, "A")
+	_, err := w.ProcessAvailable(context.Background())
+	require.NoError(t, err)
+	_, err = w.ProcessAvailable(context.Background())
+	require.NoError(t, err)
+	assert.Equal(t, int64(0), w.SkippedFrames(), "a newest-segment tail may still complete")
+
+	writeSegment(t, dir, legacySegName(1, 2), eventFrame(t, "B"))
+	expectRoutes(mock, "B")
+	_, err = w.ProcessAvailable(context.Background())
+	require.NoError(t, err)
+	assert.NoError(t, mock.ExpectationsWereMet())
+	assert.Equal(t, int64(1), w.SkippedFrames(), "abandoned historical tail counted")
+}

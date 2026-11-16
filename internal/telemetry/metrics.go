@@ -21,8 +21,10 @@ type Metrics struct {
 	ConnectedGateways        prometheus.Gauge
 	SnapshotPublishTotal     prometheus.Counter
 
-	// AuditWorkerSkippedFramesTotal counts CRC-valid WAL frames the audit worker
-	// discarded because their JSON did not decode (permanent audit loss). No labels.
+	// AuditWorkerSkippedFramesTotal counts WAL frames the audit worker permanently
+	// discarded (permanent audit loss): CRC-valid frames whose JSON did not decode, and
+	// corrupt regions (CRC mismatch, bad terminator or header, abandoned torn tail) it
+	// resynced over. No labels.
 	AuditWorkerSkippedFramesTotal prometheus.Counter
 
 	// Audit pipeline metrics (phase 08). Labels are closed enums only.
@@ -134,7 +136,7 @@ func NewMetrics() *Metrics {
 		AuditWorkerSkippedFramesTotal: prometheus.NewCounter(
 			prometheus.CounterOpts{
 				Name: "aegis_audit_worker_skipped_frames_total",
-				Help: "CRC-valid WAL frames skipped by the audit worker because their JSON did not decode; each frame is counted once.",
+				Help: "WAL frames permanently skipped by the audit worker (undecodable JSON, or a corrupt or torn region resynced over); each skip is counted once.",
 			},
 		),
 		AuditRecordsWrittenTotal: prometheus.NewCounterVec(
@@ -415,8 +417,8 @@ func (m *Metrics) RecordSnapshotPublish() {
 	m.SnapshotPublishTotal.Inc()
 }
 
-// RecordAuditWorkerSkippedFrame counts one undecodable WAL frame skipped by the audit
-// worker. The worker calls it once per frame, never again on a retry.
+// RecordAuditWorkerSkippedFrame counts one WAL frame (or corrupt region) permanently
+// skipped by the audit worker. The worker calls it once per frame, never again on a retry.
 func (m *Metrics) RecordAuditWorkerSkippedFrame() {
 	m.AuditWorkerSkippedFramesTotal.Inc()
 }

@@ -289,8 +289,11 @@ func (w *AuditWorker) ProcessAvailable(ctx context.Context) (int, error) {
 // hermetically.
 var readFramedRecord = ReadFramedRecord
 
-// SkippedFrames returns the number of CRC-valid frames skipped for undecodable JSON.
-// Each frame is counted once, even if a later failure makes the worker re-read it.
+// SkippedFrames returns the number of frames permanently skipped: CRC-valid frames with
+// undecodable JSON, and corrupt regions (CRC mismatch, bad terminator, bogus header, or a
+// torn tail abandoned on a historical segment) that the reader resynced over. A corrupt
+// region counts once, at the offset of its first bad frame. Each skip is counted once,
+// even if a later failure makes the worker re-read it.
 func (w *AuditWorker) SkippedFrames() int64 { return w.skipped.Load() }
 
 // SetSkippedFrameHook registers fn to be called once per newly skipped frame (for
@@ -305,16 +308,26 @@ func (w *AuditWorker) SetSkippedFrameHook(fn func()) {
 }
 
 // countSkip records a skipped frame at (fileName, offset) unless that position was
-// already counted. Segments are ordered by compareSegmentNames and offsets grow within
+// already counted, and reports whether it was newly counted. Segments are ordered by compareSegmentNames and offsets grow within
 // a segment, so the high-water mark dedupes retries. Caller holds w.mu.
-func (w *AuditWorker) countSkip(fileName string, offset int64) {
+func (w *AuditWorker) countSkip(fileName string, offset int64) bool {
 	if c := compareSegmentNames(fileName, w.skipSeg); w.skipSeg != "" && (c < 0 || (c == 0 && offset <= w.skipOff)) {
-		return
+		return false
 	}
 	w.skipSeg, w.skipOff = fileName, offset
 	w.skipped.Add(1)
 	if h := w.skipHook.Load(); h != nil {
 		(*h)()
+	}
+	return true
+}
+
+// commitResync is called once a provisional resync is proven final (a CRC-valid frame
+// decoded after it, or the bytes are abandoned as a historical torn tail). It counts the
+// corrupt region starting at badStart once and logs it once (not on every retry pass).
+func (w *AuditWorker) commitResync(fileName string, badStart, resumeAt int64) {
+	if w.countSkip(fileName, badStart) {
+		log.Printf("Warning: corrupted WAL record in %s at offset %d skipped, resumed at %d", fileName, badStart, resumeAt)
 	}
 }
 
@@ -398,7 +411,9 @@ loop:
 						if isLatest {
 							log.Printf("AuditWorker: torn tail in %s at offset %d, will retry", fileName, badStart)
 						} else {
-							log.Printf("Warning: torn tail in historical segment %s at offset %d, treating as end of segment", fileName, badStart)
+							if w.countSkip(fileName, badStart) {
+								log.Printf("Warning: torn tail in historical segment %s at offset %d, treating as end of segment", fileName, badStart)
+							}
 							reachedEOF = true
 						}
 						break loop
@@ -406,11 +421,16 @@ loop:
 					readErr = fmt.Errorf("resync scan of %s failed: %w", fileName, scanErr)
 					break loop
 				}
-				log.Printf("Warning: corrupted WAL record in %s at offset %d, resynced at %d", fileName, currentOffset, resyncPos)
+				// Logged and counted once the resync is proven final (commitResync), so a
+				// pending resync on the newest segment does not log on every pass.
 				currentOffset = resyncPos
 				continue
 			case errors.Is(err, ErrInvalidRecordJSON):
-				// CRC-valid frame with undecodable JSON: skip and count, never wedge.
+				// CRC-valid frame with undecodable JSON: skip and count, never wedge. It also
+				// proves any pending resync final.
+				if badStart >= 0 {
+					w.commitResync(fileName, badStart, currentOffset)
+				}
 				badStart = -1
 				w.countSkip(fileName, currentOffset)
 				log.Printf("Warning: undecodable JSON in WAL frame of %s at offset %d, skipped", fileName, currentOffset)
@@ -422,6 +442,9 @@ loop:
 			}
 		}
 
+		if badStart >= 0 {
+			w.commitResync(fileName, badStart, currentOffset)
+		}
 		badStart = -1
 		batch = append(batch, *evt)
 		currentOffset += bytesRead
