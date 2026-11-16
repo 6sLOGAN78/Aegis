@@ -117,12 +117,19 @@ func TestWiringShutdownOrder(t *testing.T) {
 		require.Equal(t, 1, len(calls), "08-08 D-10: expected exactly one %s.%s call in main()", x, name)
 		return calls[0].pos
 	}
-	drain := first("dualServer", "Shutdown")
+	// 12-04: dualServer.Shutdown is now passed as a method value to
+	// twoPhaseDrain, so the HTTP drain position is the twoPhaseDrain call.
+	drainCalls := wiringCalls(mainFn, func(fn ast.Expr) bool {
+		id, ok := fn.(*ast.Ident)
+		return ok && id.Name == "twoPhaseDrain"
+	})
+	require.Equal(t, 1, len(drainCalls), "12-04 DIST-01: expected exactly one twoPhaseDrain call in main()")
+	drain := drainCalls[0].pos
 	pipeline := first("auditPipeline", "Shutdown")
 	closeSpool := first("diskSpool", "Close")
 
 	assert.Less(t, int(drain), int(pipeline),
-		"D-10: audit pipeline must shut down after the HTTP drain (dualServer.Shutdown) so in-flight requests still reach it")
+		"D-10: audit pipeline must shut down after the HTTP drain (twoPhaseDrain) so in-flight requests still reach it")
 	assert.Less(t, int(pipeline), int(closeSpool),
 		"D-10: audit pipeline must shut down before the spool closes (diskSpool.Close) so queued records are fsynced")
 }
@@ -152,4 +159,21 @@ func TestWiringRejectionRecorder(t *testing.T) {
 	id, ok := calls[0].call.Args[0].(*ast.Ident)
 	assert.True(t, ok && id.Name == "metrics",
 		"08-08 D-16: SetRejectionRecorder must be given the telemetry registry (identifier metrics)")
+}
+
+// TestWiringTwoPhaseDrain guards DIST-01 (12-04): main() must delegate the
+// post-signal shutdown to twoPhaseDrain and wrap the workload handler with
+// drainAwareHandler.
+func TestWiringTwoPhaseDrain(t *testing.T) {
+	_, mainFn := wiringParseMain(t)
+	ident := func(name string) func(fn ast.Expr) bool {
+		return func(fn ast.Expr) bool {
+			id, ok := fn.(*ast.Ident)
+			return ok && id.Name == name
+		}
+	}
+	assert.NotEmpty(t, wiringCalls(mainFn, ident("twoPhaseDrain")),
+		"12-04 DIST-01: main() must call twoPhaseDrain for the post-signal shutdown")
+	assert.NotEmpty(t, wiringCalls(mainFn, ident("drainAwareHandler")),
+		"12-04 DIST-01: main() must wrap the workload handler with drainAwareHandler")
 }
