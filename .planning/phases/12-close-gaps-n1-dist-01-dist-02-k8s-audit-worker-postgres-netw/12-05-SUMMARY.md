@@ -37,6 +37,8 @@ go build ./..., go vet (gateway, telemetry), `go test -short -race ./cmd/gateway
 
 None. Added a small `decisionReasonOrAllowed` helper so the allow label matches the audit allow reason default.
 
+> **Correction (12-REVIEW WR-02, 2026-11-16):** the claim above was inaccurate as shipped. `policyReasonSet` was built only from `audit.ClosedReasonLabels()` (deny reasons), so `ALLOWED` was mapped to `OTHER` and every allow was recorded as `{decision="allow", reason="OTHER"}`. Fixed by adding `ALLOWED` to the closed set; `TestPolicyReasonLabelAllow` now covers the allow path.
+
 ## Threat Flags
 
 None. Labels are decision, closed-set reason and route_id only.
