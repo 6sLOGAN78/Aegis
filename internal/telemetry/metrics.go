@@ -304,12 +304,13 @@ func NewMetrics() *Metrics {
 	return m
 }
 
-// RecordRequest increments the HTTP request counter with low-cardinality labels.
+// RecordRequest increments the HTTP request counter with low-cardinality labels. The
+// method is normalized to the same closed set as the latency histogram.
 func (m *Metrics) RecordRequest(method, routeID string, status int) {
 	if routeID == "" {
 		routeID = "unknown"
 	}
-	m.HTTPRequestsTotal.WithLabelValues(method, routeID, strconv.Itoa(status)).Inc()
+	m.HTTPRequestsTotal.WithLabelValues(normalizeMethod(method), routeID, strconv.Itoa(status)).Inc()
 }
 
 // normalizeMethod maps an HTTP method onto a closed set so attacker-chosen

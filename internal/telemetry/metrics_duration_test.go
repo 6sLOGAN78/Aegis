@@ -93,3 +93,29 @@ func TestMetricsMiddleware_ObservesDuration(t *testing.T) {
 	assert.Contains(t, out, "status_class=5xx")
 	assert.NotContains(t, out, "secret")
 }
+
+// CR-02: aegis_http_requests_total uses the same closed method set as the histogram, so
+// an arbitrary client-chosen method cannot mint a new series.
+func TestHTTPRequestsTotal_MethodNormalized(t *testing.T) {
+	m := NewMetrics()
+	m.RecordRequest("FOO1", "orders.list", 200)
+	m.RecordRequest("FOO2", "orders.list", 200)
+	m.RecordRequest("GET", "orders.list", 200)
+
+	mfs, err := m.Registry.Gather()
+	require.NoError(t, err)
+	methods := map[string]float64{}
+	for _, mf := range mfs {
+		if mf.GetName() != "aegis_http_requests_total" {
+			continue
+		}
+		for _, mm := range mf.GetMetric() {
+			for _, lp := range mm.GetLabel() {
+				if lp.GetName() == "method" {
+					methods[lp.GetValue()] += mm.GetCounter().GetValue()
+				}
+			}
+		}
+	}
+	assert.Equal(t, map[string]float64{"OTHER": 2, "GET": 1}, methods)
+}
