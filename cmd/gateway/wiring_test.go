@@ -174,6 +174,18 @@ func TestWiringTwoPhaseDrain(t *testing.T) {
 	}
 	assert.NotEmpty(t, wiringCalls(mainFn, ident("twoPhaseDrain")),
 		"12-04 DIST-01: main() must call twoPhaseDrain for the post-signal shutdown")
-	assert.NotEmpty(t, wiringCalls(mainFn, ident("drainAwareHandler")),
+	// WR-05: both listeners must be drain-aware, so the wrapped handlers are checked
+	// by name: the :8080 user chain (userProbeHandler) and the :9443 workload chain.
+	wrapped := map[string]bool{}
+	for _, c := range wiringCalls(mainFn, ident("drainAwareHandler")) {
+		if len(c.call.Args) == 2 {
+			if id, ok := c.call.Args[1].(*ast.Ident); ok {
+				wrapped[id.Name] = true
+			}
+		}
+	}
+	assert.True(t, wrapped["workloadMetricsHandler"],
 		"12-04 DIST-01: main() must wrap the workload handler with drainAwareHandler")
+	assert.True(t, wrapped["userProbeHandler"],
+		"12-REVIEW WR-05: main() must wrap the :8080 user handler with drainAwareHandler")
 }

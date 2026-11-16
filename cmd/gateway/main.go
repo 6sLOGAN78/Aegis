@@ -992,7 +992,9 @@ func main() {
 	workloadMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedWorkloadHandler)
 
 	// Dual-Listener Server Manager (:8080 and :9443 mTLS)
-	dualServer := proxy.NewDualServer(cfg, userProbeHandler, drainAwareHandler(drainingState, workloadMetricsHandler), workloadTLSConfig)
+	// Both listeners send Connection: close while draining so keep-alive clients behind
+	// an L4 Service (kube-proxy) reconnect elsewhere during the propagation delay.
+	dualServer := proxy.NewDualServer(cfg, drainAwareHandler(drainingState, userProbeHandler), drainAwareHandler(drainingState, workloadMetricsHandler), workloadTLSConfig)
 	dualServer.SetRejectionRecorder(metrics)
 
 	// Configurable drain timeout (default 30s)

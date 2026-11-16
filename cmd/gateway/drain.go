@@ -33,7 +33,7 @@ func twoPhaseDrain(state *proxy.DrainingState, delay, drainTimeout time.Duration
 }
 
 // drainAwareHandler sets Connection: close on responses while draining so
-// keep-alive clients on the workload listener reconnect to another replica.
+// keep-alive clients on either listener reconnect to another replica.
 func drainAwareHandler(state *proxy.DrainingState, next http.Handler) http.Handler {
 	return http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		if state != nil && state.IsDraining() {
