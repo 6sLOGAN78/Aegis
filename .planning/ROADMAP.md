@@ -383,6 +383,16 @@ Plans:
 
 - Implements locked CONTEXT decisions: D-18 (see <objective> and <tasks>).
 
+### Phase 12: Close gaps N1, DIST-01, DIST-02: K8s audit-worker Postgres NetworkPolicy, two-phase drain, metric callers and latency histogram, audit worker frame-loss and fault gate, gateway cert SANs
+
+**Goal:** Close the gaps found by v1.0 re-audit 3 (.planning/v1.0-MILESTONE-AUDIT.md). (1) N1: the K8s Postgres NetworkPolicy admits the gateway pod (which now hosts the audit-worker sidecar), and tests/manifests cross-checks NetworkPolicy peers against the pods that actually connect, so audit rows reach Postgres in K8s. (2) DIST-01: two-phase drain: on SIGTERM the gateway fails /readyz first, waits a configurable propagation delay while still serving, then drains in-flight requests; :9443 workload readiness follows the same state; the K8s statefulset has a preStop hook and terminationGracePeriodSeconds that covers drain + audit flush + shutdown. (3) DIST-02: the existing telemetry recorders (RecordPolicyEval, RecordPolicyDecision, RecordRateLimitRejection, RecordSpoolBytes, SetConnectedGateways, RecordSnapshotPublish) get production callers, and a request-latency histogram is added, still with no PII labels. (4) Audit hardening: the audit worker logs and retries a non-corrupt read error instead of silently advancing the cursor or pruning a segment; a completion-queue overflow sheds or counts completions without flipping the whole replica unready (no fleet-wide /readyz fault from a burst). (5) W2: gateway-server cert SANs include the K8s Service DNS names (aegis-gateway, aegis-gateway.aegis-system, aegis-gateway.aegis-system.svc). All with hermetic tests; go build, go vet and go test -short ./... stay green.
+**Requirements**: DIST-01, DIST-02, AUD-01, AUD-03, REV-03
+**Depends on:** Phase 11
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 12 to break down)
+
 ---
 
 ## Progress

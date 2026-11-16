@@ -115,10 +115,11 @@ Recent decisions affecting current work:
 - Phase 10 added: Close gaps B5, B6: dashboard and control-plane flows (OPS-03, CTRL-01, CTRL-02, CTRL-05, OPS-01, OPS-02)
 - Phase 11 added: Close gap B8: wire key rotation and DR quarantine reconstruction (REV-03, AUTH-01, CTRL-02)
 - Phase 11 edited: B2 (Kubernetes manifests runnable) added to scope; full K8S-01 stays v2
+- Phase 12 added: Close gaps N1, DIST-01, DIST-02 from re-audit 3 (2026-11-16)
 
 ### Pending Todos
 
-See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 2026-10-10 — open blockers B2, B5, B6, B8, B9, B10.
+See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 3 (2026-11-16) — B1-B10 and CR-02 closed; open: N1, DIST-01, DIST-02 (Phase 12). 3 todos in .planning/todos/pending.
 
 ### Blockers/Concerns
 
