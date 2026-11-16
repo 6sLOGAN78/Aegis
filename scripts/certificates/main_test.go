@@ -286,3 +286,20 @@ func TestWriteKeysHalfPresentPairs(t *testing.T) {
 		t.Fatal("private key must not be regenerated behind a kept public key")
 	}
 }
+
+func TestGatewaySANs(t *testing.T) {
+	out := t.TempDir()
+	if err := run(out, ""); err != nil {
+		t.Fatal(err)
+	}
+	c := readCert(t, filepath.Join(out, "gateway-server.crt"))
+	for _, h := range []string{
+		"gateway", "localhost", "aegis-gateway", "aegis-gateway.aegis-system",
+		"aegis-gateway.aegis-system.svc", "aegis-gateway.aegis-system.svc.cluster.local",
+		"gateway-1", "gateway-2", "gateway-3", "127.0.0.1",
+	} {
+		if err := c.VerifyHostname(h); err != nil {
+			t.Errorf("VerifyHostname(%q): %v", h, err)
+		}
+	}
+}
