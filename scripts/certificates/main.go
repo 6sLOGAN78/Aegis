@@ -152,7 +152,11 @@ func run(outDir, keysDir string) error {
 	loopback := []net.IP{net.ParseIP("127.0.0.1")}
 
 	// Gateway server cert.
-	c, err := ca.IssueServerCert("gateway", []string{"gateway", "localhost"}, loopback)
+	c, err := ca.IssueServerCert("gateway", []string{
+		"gateway", "localhost", "aegis-gateway", "aegis-gateway.aegis-system",
+		"aegis-gateway.aegis-system.svc", "aegis-gateway.aegis-system.svc.cluster.local",
+		"gateway-1", "gateway-2", "gateway-3",
+	}, loopback)
 	if err != nil {
 		return fmt.Errorf("issue gateway server cert: %w", err)
 	}

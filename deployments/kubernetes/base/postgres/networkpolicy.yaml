@@ -15,9 +15,10 @@ spec:
         - podSelector:
             matchLabels:
               app: aegis-control-plane
+        # audit-worker sidecar runs inside the gateway pod
         - podSelector:
             matchLabels:
-              app: aegis-audit-worker
+              app: aegis-gateway
       ports:
         - protocol: TCP
           port: 5432
