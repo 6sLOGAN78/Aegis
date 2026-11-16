@@ -26,6 +26,11 @@ const MagicHeader uint32 = 0xAE615001
 // FrameHeaderSize is the 12-byte header size: [Magic: 4B][CRC32: 4B][Length: 4B].
 const FrameHeaderSize = 12
 
+// MaxFramePayloadBytes bounds a frame's payload. The length field is not covered by the
+// CRC, so the reader rejects anything larger as corruption before allocating, and the
+// writers refuse to produce such a frame. Normalized events are a few KB at most.
+const MaxFramePayloadBytes uint32 = 1 << 20
+
 // Sentinel errors for disk spool operations.
 var (
 	ErrSpoolSaturated  = errors.New("audit spool saturated (>= 90% capacity)")
@@ -360,6 +365,10 @@ func (s *DiskSpool) AppendPreForward(event *CompletionEvent) error {
 		return fmt.Errorf("failed to marshal completion event: %w", err)
 	}
 
+	if len(payload) > int(MaxFramePayloadBytes) {
+		return fmt.Errorf("completion event payload %d bytes exceeds frame limit %d", len(payload), MaxFramePayloadBytes)
+	}
+
 	// 3. Compute 32-bit CRC32 checksum
 	checksum := crc32.ChecksumIEEE(payload)
 	payloadLen := uint32(len(payload))
@@ -402,6 +411,9 @@ func frameEvent(ev *CompletionEvent) ([]byte, error) {
 	payload, err := json.Marshal(ev)
 	if err != nil {
 		return nil, fmt.Errorf("failed to marshal completion event: %w", err)
+	}
+	if len(payload) > int(MaxFramePayloadBytes) {
+		return nil, fmt.Errorf("completion event payload %d bytes exceeds frame limit %d", len(payload), MaxFramePayloadBytes)
 	}
 	frame := make([]byte, FrameHeaderSize+len(payload)+1)
 	binary.BigEndian.PutUint32(frame[0:4], MagicHeader)
@@ -641,8 +653,14 @@ func ReadFramedRecord(r io.Reader) (*CompletionEvent, int64, error) {
 	expectedCRC := binary.BigEndian.Uint32(header[4:8])
 	length := binary.BigEndian.Uint32(header[8:12])
 
+	// The length is not CRC-protected: bound it before allocating (a value such as
+	// 0xFFFFFFFF would otherwise wrap length+1 to 0 and panic, or allocate ~4 GiB).
+	if length > MaxFramePayloadBytes {
+		return nil, int64(FrameHeaderSize), fmt.Errorf("%w: frame length %d exceeds limit %d", ErrCorruptedRecord, length, MaxFramePayloadBytes)
+	}
+
 	// Read payload + trailing newline
-	buf := make([]byte, length+1)
+	buf := make([]byte, int(length)+1)
 	if _, err := io.ReadFull(r, buf); err != nil {
 		return nil, int64(FrameHeaderSize), fmt.Errorf("%w: partial record payload: %w", ErrCorruptedRecord, io.ErrUnexpectedEOF)
 	}
