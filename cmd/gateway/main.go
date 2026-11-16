@@ -147,6 +147,7 @@ func main() {
 	if err != nil {
 		log.Fatalf("Failed to initialize audit disk spool: %v", err)
 	}
+	diskSpool.SetBytesWrittenHook(metrics.RecordSpoolBytes)
 
 	// Initialize Prometheus Telemetry Registry and Private Metrics Server (DIST-02)
 	metricsPort := os.Getenv("AEGIS_METRICS_PORT")
@@ -478,6 +479,7 @@ func main() {
 					retrySec = 1
 				}
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySec))
+				metrics.RecordRateLimitRejection(route.RouteID)
 				if ac != nil {
 					ac.SetDecision("deny", "RATE_LIMIT_EXCEEDED")
 					ac.SetErrorCode("RATE_LIMIT_EXCEEDED")
@@ -516,12 +518,15 @@ func main() {
 			SnapshotVersion: state.Version,
 		}
 
+		policyStart := time.Now()
 		decision, err := state.PolicyEngine.Evaluate(r.Context(), input)
+		metrics.RecordPolicyEval(time.Since(policyStart))
 		if err != nil || !decision.Allow {
 			reason := "DENIED_DEFAULT"
 			if decision.ReasonCode != "" {
 				reason = decision.ReasonCode
 			}
+			metrics.RecordPolicyDecision("deny", policyReasonLabel(reason))
 			if ac != nil {
 				ac.SetDecision("deny", reason)
 				if err != nil {
@@ -548,6 +553,7 @@ func main() {
 			}
 			ac.SetDecision("allow", allowReason)
 		}
+		metrics.RecordPolicyDecision("allow", policyReasonLabel(decisionReasonOrAllowed(decision.ReasonCode)))
 
 		// 4b. Pre-Forward Append-Only WAL with Synchronous fsync (AUD-01, AUD-02, Invariant 10)
 		var clientIP string
@@ -810,6 +816,7 @@ func main() {
 					retrySec = 1
 				}
 				w.Header().Set("Retry-After", fmt.Sprintf("%d", retrySec))
+				metrics.RecordRateLimitRejection(route.RouteID)
 				if ac != nil {
 					ac.SetDecision("deny", "RATE_LIMIT_EXCEEDED")
 					ac.SetErrorCode("RATE_LIMIT_EXCEEDED")
@@ -848,12 +855,15 @@ func main() {
 			SnapshotVersion: state.Version,
 		}
 
+		policyStart := time.Now()
 		decision, err := state.PolicyEngine.Evaluate(r.Context(), input)
+		metrics.RecordPolicyEval(time.Since(policyStart))
 		if err != nil || !decision.Allow {
 			reason := "DENIED_WORKLOAD_FORBIDDEN"
 			if decision.ReasonCode != "" {
 				reason = decision.ReasonCode
 			}
+			metrics.RecordPolicyDecision("deny", policyReasonLabel(reason))
 			if ac != nil {
 				ac.SetDecision("deny", reason)
 				if err != nil {
@@ -874,6 +884,7 @@ func main() {
 			}
 			ac.SetDecision("allow", allowReason)
 		}
+		metrics.RecordPolicyDecision("allow", policyReasonLabel(decisionReasonOrAllowed(decision.ReasonCode)))
 
 		// 4b. Pre-Forward Append-Only WAL with Synchronous fsync (AUD-01, AUD-02, Invariant 10)
 		var clientIP string
