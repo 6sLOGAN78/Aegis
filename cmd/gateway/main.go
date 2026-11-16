@@ -981,7 +981,7 @@ func main() {
 	workloadMetricsHandler := telemetry.MetricsMiddleware(metrics)(auditedWorkloadHandler)
 
 	// Dual-Listener Server Manager (:8080 and :9443 mTLS)
-	dualServer := proxy.NewDualServer(cfg, userProbeHandler, workloadMetricsHandler, workloadTLSConfig)
+	dualServer := proxy.NewDualServer(cfg, userProbeHandler, drainAwareHandler(drainingState, workloadMetricsHandler), workloadTLSConfig)
 	dualServer.SetRejectionRecorder(metrics)
 
 	// Configurable drain timeout (default 30s)
@@ -991,6 +991,10 @@ func main() {
 			drainTimeout = d
 		}
 	}
+
+	// DIST-01: propagation delay between failing readiness and closing listeners
+	// (default 0 = no behaviour change).
+	drainDelay := parseDrainPropagationDelay(os.Getenv("AEGIS_DRAIN_PROPAGATION_DELAY"))
 
 	stop := make(chan os.Signal, 1)
 	signal.Notify(stop, os.Interrupt, syscall.SIGTERM)
@@ -1003,13 +1007,9 @@ func main() {
 	}()
 
 	<-stop
-	drainingState.SetDraining()
-	log.Printf("Aegis Gateway entering graceful drain (%v timeout)...", drainTimeout)
+	log.Printf("Aegis Gateway entering graceful drain (%v propagation delay, %v timeout)...", drainDelay, drainTimeout)
 
-	drainCtx, drainCancel := context.WithTimeout(context.Background(), drainTimeout)
-	defer drainCancel()
-
-	if err := dualServer.Shutdown(drainCtx); err != nil {
+	if err := twoPhaseDrain(drainingState, drainDelay, drainTimeout, dualServer.Shutdown, stop); err != nil {
 		log.Printf("Error during dual server shutdown: %v", err)
 	}
 
