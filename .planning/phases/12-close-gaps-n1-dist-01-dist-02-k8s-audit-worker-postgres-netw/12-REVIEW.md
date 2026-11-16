@@ -192,6 +192,8 @@ Also update `tests/integration/operator_telemetry_test.go` if it asserts on raw 
 
 **Fix:** Record the accepted risk in STATE/threat model and confirm the worker's DB role is INSERT-only. Longer term, run the audit worker as its own pod with its own label (and shared storage), so the peer can be narrowed.
 
+**Fix note (2026-11-16, gsd-code-fixer):** This is recorded as accepted risk **AR-12-01** in `12-SECURITY.md`. I checked the gateway container in `statefulset.yaml`: it holds no DB credentials. It has no `AEGIS_DB_*` env and no `aegis-db-credentials` mount, and only the `audit-worker` container references that Secret. The worker's DB role is **not** INSERT-only; it shares `aegis-db-credentials` with the control plane. The default ServiceAccount token is automounted. Both points are listed as residual exposure. The full fix (a separate audit-worker pod or per-container identity, plus a dedicated INSERT-only role) is deferred to v2.
+
 ### WR-07: Poison-frame skips are permanent audit loss but are not observable and are double-counted
 
 **File:** `internal/audit/worker.go:288-289`, `internal/audit/worker.go:351-356`
