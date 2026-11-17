@@ -68,38 +68,42 @@ export const App: React.FC = () => {
 
   return (
     <>
-      <Shell
-        activeTab={activeTab}
-        onTabChange={setActiveTab}
-        session={session}
-        onLogout={handleLogout}
-      >
-        {activeTab === 'studio' && (
-          <PolicyStudio
-            session={session}
-            candidateRego={candidateRego}
-            onCandidateRegoChange={setCandidateRego}
-            baseVersion={candidateBaseVersion}
-            onBaseVersionChange={setCandidateBaseVersion}
-          />
-        )}
+      {/* Mount the console only for a signed-in operator: screens poll the API,
+          and polling behind the sign-in page just collects 401s. */}
+      {session && (
+        <Shell
+          activeTab={activeTab}
+          onTabChange={setActiveTab}
+          session={session}
+          onLogout={handleLogout}
+        >
+          {activeTab === 'studio' && (
+            <PolicyStudio
+              session={session}
+              candidateRego={candidateRego}
+              onCandidateRegoChange={setCandidateRego}
+              baseVersion={candidateBaseVersion}
+              onBaseVersionChange={setCandidateBaseVersion}
+            />
+          )}
 
-        {activeTab === 'simulator' && (
-          <PolicySimulator candidateRego={candidateRego} />
-        )}
+          {activeTab === 'simulator' && (
+            <PolicySimulator candidateRego={candidateRego} />
+          )}
 
-        {activeTab === 'topology' && (
-          <ClusterTopology />
-        )}
+          {activeTab === 'topology' && (
+            <ClusterTopology />
+          )}
 
-        {activeTab === 'audit' && (
-          <AuditStream />
-        )}
+          {activeTab === 'audit' && (
+            <AuditStream />
+          )}
 
-        {activeTab === 'quarantine' && (
-          <EmergencyQuarantine session={session} />
-        )}
-      </Shell>
+          {activeTab === 'quarantine' && (
+            <EmergencyQuarantine session={session} />
+          )}
+        </Shell>
+      )}
 
       <LoginModal
         isOpen={isLoginOpen}
