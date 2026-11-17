@@ -9,6 +9,7 @@ import (
 	"net/url"
 	"sync/atomic"
 	"testing"
+	"time"
 
 	"aegis/internal/config"
 
@@ -25,10 +26,20 @@ type bodyLimitFixture struct {
 }
 
 func newBodyLimitFixture(t *testing.T) *bodyLimitFixture {
+	return newBodyLimitFixtureWith(t, nil)
+}
+
+// newBodyLimitFixtureWith lets a test add backend response headers (for
+// example Connection: close, which makes the backend reply at once instead of
+// first discarding up to 256 KiB of an unread request body).
+func newBodyLimitFixtureWith(t *testing.T, hdr http.Header) *bodyLimitFixture {
 	t.Helper()
 	var hits int32
 	backend := httptest.NewServer(http.HandlerFunc(func(w http.ResponseWriter, r *http.Request) {
 		atomic.AddInt32(&hits, 1)
+		for k, v := range hdr {
+			w.Header()[k] = v
+		}
 		w.WriteHeader(http.StatusOK)
 	}))
 	t.Cleanup(backend.Close)
@@ -119,6 +130,37 @@ func TestBodyLimit_ExactlyAtLimitForwarded(t *testing.T) {
 			assert.Equal(t, http.StatusOK, rec.Code)
 			assert.EqualValues(t, 1, atomic.LoadInt32(f.hits))
 			assert.Empty(t, f.rec.got())
+		})
+	}
+}
+
+// A chunked client that stalls after an early upstream reply must not hold the
+// handler past bodyDrainTimeout; the gateway fails closed with 408.
+func TestBodyLimit_StalledChunkedBodyTimesOut(t *testing.T) {
+	old := bodyDrainTimeout
+	bodyDrainTimeout = 200 * time.Millisecond
+	t.Cleanup(func() { bodyDrainTimeout = old })
+
+	for _, name := range []string{"user", "workload"} {
+		t.Run(name, func(t *testing.T) {
+			f := newBodyLimitFixtureWith(t, http.Header{"Connection": {"close"}})
+			srv := httptest.NewServer(f.handlers[name])
+			defer srv.Close()
+
+			pr, pw := io.Pipe()
+			defer pw.Close()
+			go func() { _, _ = pw.Write(make([]byte, 1024)) }() // then stall
+
+			req, err := http.NewRequest(http.MethodPost, srv.URL+"/api/payments", pr)
+			require.NoError(t, err)
+			req.ContentLength = -1
+
+			start := time.Now()
+			resp, err := http.DefaultClient.Do(req)
+			require.NoError(t, err)
+			defer resp.Body.Close()
+			assert.Equal(t, http.StatusRequestTimeout, resp.StatusCode)
+			assert.Less(t, time.Since(start), 3*time.Second)
 		})
 	}
 }

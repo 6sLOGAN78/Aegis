@@ -96,6 +96,10 @@ func NewReverseProxyWithMTLS(
 				writeBodyTooLarge(w, reqID)
 				return
 			}
+			if errors.Is(err, errBodyDrainTimeout) {
+				writeDrainTimeout(w, reqID)
+				return
+			}
 			WriteProblemDetails(
 				w,
 				http.StatusBadGateway,
@@ -161,6 +165,10 @@ func NewReverseProxy(targetURL *url.URL, canonicalPath string, requestID string)
 				writeBodyTooLarge(w, reqID)
 				return
 			}
+			if errors.Is(err, errBodyDrainTimeout) {
+				writeDrainTimeout(w, reqID)
+				return
+			}
 			WriteProblemDetails(
 				w,
 				http.StatusBadGateway,
@@ -211,10 +219,48 @@ func modifyResponseEnforceLimit(resp *http.Response) error {
 	if !ok {
 		return nil
 	}
-	_, err := io.Copy(io.Discard, tb)
-	var mbe *http.MaxBytesError
-	if errors.As(err, &mbe) {
-		return err
+	// The drain is bounded in time as well as size: a client trickling a
+	// chunked body must not hold a concurrency slot indefinitely. On timeout
+	// the gateway fails closed (408) rather than forwarding a response for a
+	// body it could not check. The goroutine ends when net/http closes the
+	// inbound body after the handler returns.
+	done := make(chan error, 1)
+	go func() {
+		_, err := io.Copy(io.Discard, tb)
+		done <- err
+	}()
+	timer := time.NewTimer(bodyDrainTimeout)
+	defer timer.Stop()
+	select {
+	case err := <-done:
+		var mbe *http.MaxBytesError
+		if errors.As(err, &mbe) {
+			return err
+		}
+		return nil
+	case <-timer.C:
+		return errBodyDrainTimeout
 	}
-	return nil
+}
+
+// bodyDrainTimeout caps how long ModifyResponse waits for the unread rest of
+// a request body after an early upstream reply. A var so tests can shorten it.
+var bodyDrainTimeout = 5 * time.Second
+
+var errBodyDrainTimeout = errors.New("proxy: timed out draining request body")
+
+// writeDrainTimeout maps errBodyDrainTimeout to 408 problem+json.
+// It also expires the connection's read deadline so the blocked drain read
+// (and net/http's own post-handler body discard) return at once.
+func writeDrainTimeout(w http.ResponseWriter, reqID string) {
+	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+	w.Header().Set("Connection", "close")
+	WriteProblemDetails(
+		w,
+		http.StatusRequestTimeout,
+		"Request Timeout",
+		"Request body was not received in time",
+		"https://aegis.local/errors/request-timeout",
+		reqID,
+	)
 }
