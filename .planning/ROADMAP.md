@@ -409,10 +409,11 @@ Plans:
   3. The audit-worker sidecar outlives the gateway's preStop + propagation + drain + audit flush window, checked by a manifest test against terminationGracePeriodSeconds
   4. docs/runbooks/spool-saturation-recovery.md references statefulset/aegis-gateway, container audit-worker and the AEGIS_AUDIT_* env names
   5. go test -short ./... passes
-**Plans:** 0 plans
+**Plans:** 2 plans
 
 Plans:
-- [ ] TBD (run /gsd-plan-phase 13 to break down)
+- [ ] 13-01-PLAN.md — N2: Postgres credentials from aegis-db-credentials, red-first manifest test, README
+- [ ] 13-02-PLAN.md — W3 audit-worker sidecar preStop + drain test; W5 runbook names + guard test
 
 ---
 
