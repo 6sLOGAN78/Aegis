@@ -48,6 +48,12 @@ func (rec *statusRecorder) WriteHeader(code int) {
 	rec.ResponseWriter.WriteHeader(code)
 }
 
+// Unwrap lets http.ResponseController reach the underlying connection (read
+// deadlines, hijack, flush) through this recorder.
+func (rec *statusRecorder) Unwrap() http.ResponseWriter {
+	return rec.ResponseWriter
+}
+
 // MetricsMiddleware wraps an http.Handler to capture HTTP status codes and report
 // bounded request counters to the telemetry metrics collector.
 func MetricsMiddleware(m *Metrics) func(http.Handler) http.Handler {

@@ -252,8 +252,16 @@ var errBodyDrainTimeout = errors.New("proxy: timed out draining request body")
 // writeDrainTimeout maps errBodyDrainTimeout to 408 problem+json.
 // It also expires the connection's read deadline so the blocked drain read
 // (and net/http's own post-handler body discard) return at once.
+// If no wrapper exposes the connection's deadline, the connection is hijacked
+// and closed instead: a stalled drain must never outlive the request.
 func writeDrainTimeout(w http.ResponseWriter, reqID string) {
-	_ = http.NewResponseController(w).SetReadDeadline(time.Now())
+	rc := http.NewResponseController(w)
+	if err := rc.SetReadDeadline(time.Now()); err != nil {
+		if conn, _, herr := rc.Hijack(); herr == nil {
+			_ = conn.Close()
+			return
+		}
+	}
 	w.Header().Set("Connection", "close")
 	WriteProblemDetails(
 		w,
