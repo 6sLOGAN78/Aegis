@@ -25,6 +25,10 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 - [x] **Phase 7: Close gaps B1, B3, B4 (compose alignment)** - v1.0 gap closure: all three compose profiles run the current binaries; partial contribution to REV-03 and AUD-03, which remain unsatisfied (completed 2026-10-09)
 - [x] **Phase 8: Close gap B7 (denials and completions to the audit spool)** - v1.0 gap closure: gateway writes denial and completion records to the durable spool; AUD-04 and AUD-03 closed on MVP-profile live evidence, with human verification items open (completed 2026-10-09)
 - [x] **Phase 9: Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys)** - v1.0 gap closure: issuer emits jti so JTI revocation matches; workload quarantine keys decoded and POST /quarantine fixed (REV-03, AUTH-04, OPS-01) (completed 2026-10-10)
+- [x] **Phase 10: Close gaps B5, B6 (dashboard and control-plane flows)** - v1.0 gap closure (completed 2026-10-11)
+- [x] **Phase 11: Close gaps B8, B2, CR-02 (key rotation, DR reconstruct, K8s manifests, gRPC mTLS)** - v1.0 gap closure (completed 2026-10-12)
+- [x] **Phase 12: Close gaps N1, DIST-01, DIST-02** - K8s netpol for the audit sidecar, two-phase drain, metric callers and latency histogram (completed 2026-11-17)
+- [x] **Phase 13: Close gap N2** - K8s Postgres credentials from the shared Secret, audit sidecar drain and pruning, runbooks name real objects (completed 2026-11-18)
 
 ---
 
@@ -409,18 +413,18 @@ Plans:
   3. The audit-worker sidecar outlives the gateway's preStop + propagation + drain + audit flush window, checked by a manifest test against terminationGracePeriodSeconds
   4. docs/runbooks/spool-saturation-recovery.md references statefulset/aegis-gateway, container audit-worker and the AEGIS_AUDIT_* env names
   5. go test -short ./... passes
-**Plans:** 2 plans
+**Plans:** 2/2 plans complete
 
 Plans:
-- [ ] 13-01-PLAN.md — N2: Postgres credentials from aegis-db-credentials, red-first manifest test, README
-- [ ] 13-02-PLAN.md — W3 audit-worker sidecar preStop + drain test; W5 runbook names + guard test
+- [x] 13-01-PLAN.md — N2: Postgres credentials from aegis-db-credentials, red-first manifest test, README
+- [x] 13-02-PLAN.md — W3 audit-worker sidecar preStop + drain test; W5 runbook names + guard test
 
 ---
 
 ## Progress
 
 **Execution Order:**
-Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 → 8 → 9
+Phases execute in numeric order: 0 → 1 → … → 13
 
 | Phase | Plans Complete | Status | Completed |
 |-------|----------------|--------|-----------|
@@ -436,3 +440,5 @@ Phases execute in numeric order: 0 → 1 → 2 → 3 → 4 → 5 → 6 → 7 →
 | 9. Close gaps B9, B10 (jti revocation and SPIFFE quarantine keys) | 8/8 | Complete    | 2026-10-10 |
 | 10. Close gaps B5, B6 (dashboard and control-plane flows) | 11/11 | Complete | 2026-10-11 |
 | 11. Close gaps B8, B2, CR-02 (key rotation, DR reconstruct, K8s manifests, gRPC mTLS) | 15/15 | Complete | 2026-10-12 |
+| 12. Close gaps N1, DIST-01, DIST-02 (K8s netpol, two-phase drain, metrics) | 6/6 | Complete | 2026-11-17 |
+| 13. Close gap N2 (K8s Postgres credentials, sidecar drain, runbooks) | 2/2 | Complete | 2026-11-18 |

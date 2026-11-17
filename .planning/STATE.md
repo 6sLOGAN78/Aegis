@@ -2,16 +2,16 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: executing
-stopped_at: Phase 11 context gathered
-last_updated: "2026-11-16T14:22:48.945Z"
-last_activity: 2026-11-16 -- Phase 12 execution started
+status: verifying
+stopped_at: Phase 13 complete; milestone v1.0 ready to complete
+last_updated: "2026-11-18T00:00:00.000Z"
+last_activity: 2026-11-18 -- Phase 13 executed, reviewed and verified (live K8s skipped, D-19)
 progress:
-  total_phases: 13
-  completed_phases: 12
-  total_plans: 83
-  completed_plans: 77
-  percent: 92
+  total_phases: 14
+  completed_phases: 14
+  total_plans: 85
+  completed_plans: 85
+  percent: 100
 ---
 
 # Project State
@@ -21,13 +21,13 @@ progress:
 See: .planning/PROJECT.md (updated 2026-10-06)
 
 **Core value:** Default-deny, fail-closed authorization and workload authentication where invalid credentials, stale security state, or dependency failures never produce implicit authorization.
-**Current focus:** Phase 12 — Close gaps N1, DIST-01, DIST-02
+**Current focus:** Milestone v1.0 completion
 
 ## Current Position
 
-Phase: 12 (Close gaps N1, DIST-01, DIST-02) — EXECUTING
-Plan: 1 of 6
-Status: Executing Phase 12
+Phase: 13 (Close gap N2) — COMPLETE
+Plan: 2 of 2
+Status: All phases complete; ready for /gsd:complete-milestone v1.0
 Last activity: 2026-11-16 -- Phase 12 execution started
 
 ## Performance Metrics
@@ -121,7 +121,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 4 (2026-11-17, gaps_found: N2 K8s only). Phase 12 UAT recorded (3 pass, K8s skipped). Phase 13 added to close N2/W3/W5. 4 todos in .planning/todos/pending (gateway-body-read-timeout added 2026-11-17).
+See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 4 (2026-11-17, gaps_found: N2 K8s only). Phase 12 UAT recorded (3 pass, K8s skipped). Phase 13 added to close N2/W3/W5. 5 todos in .planning/todos/pending (gateway-body-read-timeout 2026-11-17; k8s-live-uat-and-sidecar-drain 2026-11-18), proposed for v2.
 
 ### Quick Tasks Completed
 
