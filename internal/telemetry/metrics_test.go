@@ -207,7 +207,7 @@ func TestAuditMetrics(t *testing.T) {
 				assert.Contains(t, content, `aegis_audit_records_dropped_total{kind="`+kind+`",reason="`+reason+`"} 0`)
 			}
 		}
-		for _, reason := range []string{"concurrency", "header_too_large", "ambiguous_credentials"} {
+		for _, reason := range []string{"concurrency", "header_too_large", "ambiguous_credentials", "body_too_large"} {
 			assert.Contains(t, content, `aegis_http_rejected_total{reason="`+reason+`"} 0`)
 		}
 		for _, code := range []string{"RATE_LIMIT_EXCEEDED", "POLICY_DENY_DEFAULT", "OTHER"} {
@@ -230,6 +230,7 @@ func TestAuditMetrics(t *testing.T) {
 		m.RecordRejection("concurrency")
 		m.RecordRejection("header_too_large")
 		m.RecordRejection("ambiguous_credentials")
+		m.RecordRejection("body_too_large")
 		m.RecordRejection("something-attacker-chose")
 
 		content := scrapeMetrics(t, m)
@@ -244,6 +245,7 @@ func TestAuditMetrics(t *testing.T) {
 		assert.Contains(t, content, `aegis_http_rejected_total{reason="concurrency"} 1`)
 		assert.Contains(t, content, `aegis_http_rejected_total{reason="header_too_large"} 1`)
 		assert.Contains(t, content, `aegis_http_rejected_total{reason="ambiguous_credentials"} 1`)
+		assert.Contains(t, content, `aegis_http_rejected_total{reason="body_too_large"} 1`)
 		assert.Contains(t, content, `aegis_http_rejected_total{reason="other"} 1`)
 		assert.NotContains(t, content, "something-attacker-chose")
 

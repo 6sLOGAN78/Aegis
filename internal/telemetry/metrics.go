@@ -54,7 +54,7 @@ type Metrics struct {
 var (
 	auditKinds         = []string{"completion", "denial"}
 	auditDropReasons   = []string{"queue_full", "hard_limit", "write_error", "closed", "timeout", "unauth_cap"}
-	rejectionReasons   = []string{"concurrency", "header_too_large", "ambiguous_credentials"}
+	rejectionReasons   = []string{"concurrency", "header_too_large", "ambiguous_credentials", "body_too_large"}
 	otherRejectionName = "other"
 
 	keysetFamilies       = []string{"jwt", "snapshot"}
@@ -488,7 +488,7 @@ func (m *Metrics) InitAuditSuppressedLabels(reasonCodes []string) {
 // Anything outside the closed reason set is recorded as "other".
 func (m *Metrics) RecordRejection(reason string) {
 	switch reason {
-	case "concurrency", "header_too_large", "ambiguous_credentials":
+	case "concurrency", "header_too_large", "ambiguous_credentials", "body_too_large":
 	default:
 		reason = otherRejectionName
 	}
