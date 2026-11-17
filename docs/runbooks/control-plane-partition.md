@@ -88,14 +88,14 @@
    ```
 2. Verify DNS resolution from within a gateway container:
    ```bash
-   kubectl exec statefulset/aegis-gateway-0 -n aegis-system -- getent hosts aegis-control-plane
+   kubectl exec pod/aegis-gateway-0 -c gateway -n aegis-system -- getent hosts aegis-control-plane
    ```
 
 ### Procedure D: Verify Reconnect Backoff with Jitter
 Gateways implement exponential backoff with randomized jitter (100ms base, 5s max) to prevent thundering herd upon control plane recovery.
 1. Check gateway logs for reconnect attempts:
    ```bash
-   kubectl logs statefulset/aegis-gateway-0 -n aegis-system --tail=30 | grep "gRPC stream reconnect"
+   kubectl logs pod/aegis-gateway-0 -c gateway -n aegis-system --tail=30 | grep "gRPC stream reconnect"
    # Expected: Reconnecting in <jittered_duration>ms
    ```
 
@@ -111,8 +111,8 @@ curl -s http://control-plane:8084/control/v1/gateways | jq .
 # Expected: All gateway instances report status: "CONNECTED", lease_age_seconds: < 5s
 
 # 2. Check Gateway Prometheus Metrics
-curl -s http://gateway-0:9091/metrics | grep "aegis_snapshot_lease_valid"
-# Expected: aegis_snapshot_lease_valid 1
+curl -s http://gateway-0:9091/metrics | grep "aegis_snapshot_lease_age_seconds"
+# Expected: a few seconds, well under the lease TTL (the gateway fails closed with 503 once the lease is stale)
 
 # 3. Verify Ingress Protected Routes Pass
 curl -i -H "Authorization: Bearer $(get-token)" http://gateway.aegis.local:8080/api/orders

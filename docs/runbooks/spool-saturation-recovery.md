@@ -11,8 +11,8 @@
 
 ### Operational Metadata
 - **Severity Level:** SEV-1 (When admissions halted at $\ge 90\%$) / SEV-2 (Warning at $\ge 80\%$).
-- **Trigger Metric:** `aegis_wal_spool_bytes / aegis_wal_spool_quota_bytes >= 0.90`
-- **Prometheus Alert:** `AegisWALSpoolSaturated`
+- **Trigger Metric:** `aegis_spool_utilization_ratio >= 0.90` (gateway, `:9091/metrics`; filesystem used/total of the WAL volume)
+- **Alerting:** no Prometheus or alert rules ship with Aegis. Alert on the metric above, and on `/readyz` returning 503 with `SPOOL_SATURATED`.
 - **Client Symptom:** Ingress callers receive `HTTP 503 Service Unavailable` with RFC 7807 problem details: `SPOOL_SATURATED: local audit storage exceeds 90% capacity`.
 
 ---
@@ -21,7 +21,7 @@
 
 ```text
                      +---------------------------------------+
-                     | Alert: AegisWALSpoolSaturated (>90%)  |
+                     | aegis_spool_utilization_ratio >= 0.90 |
                      +---------------------------------------+
                                          |
                                          v
@@ -56,18 +56,22 @@
 ### Procedure A: Verify Database Reachability & Worker Status
 1. Check if PostgreSQL primary is accepting writes:
    ```bash
-   kubectl exec -it statefulset/postgres -n aegis-system -- pg_isready -U aegis
+   kubectl exec -it statefulset/postgres -n aegis-system -- sh -c 'pg_isready -U "$POSTGRES_USER"'
    # Expected: accepting connections
    ```
 2. Check audit worker logs for database batch insertion errors:
    ```bash
    kubectl logs -n aegis-system -l app=aegis-gateway -c audit-worker --tail=50 | grep -E "batch|pgx|error"
    ```
-3. Restart stuck audit workers if connection pool stalled. The audit-worker is a sidecar
-   container of the gateway pod, so this restarts the gateway pods:
+3. Restart a stuck audit worker if its connection pool stalled. It is a sidecar container of
+   the gateway pod; restart only that container (the kubelet starts it again, the gateway keeps
+   serving, and the worker resumes from `wal.cursor`):
    ```bash
-   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
+   kubectl exec pod/aegis-gateway-0 -c audit-worker -n aegis-system -- kill -TERM 1
    ```
+   Avoid `kubectl rollout restart statefulset/aegis-gateway` for this: every pod waits at least
+   55s in Terminating (the sidecar's preStop sleep), so a 3-replica rollout takes about 3 minutes
+   at reduced capacity.
 
 ### Procedure B: Manually Scale Ingestion Throughput
 If traffic volume surged beyond single-worker batch ingestion rate:
@@ -89,16 +93,18 @@ If disk volume quota is physically near 100%:
    kubectl patch pvc wal-spool-aegis-gateway-2 -n aegis-system -p '{"spec":{"resources":{"requests":{"storage":"5Gi"}}}}'
    ```
 
-### Procedure D: Archive & Prune Committed Segments
-If segments were processed by the worker but not automatically deleted:
-1. Verify `wal.cursor` checkpoint offset to ensure records are safely in PostgreSQL:
+### Procedure D: Delivered Segments Not Pruned
+The audit worker deletes a segment after its cursor moves past it, but only when the
+sidecar has `AEGIS_PRUNE_ARCHIVED=true` (set in `base/gateway/statefulset.yaml`).
+1. Confirm the setting and see where the cursor is:
    ```bash
-   kubectl exec statefulset/aegis-gateway-0 -n aegis-system -- cat /var/log/aegis/wal/wal.cursor
+   kubectl exec pod/aegis-gateway-0 -c audit-worker -n aegis-system -- printenv AEGIS_PRUNE_ARCHIVED
+   kubectl exec pod/aegis-gateway-0 -c audit-worker -n aegis-system -- cat /var/log/aegis/wal/wal.cursor
+   kubectl exec pod/aegis-gateway-0 -c audit-worker -n aegis-system -- ls -l /var/log/aegis/wal
    ```
-2. Compress and archive processed segments to remote object storage:
-   ```bash
-   kubectl exec statefulset/aegis-gateway-0 -n aegis-system -- /usr/local/bin/aegis-wal-prune --older-than-cursor
-   ```
+2. If it is unset, add it to the manifest or an overlay and roll out. Segments ordered before
+   the cursor's segment are delivered and can be archived or removed by hand; never remove the
+   cursor's segment or anything after it (those records are not yet in PostgreSQL).
 
 ---
 
@@ -108,11 +114,11 @@ Monitor the gateway capacity draining below the 90% circuit breaker threshold:
 
 ```bash
 # 1. Check Filesystem Utilization
-kubectl exec statefulset/aegis-gateway-0 -n aegis-system -- df -h /var/log/aegis/wal
+kubectl exec pod/aegis-gateway-0 -c gateway -n aegis-system -- df -h /var/log/aegis/wal
 # Must report < 80% usage
 
 # 2. Check Prometheus Metric
-curl -s http://gateway-0:9091/metrics | grep "aegis_wal_spool_saturation_ratio"
+curl -s http://gateway-0:9091/metrics | grep "aegis_spool_utilization_ratio"
 # Value must drop below 0.90
 
 # 3. Verify Permitted Ingress Traffic Resumes
@@ -125,4 +131,4 @@ curl -i -H "Authorization: Bearer $(get-valid-token)" http://gateway.aegis.local
 ## 5. Post-Incident Review & Capacity Planning
 
 - **Volume Quota Review:** Adjust PVC default sizes in `deployments/kubernetes/base/gateway/statefulset.yaml` from 2Gi to 10Gi if sustained ingestion requires longer buffer capacity.
-- **Worker Auto-scaling:** Verify HPA triggers on `aegis_audit_worker_lag_seconds`.
+- **Worker throughput:** there is one worker per gateway pod (sidecar) and no autoscaling. Watch `aegis_spool_utilization_ratio` and `aegis_audit_records_written_total`; raise `AEGIS_AUDIT_BATCH_SIZE` (Procedure B) if the ratio climbs under sustained load.

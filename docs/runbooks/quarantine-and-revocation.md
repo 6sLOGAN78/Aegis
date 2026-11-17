@@ -113,8 +113,9 @@ curl -i -H "Authorization: Bearer $(mint-token-for usr_compromised_9918)" http:/
 # HTTP/1.1 403 Forbidden
 # {"error":"access_denied","reason":"PRINCIPAL_QUARANTINED"}
 
-# 3. Check Prometheus Metrics for Quarantine Enforcement Counter
-curl -s http://gateway:9091/metrics | grep "aegis_quarantine_enforcements_total"
+# 3. Check the durable audit trail (quarantine denials happen before policy, so no
+#    policy metric counts them; each one writes a denial row)
+psql -U aegis -d aegis -c "select count(*) from audit_events where reason_code='PRINCIPAL_QUARANTINED' and \"timestamp\" > now() - interval '10 minutes'"
 ```
 
 ---

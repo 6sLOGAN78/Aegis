@@ -192,16 +192,16 @@ curl -s http://gateway-replica-0:9091/metrics | grep aegis_keyset_reload_failing
 # aegis_keyset_reload_failing is 0 for both families on every replica (see 5.1 if not)
 
 # 3. Authentication status
-curl -s http://gateway-replica-0:9091/metrics | grep aegis_auth_verifications_total
-# Success counters increment; errors do not
+curl -s http://gateway-replica-0:9091/metrics | grep -E 'aegis_policy_decisions_total\{decision="allow"|aegis_http_requests_total'
+# Allow decisions and 2xx requests keep increasing; a key mismatch shows as status="401" instead
 
 # 4. Request with a freshly issued token
 curl -k -H "Authorization: Bearer $(get-new-token)" https://gateway.aegis.local:8080/api/orders
 # Must return HTTP 200 OK
 
 # 5. Snapshot lease
-curl -s http://gateway-replica-0:9091/metrics | grep aegis_snapshot_lease_valid
-# Must report 1
+curl -s http://gateway-replica-0:9091/metrics | grep aegis_snapshot_lease_age_seconds
+# Must stay at a few seconds (well under the lease TTL); a growing value means the signer change broke snapshot verification
 ```
 
 ### 5.1. Keyset reload is failing (`aegis_keyset_reload_failing == 1`)
