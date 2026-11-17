@@ -17,6 +17,8 @@ spec:
         app: aegis-gateway
     spec:
       # Drain budget: preStop 5 + propagation delay 10 + drain 30 + 10 (audit flush, metrics) = 55 <= 70.
+      # Sidecar budget: the audit-worker preStop sleeps 55 (gateway worst case) so it gets SIGTERM only
+      # after the gateway's last WAL write, then has up to 15s for its own shutdown: 55 + 15 = 70 <= 70.
       terminationGracePeriodSeconds: 70
       securityContext:
         runAsNonRoot: true
@@ -112,6 +114,10 @@ spec:
         - name: audit-worker
           image: aegis/audit-worker:latest
           imagePullPolicy: IfNotPresent
+          lifecycle:
+            preStop:
+              exec:
+                command: ["sh", "-c", "sleep 55"]
           securityContext:
             allowPrivilegeEscalation: false
             readOnlyRootFilesystem: true
