@@ -1,9 +1,12 @@
 import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { Filter, CheckCircle2, XCircle, Copy, Check, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { Filter, Copy, Check, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { PageHeader } from './PageHeader';
 import { apiClient } from '../api/client';
 import type { AuditEvent, AuditEventListResponse } from '../api/types';
+
+// A request writes a decision row before forwarding and a completion row after the backend replies.
+const RECORD_LABEL: Record<string, string> = { decision: 'Decision', completion: 'Completion', denial: 'Denial' };
 
 export const AuditStream: React.FC = () => {
   // Query Filters State
@@ -230,6 +233,7 @@ export const AuditStream: React.FC = () => {
               <thead>
                 <tr className="text-xs text-slate-500 border-b border-mist">
                   <th scope="col" className="font-medium px-4 h-10">Decision</th>
+                  <th scope="col" className="font-medium px-4 h-10">Record</th>
                   <th scope="col" className="font-medium px-4 h-10">Time (UTC)</th>
                   <th scope="col" className="font-medium px-4 h-10">Request</th>
                   <th scope="col" className="font-medium px-4 h-10">Principal</th>
@@ -256,11 +260,12 @@ export const AuditStream: React.FC = () => {
                   >
                     <td className="px-4 h-11 whitespace-nowrap">
                       {evt.decision === 'allow' ? (
-                        <span className="badge badge-ok"><CheckCircle2 className="w-3 h-3" />Allowed</span>
+                        <span className="inline-flex items-center gap-2 text-emerald-300"><span className="dot" />Allowed</span>
                       ) : (
-                        <span className="badge badge-bad"><XCircle className="w-3 h-3" />Denied</span>
+                        <span className="inline-flex items-center gap-2 text-rose-600 font-medium"><span className="dot" />Denied</span>
                       )}
                     </td>
+                    <td className="px-4 h-11 whitespace-nowrap text-slate-400">{RECORD_LABEL[evt.event_type] ?? evt.event_type}</td>
                     <td className="px-4 h-11 whitespace-nowrap text-slate-400 num">
                       <time dateTime={evt.timestamp}>
                         {new Date(evt.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
@@ -289,7 +294,7 @@ export const AuditStream: React.FC = () => {
                       {evt.status_code || '—'}
                     </td>
                     <td className="px-4 h-11 whitespace-nowrap text-right text-slate-400 num">
-                      {evt.duration_ms !== undefined ? `${evt.duration_ms} ms` : '—'}
+                      {evt.event_type !== 'decision' && evt.duration_ms !== undefined ? `${evt.duration_ms} ms` : '—'}
                     </td>
                   </tr>
                 ))}

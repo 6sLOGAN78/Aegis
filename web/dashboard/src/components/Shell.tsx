@@ -1,5 +1,5 @@
 import React from 'react';
-import { Shield, LogOut, Code, Play, Network, ScrollText, ShieldAlert } from 'lucide-react';
+import { Shield, LogOut } from 'lucide-react';
 import type { SessionInfo } from '../api/types';
 
 export type TabId = 'studio' | 'simulator' | 'topology' | 'audit' | 'quarantine';
@@ -19,12 +19,12 @@ export const Shell: React.FC<ShellProps> = ({
   session,
   onLogout,
 }) => {
-  const tabs: { id: TabId; label: string; icon: React.FC<{ className?: string }> }[] = [
-    { id: 'studio', label: 'Policy', icon: Code },
-    { id: 'simulator', label: 'Simulator', icon: Play },
-    { id: 'topology', label: 'Gateways', icon: Network },
-    { id: 'audit', label: 'Audit log', icon: ScrollText },
-    { id: 'quarantine', label: 'Quarantine', icon: ShieldAlert },
+  const tabs: { id: TabId; label: string }[] = [
+    { id: 'studio', label: 'Policy' },
+    { id: 'simulator', label: 'Simulator' },
+    { id: 'topology', label: 'Gateways' },
+    { id: 'audit', label: 'Audit log' },
+    { id: 'quarantine', label: 'Quarantine' },
   ];
 
   return (
@@ -47,7 +47,6 @@ export const Shell: React.FC<ShellProps> = ({
 
           <nav aria-label="Sections" className="hidden md:flex items-stretch h-full gap-1">
             {tabs.map((tab) => {
-              const Icon = tab.icon;
               const isActive = activeTab === tab.id;
               return (
                 <button
@@ -60,7 +59,6 @@ export const Shell: React.FC<ShellProps> = ({
                       : 'border-transparent text-slate-400 hover:text-slate-100'
                   }`}
                 >
-                  <Icon className="w-4 h-4" />
                   {tab.label}
                 </button>
               );
@@ -74,7 +72,7 @@ export const Shell: React.FC<ShellProps> = ({
                   <span className="w-1.5 h-1.5 rounded-full bg-emerald-500" aria-hidden="true" />
                   <span className="sr-only">Connected as</span>
                   {session.username}
-                  <span className="badge">{session.role || 'viewer'}</span>
+                  <span className="text-slate-500">· {session.role || 'viewer'}</span>
                 </span>
                 <button onClick={onLogout} className="btn btn-ghost btn-sm" aria-label="Sign out" title="Sign out">
                   <LogOut />
@@ -86,9 +84,8 @@ export const Shell: React.FC<ShellProps> = ({
           </div>
         </div>
 
-        <nav aria-label="Sections" className="md:hidden flex overflow-x-auto px-4 pb-2 gap-1">
+        <nav aria-label="Sections" className="md:hidden flex overflow-x-auto [scrollbar-width:none] px-4 pb-2 gap-1">
           {tabs.map((tab) => {
-            const Icon = tab.icon;
             const isActive = activeTab === tab.id;
             return (
               <button
@@ -97,7 +94,6 @@ export const Shell: React.FC<ShellProps> = ({
                 aria-current={isActive ? 'page' : undefined}
                 className={`btn btn-sm shrink-0 ${isActive ? 'btn-secondary border-ink' : 'btn-ghost'}`}
               >
-                <Icon />
                 {tab.label}
               </button>
             );

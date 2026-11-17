@@ -1,6 +1,6 @@
 import React, { useEffect, useRef, useState } from 'react';
 import '../utils/monaco-setup';
-import Editor, { type BeforeMount } from '@monaco-editor/react';
+import Editor, { type BeforeMount, type OnMount } from '@monaco-editor/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
 import { CheckCircle2, XCircle, AlertTriangle, RotateCcw, Upload, PlayCircle, Loader2, X } from 'lucide-react';
 import { PageHeader } from './PageHeader';
@@ -150,6 +150,14 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   // has unsaved edits. Note: the versions endpoint currently returns the global
   // snapshot history (snapshots are fleet-wide), so list[0] is the latest
   // published snapshot source rather than a per-policy record.
+  // The editor covers most of the viewport. It takes the mouse wheel only while focused
+  // (click into it); otherwise the wheel scrolls the page, so the page never gets stuck.
+  const handleEditorMount: OnMount = (editor) => {
+    const setWheel = (handle: boolean) => editor.updateOptions({ scrollbar: { handleMouseWheel: handle, alwaysConsumeMouseWheel: false } });
+    setWheel(false);
+    editor.onDidFocusEditorWidget(() => setWheel(true));
+    editor.onDidBlurEditorWidget(() => setWheel(false));
+  };
   const hydratedForRef = useRef<string | null>(null);
   const userEditedRef = useRef(candidateRego !== undefined);
   useEffect(() => {
@@ -369,7 +377,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
             </h2>
             {isDirty && <span className="badge badge-warn">Unpublished changes</span>}
           </div>
-          <div className="h-[600px] w-full">
+          <div className="h-[min(600px,65vh)] min-h-80 w-full">
             <Editor
               height="100%"
               defaultLanguage={regoLanguageId}
@@ -378,6 +386,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
               value={regoCode}
               onChange={handleCodeChange}
               beforeMount={handleEditorBeforeMount}
+              onMount={handleEditorMount}
               options={{
                 fontSize: 13,
                 lineHeight: 20,
@@ -392,6 +401,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
                 padding: { top: 12, bottom: 12 },
                 overviewRulerLanes: 0,
                 hideCursorInOverviewRuler: true,
+                stickyScroll: { enabled: false },
               }}
             />
           </div>

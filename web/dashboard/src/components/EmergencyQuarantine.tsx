@@ -1,6 +1,6 @@
 import React, { useState } from 'react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import { AlertTriangle, ShieldAlert, KeyRound, UserX, CheckCircle2, Trash2, Lock, X, RefreshCw } from 'lucide-react';
+import { AlertTriangle, ShieldAlert, KeyRound, UserX, CheckCircle2, Trash2, X, RefreshCw } from 'lucide-react';
 import { PageHeader } from './PageHeader';
 import { apiClient } from '../api/client';
 import { newIdempotencyKey } from '../api/idempotency';
@@ -140,12 +140,6 @@ export const EmergencyQuarantine: React.FC<EmergencyQuarantineProps> = ({ sessio
             Block a principal or revoke a token on every gateway. Blocked requests get 403{' '}
             <code className="font-mono text-[13px] text-slate-300">PRINCIPAL_QUARANTINED</code> within about 5 seconds.
           </>
-        }
-        meta={
-          <span className={`badge ${isSecOps ? '' : 'badge-warn'}`}>
-            <Lock className="w-3 h-3" />
-            {session?.role || 'no role'}
-          </span>
         }
       />
 

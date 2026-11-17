@@ -88,10 +88,7 @@ export const PolicySimulator: React.FC<PolicySimulatorProps> = ({ candidateRego 
     <div>
       <PageHeader
         title="Policy simulator"
-        description="Evaluate a request against the policy without sending traffic. Results come from the same OPA engine the gateways run."
-        meta={
-          <span className="badge">{candidateRego ? 'Uses the editor contents' : 'Uses the live policy'}</span>
-        }
+        description={`Evaluate a request against ${candidateRego ? 'the policy in the editor, including unpublished changes,' : 'the live policy'} without sending traffic. Results come from the same OPA engine the gateways run.`}
         actions={
           <button
             onClick={() => simulateMutation.mutate()}
