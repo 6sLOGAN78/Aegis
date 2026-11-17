@@ -59,9 +59,23 @@ func TestManifestDBCredentialsFromSecret(t *testing.T) {
 
 	for _, s := range []string{
 		"postgres/POSTGRES_PASSWORD",
+		"postgres/POSTGRES_USER",
 		"control-plane/AEGIS_DB_PASSWORD",
+		"control-plane/AEGIS_DB_USER",
 		"audit-worker/AEGIS_DB_PASSWORD",
+		"audit-worker/AEGIS_DB_USER",
 	} {
 		assert.Truef(t, seen[s], "vacuity guard: never saw %s in base manifests", s)
 	}
+}
+
+// TestManifestAuditWorkerPrunesDelivered keeps the K8s audit-worker sidecar in
+// line with compose: without AEGIS_PRUNE_ARCHIVED=true the worker never deletes
+// delivered WAL segments, the PVC fills to the 0.90 gate and the gateway
+// answers 503 SPOOL_SATURATED (Phase 13 review CR-01).
+func TestManifestAuditWorkerPrunesDelivered(t *testing.T) {
+	sts := findDoc(t, baseDocs(t), "StatefulSet", "aegis-gateway")
+	c := containerByName(t, sts, "audit-worker")
+	assert.Equal(t, "true", envValue(c, "AEGIS_PRUNE_ARCHIVED"),
+		"audit-worker sidecar must set AEGIS_PRUNE_ARCHIVED=true or the WAL PVC never shrinks")
 }

@@ -18,7 +18,9 @@ spec:
     spec:
       # Drain budget: preStop 5 + propagation delay 10 + drain 30 + 10 (audit flush, metrics) = 55 <= 70.
       # Sidecar budget: the audit-worker preStop sleeps 55 (gateway worst case) so it gets SIGTERM only
-      # after the gateway's last WAL write, then has up to 15s for its own shutdown: 55 + 15 = 70 <= 70.
+      # after the gateway's last WAL write, then has up to 15s for its own shutdown (the drain test
+      # requires at least 10s). Cost: the sleep does not end early, so each pod takes >= 55s to
+      # terminate and a 3-replica rollout takes about 3 minutes.
       terminationGracePeriodSeconds: 70
       securityContext:
         runAsNonRoot: true
@@ -127,6 +129,9 @@ spec:
           env:
             - name: AEGIS_SPOOL_DIR
               value: /var/log/aegis/wal
+            # Delete a segment once the cursor has moved past it; without this the PVC never shrinks.
+            - name: AEGIS_PRUNE_ARCHIVED
+              value: "true"
             - name: AEGIS_DB_HOST
               value: postgres.aegis-system
             - name: AEGIS_DB_PORT
