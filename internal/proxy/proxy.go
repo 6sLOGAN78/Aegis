@@ -3,11 +3,14 @@ package proxy
 import (
 	"crypto/tls"
 	"crypto/x509"
+	"errors"
+	"io"
 	"net"
 	"net/http"
 	"net/http/httputil"
 	"net/url"
 	"strings"
+	"sync"
 	"time"
 )
 
@@ -46,6 +49,7 @@ func NewReverseProxyWithMTLS(
 	return &httputil.ReverseProxy{
 		Transport: rt,
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			wrapOutboundBody(pr)
 			pr.SetURL(targetURL)
 			pr.Out.URL.Path = canonicalPath
 			pr.Out.URL.RawPath = ""
@@ -81,10 +85,16 @@ func NewReverseProxyWithMTLS(
 				pr.Out.Header.Set("X-Aegis-Assertion", assertionJWT)
 			}
 		},
+		ModifyResponse: modifyResponseEnforceLimit,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			reqID := requestID
 			if reqID == "" && r != nil {
 				reqID = r.Header.Get("X-Request-ID")
+			}
+			var mbe *http.MaxBytesError
+			if errors.As(err, &mbe) {
+				writeBodyTooLarge(w, reqID)
+				return
 			}
 			WriteProblemDetails(
 				w,
@@ -105,6 +115,8 @@ func NewReverseProxyWithMTLS(
 func NewReverseProxy(targetURL *url.URL, canonicalPath string, requestID string) *httputil.ReverseProxy {
 	return &httputil.ReverseProxy{
 		Rewrite: func(pr *httputil.ProxyRequest) {
+			wrapOutboundBody(pr)
+
 			// 1. Point outbound request to target backend URL
 			pr.SetURL(targetURL)
 
@@ -138,10 +150,16 @@ func NewReverseProxy(targetURL *url.URL, canonicalPath string, requestID string)
 				pr.Out.Header.Set("X-Request-ID", reqID)
 			}
 		},
+		ModifyResponse: modifyResponseEnforceLimit,
 		ErrorHandler: func(w http.ResponseWriter, r *http.Request, err error) {
 			reqID := requestID
 			if reqID == "" && r != nil {
 				reqID = r.Header.Get("X-Request-ID")
+			}
+			var mbe *http.MaxBytesError
+			if errors.As(err, &mbe) {
+				writeBodyTooLarge(w, reqID)
+				return
 			}
 			WriteProblemDetails(
 				w,
@@ -153,4 +171,50 @@ func NewReverseProxy(targetURL *url.URL, canonicalPath string, requestID string)
 			)
 		},
 	}
+}
+
+// limitTrackingBody serialises access to a request body that may be wrapped by
+// http.MaxBytesReader, so that ModifyResponse can drain the remainder after an
+// early upstream reply and surface *http.MaxBytesError (GW-01). Close is a
+// no-op: the ingress server closes the underlying body itself.
+type limitTrackingBody struct {
+	mu sync.Mutex
+	rc io.ReadCloser
+}
+
+func (b *limitTrackingBody) Read(p []byte) (int, error) {
+	b.mu.Lock()
+	defer b.mu.Unlock()
+	return b.rc.Read(p)
+}
+
+func (b *limitTrackingBody) Close() error { return nil }
+
+// wrapOutboundBody wraps the outbound request body so modifyResponseEnforceLimit
+// can drain it after an early upstream reply.
+func wrapOutboundBody(pr *httputil.ProxyRequest) {
+	if pr.Out.Body == nil || pr.Out.Body == http.NoBody {
+		return
+	}
+	pr.Out.Body = &limitTrackingBody{rc: pr.Out.Body}
+}
+
+// modifyResponseEnforceLimit drains the remainder of the request body when the
+// upstream answered before consuming it. The drain is bounded by the ingress
+// MaxBytesReader; an over-limit body yields *http.MaxBytesError, which the
+// ErrorHandler maps to 413 so oversize chunked bodies never surface as 2xx.
+func modifyResponseEnforceLimit(resp *http.Response) error {
+	if resp.Request == nil {
+		return nil
+	}
+	tb, ok := resp.Request.Body.(*limitTrackingBody)
+	if !ok {
+		return nil
+	}
+	_, err := io.Copy(io.Discard, tb)
+	var mbe *http.MaxBytesError
+	if errors.As(err, &mbe) {
+		return err
+	}
+	return nil
 }

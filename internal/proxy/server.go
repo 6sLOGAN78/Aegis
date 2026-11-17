@@ -14,6 +14,18 @@ import (
 	"github.com/google/uuid"
 )
 
+// writeBodyTooLarge writes the 413 problem+json response for oversized request bodies.
+func writeBodyTooLarge(w http.ResponseWriter, reqID string) {
+	WriteProblemDetails(
+		w,
+		http.StatusRequestEntityTooLarge,
+		"Payload Too Large",
+		"Request body size exceeds limit",
+		"https://aegis.local/errors/body-too-large",
+		reqID,
+	)
+}
+
 // Server wraps http.Server with edge request limits, concurrency bounding, and correlation tracing.
 type Server struct {
 	httpServer *http.Server
@@ -49,6 +61,12 @@ func NewServer(cfg *config.Config, handler http.Handler) *Server {
 				"https://aegis.local/errors/header-too-large",
 				reqID,
 			)
+			return
+		}
+
+		// GW-01: reject declared-oversize bodies before any handler runs.
+		if r.ContentLength > cfg.MaxBodyBytes {
+			writeBodyTooLarge(w, reqID)
 			return
 		}
 
@@ -152,6 +170,13 @@ func NewDualServer(
 			return
 		}
 
+		// GW-01: reject declared-oversize bodies before auth/policy/forwarding.
+		if r.ContentLength > cfg.MaxBodyBytes {
+			rejections.record("body_too_large")
+			writeBodyTooLarge(w, reqID)
+			return
+		}
+
 		if r.Body != nil {
 			r.Body = http.MaxBytesReader(w, r.Body, cfg.MaxBodyBytes)
 		}
@@ -196,6 +221,13 @@ func NewDualServer(
 				"https://aegis.local/errors/header-too-large",
 				reqID,
 			)
+			return
+		}
+
+		// GW-01: reject declared-oversize bodies before auth/policy/forwarding.
+		if r.ContentLength > cfg.MaxBodyBytes {
+			rejections.record("body_too_large")
+			writeBodyTooLarge(w, reqID)
 			return
 		}
 
