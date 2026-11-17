@@ -27,7 +27,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **POL-01**: Embedded OPA/Rego policy engine evaluates typed request context in-memory with sub-2ms latency with zero network calls
 - [x] **POL-02**: Strict default-deny authorization where unmapped routes or evaluation errors fail closed (explicit deny supersedes allow)
-- [ ] **POL-03**: Core RBAC and workload authorization matrix enforces developer, finance, admin, and workload role permissions
+- [x] **POL-03**: Core RBAC and workload authorization matrix enforces developer, finance, admin, and workload role permissions
 - [x] **POL-04**: Policies cannot grant access when authentication, revocation, freshness, audit admission, or transport requirements fail
 
 ### Control Plane & Snapshot Distribution (CTRL)
@@ -70,7 +70,7 @@ Requirements for initial release. Each maps to roadmap phases.
 
 - [x] **DIST-01**: Multi-replica deployment behind load balancer with health checking, graceful drain (30s), and reconnect jitter
 - [x] **DIST-02**: Prometheus metrics tracking requests, latency, denials, snapshot age, spool capacity, and lease health without PII labels
-- [ ] **DIST-03**: Automated test suite proving negative authentication, header spoofing, path traversal, bypass prevention, and dependency outages
+- [x] **DIST-03**: Automated test suite proving negative authentication, header spoofing, path traversal, bypass prevention, and dependency outages
 
 ## v2 Requirements
 
@@ -115,21 +115,21 @@ Which phases cover which requirements. Populated during roadmap creation.
 | AUTH-01 | Phase 1 | Complete |
 | AUTH-02 | Phase 2 | Complete |
 | AUTH-03 | Phase 2 | Complete |
-| AUTH-04 | Phase 1 | Gap closure |
+| AUTH-04 | Phase 1 | Complete |
 | AUTH-05 | Phase 2 | Complete |
 | POL-01 | Phase 1 | Complete |
 | POL-02 | Phase 1 | Complete |
-| POL-03 | Phase 1 | Gap closure |
+| POL-03 | Phase 1 | Complete |
 | POL-04 | Phase 1 | Complete |
-| CTRL-01 | Phase 3 | Gap closure |
-| CTRL-02 | Phase 3 | Gap closure |
+| CTRL-01 | Phase 3 | Complete |
+| CTRL-02 | Phase 3 | Complete |
 | CTRL-03 | Phase 3 | Complete |
 | CTRL-04 | Phase 3 | Complete |
-| CTRL-05 | Phase 3 | Gap closure |
+| CTRL-05 | Phase 3 | Complete |
 | CTRL-06 | Phase 3 | Complete |
 | REV-01 | Phase 3 | Complete |
 | REV-02 | Phase 1 | Complete |
-| REV-03 | Phase 3 | Gap closure |
+| REV-03 | Phase 3 | Complete |
 | REV-04 | Phase 3 | Complete |
 | AUD-01 | Phase 3 | Complete |
 | AUD-02 | Phase 3 | Complete |
@@ -138,13 +138,13 @@ Which phases cover which requirements. Populated during roadmap creation.
 | BYP-01 | Phase 1 | Complete |
 | BYP-02 | Phase 2 | Complete |
 | BYP-03 | Phase 2 | Complete |
-| OPS-01 | Phase 4 | Gap closure |
-| OPS-02 | Phase 4 | Gap closure |
-| OPS-03 | Phase 4 | Gap closure |
+| OPS-01 | Phase 4 | Complete |
+| OPS-02 | Phase 4 | Complete |
+| OPS-03 | Phase 4 | Complete |
 | OPS-04 | Phase 4 | Complete |
 | DIST-01 | Phase 12 | Complete |
 | DIST-02 | Phase 12 | Complete |
-| DIST-03 | Phase 5 | Gap closure |
+| DIST-03 | Phase 5 | Complete |
 
 **Coverage:**
 - v1 requirements: 38 total
