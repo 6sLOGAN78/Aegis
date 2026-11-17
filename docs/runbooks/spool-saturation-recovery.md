@@ -61,21 +61,24 @@
    ```
 2. Check audit worker logs for database batch insertion errors:
    ```bash
-   kubectl logs -n aegis-system -l app=aegis-audit-worker --tail=50 | grep -E "batch|pgx|error"
+   kubectl logs -n aegis-system -l app=aegis-gateway -c audit-worker --tail=50 | grep -E "batch|pgx|error"
    ```
-3. Restart stuck audit workers if connection pool stalled:
+3. Restart stuck audit workers if connection pool stalled. The audit-worker is a sidecar
+   container of the gateway pod, so this restarts the gateway pods:
    ```bash
-   kubectl rollout restart deployment/aegis-audit-worker -n aegis-system
+   kubectl rollout restart statefulset/aegis-gateway -n aegis-system
    ```
 
 ### Procedure B: Manually Scale Ingestion Throughput
 If traffic volume surged beyond single-worker batch ingestion rate:
-1. Increase worker concurrency or reduce flush interval in ConfigMap:
+1. Increase batch size or reduce the flush interval by setting env on the `audit-worker`
+   container of `statefulset/aegis-gateway` (this triggers a rolling restart):
    ```bash
-   kubectl patch configmap aegis-audit-worker-config -n aegis-system --type merge -p \
-     '{"data":{"BATCH_SIZE":"1000","FLUSH_INTERVAL_MS":"50"}}'
-   kubectl rollout restart deployment/aegis-audit-worker -n aegis-system
+   kubectl set env statefulset/aegis-gateway -c audit-worker -n aegis-system \
+     AEGIS_AUDIT_BATCH_SIZE=1000 AEGIS_AUDIT_FLUSH_INTERVAL_MS=50
    ```
+2. These settings are inline env in `base/gateway/statefulset.yaml`, so make the same change
+   in the manifest or an overlay to persist it across deploys.
 
 ### Procedure C: Dynamic PVC Volume Expansion (Emergency Space Recovery)
 If disk volume quota is physically near 100%:
