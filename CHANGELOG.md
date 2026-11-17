@@ -4,6 +4,20 @@ All notable changes to this project are documented here. The format follows [Kee
 
 ## [Unreleased]
 
+### Changed
+- Operator console redesigned around transit signage. A black sign band holds the sections, the ground is white, and colour appears only for abnormal state, always with a word and a shape (ISA-101 HMI guidance).
+- New **Overview** landing page: data freshness, a status board, the live request path drawn as a line diagram, and the latest denials.
+- Each service is marked with a coloured route bullet. Gateway status is shown as Good service, Delayed or Suspended, and heartbeat age as a bar measured against the 60-second lease.
+- The page now scrolls past the policy editor. The editor only takes the mouse wheel after you click into it.
+- `DESIGN.md` and `PRODUCT.md` replace the borrowed third-party style reference.
+- The README now includes console screenshots and the policy rule and route tables.
+
+## [1.0.1] — 2026-11-18
+
+### Fixed
+- Kubernetes: Postgres reads its credentials from the `aegis-db-credentials` Secret. The audit-worker sidecar now prunes delivered WAL and outlives the gateway drain.
+- Runbooks now name only metrics and objects that exist, and tests enforce this.
+
 ### Added
 - README, contributing guide, security policy, license, CI workflow, and GitHub issue/PR templates.
 

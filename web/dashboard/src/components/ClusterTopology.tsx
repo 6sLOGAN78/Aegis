@@ -1,6 +1,6 @@
 import React, { useState, useEffect } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import { RefreshCw, Server, AlertTriangle, CheckCircle2, AlertCircle } from 'lucide-react';
+import { RefreshCw, AlertTriangle, AlertCircle } from 'lucide-react';
 import { PageHeader } from './PageHeader';
 import { apiClient } from '../api/client';
 import type { GatewayListResponse, GatewayStatus } from '../api/types';
@@ -48,16 +48,29 @@ export const ClusterTopology: React.FC = () => {
     return new Date(timestamp).toLocaleTimeString();
   };
 
+  // Same words as the Overview line diagram: good service, delayed, suspended.
   const statusBadge = (status: GatewayStatus['status']) => {
     switch (status) {
       case 'healthy':
-        return <span className="badge badge-ok"><span className="dot" />Healthy</span>;
+        return <span className="badge badge-ok"><span className="dot" aria-hidden="true" />Good service</span>;
       case 'degraded':
-        return <span className="badge badge-warn"><span className="dot" />Degraded</span>;
+        return <span className="badge badge-warn"><span className="dot" aria-hidden="true" />Delayed</span>;
       case 'partitioned':
       default:
-        return <span className="badge badge-bad"><span className="dot" />Partitioned</span>;
+        return <span className="badge badge-bad"><span className="dot" aria-hidden="true" />Suspended</span>;
     }
+  };
+
+  // Heartbeat age as an exact-length bar: full width is the 60 s lease, where a gateway fails closed.
+  const heartbeatBar = (timestamp?: string) => {
+    const ageS = timestamp ? Math.max(0, (now - new Date(timestamp).getTime()) / 1000) : 60;
+    const pct = Math.min(100, (ageS / 60) * 100);
+    const tone = ageS >= 60 ? 'var(--color-bad)' : ageS >= 15 ? 'var(--color-warn)' : 'var(--color-ink)';
+    return (
+      <span className="hidden md:inline-block w-24 h-1 bg-mist rounded-[1px] align-middle mr-3" aria-hidden="true">
+        <span className="block h-1 rounded-[1px]" style={{ width: `${Math.max(2, pct)}%`, background: tone }} />
+      </span>
+    );
   };
 
   const syncSummary =
@@ -72,7 +85,7 @@ export const ClusterTopology: React.FC = () => {
         description="Gateway replicas streaming policy snapshots from the control plane. A replica that misses heartbeats for 60 seconds fails closed."
         meta={
           totalCount > 0 && (
-            <span className={`badge ${convergencePct === 100 ? 'badge-ok' : 'badge-warn'} num`}>
+            <span className={`badge ${convergencePct === 100 ? 'badge-ok' : 'badge-warn'} num`}><span className="dot" aria-hidden="true" />
               {syncSummary}
             </span>
           )
@@ -110,7 +123,7 @@ export const ClusterTopology: React.FC = () => {
         {isLoading ? (
           <div className="divide-y divide-mist" aria-busy="true" aria-label="Loading gateways">
             {[1, 2, 3].map((n) => (
-              <div key={n} className="flex items-center gap-6 px-5 h-14 animate-pulse">
+              <div key={n} className="flex items-center gap-6 px-5 h-12 animate-pulse">
                 <div className="h-3.5 w-40 bg-linen rounded" />
                 <div className="h-3.5 w-20 bg-linen rounded" />
                 <div className="h-3.5 w-12 bg-linen rounded" />
@@ -119,8 +132,7 @@ export const ClusterTopology: React.FC = () => {
           </div>
         ) : gateways.length === 0 ? (
           <div className="px-5 py-16 text-center">
-            <Server className="w-6 h-6 mx-auto text-slate-500" />
-            <p className="mt-3 text-sm text-slate-300">No gateways connected</p>
+            <p className="text-sm font-semibold text-rose-600">No gateways connected. Every request is refused.</p>
             <p className="mt-1 text-sm text-slate-500 max-w-sm mx-auto">
               Gateways appear here once they open a snapshot stream to the control plane on port 9090.
             </p>
@@ -129,34 +141,32 @@ export const ClusterTopology: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-sm">
               <thead>
-                <tr className="text-left text-xs text-slate-500 border-b border-mist">
-                  <th scope="col" className="font-medium px-5 h-10">Gateway</th>
-                  <th scope="col" className="font-medium px-5 h-10">Status</th>
-                  <th scope="col" className="font-medium px-5 h-10">Snapshot</th>
-                  <th scope="col" className="font-medium px-5 h-10 text-right">Last heartbeat</th>
+                <tr className="text-left">
+                  <th scope="col" className="px-5 h-10">Gateway</th>
+                  <th scope="col" className="px-5 h-10">Status</th>
+                  <th scope="col" className="px-5 h-10">Snapshot</th>
+                  <th scope="col" className="px-5 h-10 text-right">Last heartbeat</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-mist">
                 {gateways.map((gw) => {
                   const behind = gw.active_version !== activeVersion;
                   return (
-                    <tr key={gw.gateway_id} className="hover:bg-linen/60">
-                      <td className="px-5 h-14 font-mono text-[13px] text-slate-100 max-w-[280px] truncate" title={gw.gateway_id}>
+                    <tr key={gw.gateway_id} className="hover:bg-linen">
+                      <td className="px-5 h-12 font-mono text-[13px] text-slate-100 max-w-[280px] truncate" title={gw.gateway_id}>
                         {gw.gateway_id}
                       </td>
-                      <td className="px-5 h-14">{statusBadge(gw.status)}</td>
-                      <td className="px-5 h-14">
+                      <td className="px-5 h-12">{statusBadge(gw.status)}</td>
+                      <td className="px-5 h-12">
                         <span className="num text-slate-100">v{gw.active_version}</span>
                         {behind ? (
-                          <span className="ml-2 text-xs text-amber-300">behind v{activeVersion}</span>
+                          <span className="ml-2 text-xs font-semibold text-amber-300">behind v{activeVersion}</span>
                         ) : (
-                          <span className="ml-2 inline-flex items-center gap-1 text-xs text-slate-500">
-                            <CheckCircle2 className="w-3.5 h-3.5 text-emerald-500" />
-                            current
-                          </span>
+                          <span className="ml-2 text-xs text-slate-500">current</span>
                         )}
                       </td>
-                      <td className="px-5 h-14 text-right text-slate-400 num">
+                      <td className="px-5 h-12 text-right text-slate-400 num">
+                        {heartbeatBar(gw.last_heartbeat_at)}
                         <time dateTime={gw.last_heartbeat_at}>{formatRelativeTime(gw.last_heartbeat_at)}</time>
                       </td>
                     </tr>

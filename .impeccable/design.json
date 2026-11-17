@@ -1,0 +1,61 @@
+{
+  "schemaVersion": 2,
+  "generatedAt": "2026-11-18T00:00:00Z",
+  "title": "Design System: Aegis Operator Console",
+  "extensions": {
+    "colorMeta": {
+      "signage-black": { "role": "primary", "displayName": "Signage Black" },
+      "route-orders-blue": { "role": "secondary", "displayName": "Route Blue (orders)" },
+      "route-payments-brown": { "role": "secondary", "displayName": "Route Brown (payments)" },
+      "route-admin-purple": { "role": "secondary", "displayName": "Route Purple (admin)" },
+      "state-bad-red": { "role": "tertiary", "displayName": "Signal Red" },
+      "state-warn-amber": { "role": "tertiary", "displayName": "Delay Amber" },
+      "state-ok-green": { "role": "tertiary", "displayName": "Service Green" },
+      "ground-white": { "role": "neutral", "displayName": "Ground White" },
+      "platform-grey": { "role": "neutral", "displayName": "Platform Grey" },
+      "hairline": { "role": "neutral", "displayName": "Hairline" }
+    },
+    "shadows": [
+      { "name": "overlay", "value": "0 16px 40px -8px rgb(17 18 20 / 0.24)", "purpose": "Drawer and dialogs only." }
+    ],
+    "motion": [
+      { "name": "state", "value": "150ms ease-out", "purpose": "Colour and opacity changes on hover, focus and state." }
+    ],
+    "breakpoints": [
+      { "name": "md", "value": "768px" },
+      { "name": "lg", "value": "1024px" }
+    ]
+  },
+  "components": [
+    { "name": "Sign band", "kind": "nav", "refersTo": "sign-band", "description": "Black header with sections; current one underlined.",
+      "html": "<nav class=\"ds-band\"><b>Aegis</b><a class=\"on\">Overview</a><a>Policy</a><a>Audit log</a></nav>",
+      "css": ".ds-band{display:flex;align-items:stretch;gap:24px;height:56px;padding:0 24px;background:#111214;color:#fff;font:600 14px Inter,sans-serif}.ds-band b{align-self:center;font-size:18px}.ds-band a{display:flex;align-items:center;color:rgba(255,255,255,.65);border-bottom:3px solid transparent}.ds-band a.on{color:#fff;border-color:#fff}.ds-band a:hover{color:#fff}" },
+    { "name": "Primary button", "kind": "button", "refersTo": "button-primary", "description": "Main action on a page.",
+      "html": "<button class=\"ds-btn\">Publish</button>",
+      "css": ".ds-btn{height:36px;padding:0 14px;border:0;border-radius:4px;background:#111214;color:#fff;font:600 14px Inter,sans-serif;transition:background 150ms ease-out}.ds-btn:hover{background:#33363b}.ds-btn:focus-visible{outline:2px solid #0039a6;outline-offset:2px}" },
+    { "name": "Secondary button", "kind": "button", "refersTo": "button-secondary", "description": "Supporting action.",
+      "html": "<button class=\"ds-btn2\">Refresh</button>",
+      "css": ".ds-btn2{height:36px;padding:0 14px;border:1px solid #8a9099;border-radius:4px;background:#fff;color:#111214;font:600 14px Inter,sans-serif}.ds-btn2:hover{background:#f3f4f5}.ds-btn2:focus-visible{outline:2px solid #0039a6;outline-offset:2px}" },
+    { "name": "Field", "kind": "input", "refersTo": "field", "description": "Text input.",
+      "html": "<input class=\"ds-field\" placeholder=\"usr_alice\">",
+      "css": ".ds-field{height:38px;padding:0 12px;border:1px solid #8a9099;border-radius:4px;font:14px Inter,sans-serif;color:#111214}.ds-field:focus{outline:none;border-color:#111214;box-shadow:0 0 0 1px #111214}" },
+    { "name": "Route bullet", "kind": "chip", "refersTo": "route-bullet-orders", "description": "Service marker; one colour per service, always beside the name.",
+      "html": "<span class=\"ds-route\"><i style=\"background:#0039a6\">O</i>orders</span>",
+      "css": ".ds-route{display:inline-flex;align-items:center;gap:8px;font:14px Inter,sans-serif;color:#111214}.ds-route i{display:inline-grid;place-items:center;width:22px;height:22px;border-radius:50%;color:#fff;font:700 12px Inter,sans-serif;font-style:normal}" },
+    { "name": "Status words", "kind": "chip", "refersTo": "status-bad", "description": "Good service / Delayed / Suspended, each with its own mark shape.",
+      "html": "<span class=\"ds-st ok\"><i></i>Good service</span> <span class=\"ds-st warn\"><i></i>Delayed</span> <span class=\"ds-st bad\"><i></i>Suspended</span>",
+      "css": ".ds-st{display:inline-flex;align-items:center;gap:6px;height:24px;padding:0 8px;border-radius:2px;font:600 12px Inter,sans-serif}.ds-st i{width:8px;height:8px;border-radius:50%}.ds-st.ok{padding-left:0;color:#111214}.ds-st.ok i{background:#1e7b34}.ds-st.warn{background:#fdf0e4;color:#7a3905}.ds-st.warn i{border:2px solid #a14b06;box-sizing:border-box}.ds-st.bad{background:#fce8eb;color:#8e0b20}.ds-st.bad i{border-radius:1px;background:#c8102e}" }
+  ],
+  "narrative": {
+    "northStar": "The Line Diagram",
+    "overview": "The gateway fleet read like a transit system: black sign band, white ground, the request path drawn as a line diagram, every stop stating its condition in words. Neutral base; colour only for service routes and abnormal state (ISA-101).",
+    "keyCharacteristics": ["Black sign band", "Route bullets per service", "State colour only when abnormal, always with a word and shape", "Flat, hairline-ruled, 4px corners", "Bold tight headings, mono for data"],
+    "rules": [
+      { "name": "The Quarantine Rule", "body": "Hue lives only in route bullets and abnormal state.", "section": "colors" },
+      { "name": "The Redundant State Rule", "body": "Every state is a word plus a mark shape, never colour alone.", "section": "colors" },
+      { "name": "The Hyphen Rule", "body": "Tabular numerals only on pure numbers; hyphenated strings in mono.", "section": "typography" }
+    ],
+    "dos": ["Lead with data freshness", "Pair state colour with words and shapes", "Use route bullets wherever a service is named"],
+    "donts": ["Colour in chrome or headings", "Shadows on in-page panels", "Eyebrows, gradient text, glows"]
+  }
+}

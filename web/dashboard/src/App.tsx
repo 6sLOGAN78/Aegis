@@ -6,13 +6,14 @@ import { PolicySimulator } from './components/PolicySimulator';
 import { AuditStream } from './components/AuditStream';
 import { ClusterTopology } from './components/ClusterTopology';
 import { EmergencyQuarantine } from './components/EmergencyQuarantine';
+import { Overview } from './components/Overview';
 import { apiClient } from './api/client';
 import type { SessionInfo } from './api/types';
 
 export const App: React.FC = () => {
   const [session, setSession] = useState<SessionInfo | null>(null);
   const [isLoginOpen, setIsLoginOpen] = useState(false);
-  const [activeTab, setActiveTab] = useState<TabId>('studio');
+  const [activeTab, setActiveTab] = useState<TabId>('overview');
   const [candidateRego, setCandidateRego] = useState<string | undefined>(undefined);
   // Snapshot version the candidate edit session is based on (If-Match for publish).
   // Lifted here with candidateRego so it survives PolicyStudio remounts.
@@ -77,6 +78,8 @@ export const App: React.FC = () => {
           session={session}
           onLogout={handleLogout}
         >
+          {activeTab === 'overview' && <Overview onNavigate={setActiveTab} />}
+
           {activeTab === 'studio' && (
             <PolicyStudio
               session={session}

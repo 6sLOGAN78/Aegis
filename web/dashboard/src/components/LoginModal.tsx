@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
-import { Shield, AlertCircle, Loader2 } from 'lucide-react';
+import { AlertCircle, Loader2 } from 'lucide-react';
+import { AegisMark } from './Shell';
 import { apiClient, ApiError } from '../api/client';
 import type { SessionInfo } from '../api/types';
 
@@ -46,18 +47,18 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
   };
 
   return (
-    <div className="fixed inset-0 z-50 overflow-y-auto bg-bone">
-      <div className="min-h-full flex flex-col items-center justify-center px-4 py-12">
-        <div className="flex items-center gap-2.5 mb-8">
-          <span className="grid place-items-center w-8 h-8 rounded-lg bg-ink">
-            <Shield className="w-4.5 h-4.5 text-white" />
-          </span>
-          <span className="text-base font-medium text-slate-100">Aegis</span>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-bone flex flex-col">
+      <header className="bg-ink text-white">
+        <div className="h-14 max-w-[1320px] mx-auto px-4 sm:px-6 flex items-center gap-2.5">
+          <AegisMark className="w-6 h-6 text-white" />
+          <span className="text-[18px] font-bold tracking-[-0.01em]">Aegis</span>
+          <span className="ml-3 text-sm text-white/65">Operator console</span>
         </div>
-
+      </header>
+      <div className="flex-1 flex flex-col items-center justify-center px-4 py-12">
         <main className="w-full max-w-sm panel p-8">
-          <h1 className="text-2xl font-display text-slate-100">Sign in</h1>
-          <p className="mt-1 text-sm text-slate-500">Operator access to the Aegis control plane.</p>
+          <h1 className="text-[24px] font-display text-slate-100">Sign in</h1>
+          <p className="mt-1 text-sm text-slate-500">Use your control-plane operator account. Every sign-in is audited.</p>
 
           <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate={false}>
             <div>

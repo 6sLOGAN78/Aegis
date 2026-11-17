@@ -113,32 +113,32 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   const handleEditorBeforeMount: BeforeMount = (monaco) => {
     registerRegoLanguage(monaco);
     // Editor theme drawn from the console palette (index.css @theme).
-    monaco.editor.defineTheme('aegis-paper', {
+    monaco.editor.defineTheme('aegis-signage', {
       base: 'vs',
       inherit: true,
       rules: [
-        { token: 'comment', foreground: '8a8786', fontStyle: 'italic' },
-        { token: 'keyword', foreground: 'b83c36' },
-        { token: 'string', foreground: '2c7149' },
-        { token: 'string.raw', foreground: '2c7149' },
-        { token: 'number', foreground: '96610f' },
-        { token: 'operator', foreground: '575555' },
-        { token: 'identifier', foreground: '181717' },
+        { token: 'comment', foreground: '6b7079', fontStyle: 'italic' },
+        { token: 'keyword', foreground: '0039a6' },
+        { token: 'string', foreground: '996633' },
+        { token: 'string.raw', foreground: '996633' },
+        { token: 'number', foreground: 'b933ad' },
+        { token: 'operator', foreground: '4b4f56' },
+        { token: 'identifier', foreground: '111214' },
       ],
       colors: {
         'editor.background': '#ffffff',
-        'editor.foreground': '#181717',
-        'editorLineNumber.foreground': '#b3b0af',
-        'editorLineNumber.activeForeground': '#181717',
-        'editor.lineHighlightBackground': '#f7f5f4',
+        'editor.foreground': '#111214',
+        'editorLineNumber.foreground': '#9aa0a8',
+        'editorLineNumber.activeForeground': '#111214',
+        'editor.lineHighlightBackground': '#f3f4f5',
         'editor.lineHighlightBorder': '#00000000',
-        'editor.selectionBackground': '#d0484126',
-        'editorCursor.foreground': '#d04841',
-        'editorIndentGuide.background1': '#efedec',
+        'editor.selectionBackground': '#0039a629',
+        'editorCursor.foreground': '#111214',
+        'editorIndentGuide.background1': '#eef0f2',
         'editorWidget.background': '#ffffff',
-        'editorWidget.border': '#d5d3d2',
-        'scrollbarSlider.background': '#d5d3d299',
-        'scrollbarSlider.hoverBackground': '#c4c1c0',
+        'editorWidget.border': '#d5d7da',
+        'scrollbarSlider.background': '#c4c8cd99',
+        'scrollbarSlider.hoverBackground': '#9aa0a8',
       },
     });
   };
@@ -382,7 +382,7 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
               height="100%"
               defaultLanguage={regoLanguageId}
               language={regoLanguageId}
-              theme="aegis-paper"
+              theme="aegis-signage"
               value={regoCode}
               onChange={handleCodeChange}
               beforeMount={handleEditorBeforeMount}

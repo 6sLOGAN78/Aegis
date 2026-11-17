@@ -2,6 +2,7 @@ import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
 import { Filter, Copy, Check, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
 import { PageHeader } from './PageHeader';
+import { ServiceBullet } from './ServiceBullet';
 import { apiClient } from '../api/client';
 import type { AuditEvent, AuditEventListResponse } from '../api/types';
 
@@ -231,16 +232,16 @@ export const AuditStream: React.FC = () => {
           <div className="overflow-x-auto">
             <table className="w-full text-left text-[13px]">
               <thead>
-                <tr className="text-xs text-slate-500 border-b border-mist">
-                  <th scope="col" className="font-medium px-4 h-10">Decision</th>
-                  <th scope="col" className="font-medium px-4 h-10">Record</th>
-                  <th scope="col" className="font-medium px-4 h-10">Time (UTC)</th>
-                  <th scope="col" className="font-medium px-4 h-10">Request</th>
-                  <th scope="col" className="font-medium px-4 h-10">Principal</th>
-                  <th scope="col" className="font-medium px-4 h-10">Service</th>
-                  <th scope="col" className="font-medium px-4 h-10">Reason</th>
-                  <th scope="col" className="font-medium px-4 h-10 text-right">Status</th>
-                  <th scope="col" className="font-medium px-4 h-10 text-right">Latency</th>
+                <tr>
+                  <th scope="col" className="px-4 h-10">Decision</th>
+                  <th scope="col" className="px-4 h-10">Record</th>
+                  <th scope="col" className="px-4 h-10">Time (UTC)</th>
+                  <th scope="col" className="px-4 h-10">Request</th>
+                  <th scope="col" className="px-4 h-10">Principal</th>
+                  <th scope="col" className="px-4 h-10">Service</th>
+                  <th scope="col" className="px-4 h-10">Reason</th>
+                  <th scope="col" className="px-4 h-10 text-right">Status</th>
+                  <th scope="col" className="px-4 h-10 text-right">Latency</th>
                 </tr>
               </thead>
               <tbody className="divide-y divide-mist">
@@ -256,17 +257,17 @@ export const AuditStream: React.FC = () => {
                     }}
                     tabIndex={0}
                     aria-label={`Open event ${evt.event_id}`}
-                    className="hover:bg-linen/70 focus-visible:bg-linen cursor-pointer"
+                    className="hover:bg-linen focus-visible:bg-linen cursor-pointer"
                   >
                     <td className="px-4 h-11 whitespace-nowrap">
                       {evt.decision === 'allow' ? (
-                        <span className="inline-flex items-center gap-2 text-emerald-300"><span className="dot" />Allowed</span>
+                        <span className="inline-flex items-center gap-2 text-slate-300"><span className="dot bg-emerald-500" aria-hidden="true" />Allowed</span>
                       ) : (
-                        <span className="inline-flex items-center gap-2 text-rose-600 font-medium"><span className="dot" />Denied</span>
+                        <span className="inline-flex items-center gap-2 text-rose-600 font-semibold"><span className="dot rounded-[1px]" aria-hidden="true" />Denied</span>
                       )}
                     </td>
                     <td className="px-4 h-11 whitespace-nowrap text-slate-400">{RECORD_LABEL[evt.event_type] ?? evt.event_type}</td>
-                    <td className="px-4 h-11 whitespace-nowrap text-slate-400 num">
+                    <td className="px-4 h-11 whitespace-nowrap text-slate-400 font-mono text-[12px]">
                       <time dateTime={evt.timestamp}>
                         {new Date(evt.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
                       </time>
@@ -278,7 +279,7 @@ export const AuditStream: React.FC = () => {
                     <td className="px-4 h-11 whitespace-nowrap font-mono text-[12px] text-slate-300 truncate max-w-[160px]" title={evt.principal_id}>
                       {evt.principal_id}
                     </td>
-                    <td className="px-4 h-11 whitespace-nowrap text-slate-300">{evt.service_id}</td>
+                    <td className="px-4 h-11 whitespace-nowrap text-slate-300"><ServiceBullet service={evt.service_id || 'unknown'} /></td>
                     <td className="px-4 h-11 whitespace-nowrap font-mono text-[12px] text-slate-400">{evt.reason_code}</td>
                     <td
                       className={`px-4 h-11 whitespace-nowrap text-right num ${
@@ -321,7 +322,7 @@ export const AuditStream: React.FC = () => {
       </section>
 
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-[#181717]/20" onClick={() => setSelectedEvent(null)}>
+        <div className="fixed inset-0 z-50 flex justify-end bg-[#111214]/30" onClick={() => setSelectedEvent(null)}>
           <aside
             role="dialog"
             aria-modal="true"

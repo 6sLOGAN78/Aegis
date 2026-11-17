@@ -29,7 +29,7 @@ export const Dialog: React.FC<DialogProps> = ({ title, onClose, children }) => {
   }, []);
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#181717]/25 p-4" onClick={onClose}>
+    <div className="fixed inset-0 z-50 flex items-center justify-center bg-[#111214]/30 p-4" onClick={onClose}>
       <div
         ref={panelRef}
         role="dialog"

@@ -9,7 +9,9 @@ Aegis is a reference implementation of a **zero-trust access gateway**: every re
 
 It is built as a portfolio-grade distributed system: a Go reverse proxy with an embedded OPA/Rego engine, a control plane that streams signed configuration snapshots over mutually authenticated gRPC, Redis-backed sub-5-second revocation and quarantine, a fsync'd write-ahead audit spool, and an operator dashboard — runnable as one container set on a laptop or as a 3-replica cluster behind a load balancer.
 
-> **Status:** v1.0 milestone feature-complete (phases 0–11). Educational/reference system, not an audited security appliance — see [Known limitations](#known-limitations).
+> **Status:** v1.0.1. Milestone v1.0 is complete (phases 0–13), and the gap-closure work is shipped. It is an educational reference system, not an audited security appliance. See [Known limitations](#known-limitations).
+
+![Aegis operator console: Overview with the live request path drawn as a line diagram](docs/images/console-overview.png)
 
 ---
 
@@ -17,7 +19,9 @@ It is built as a portfolio-grade distributed system: a Go reverse proxy with an 
 
 - [Why Aegis](#why-aegis)
 - [Features](#features)
+- [Operator console](#operator-console)
 - [Architecture](#architecture)
+- [Policy rules](#policy-rules)
 - [Security invariants](#security-invariants)
 - [Repository structure](#repository-structure)
 - [Getting started](#getting-started)
@@ -59,6 +63,43 @@ The project demonstrates the engineering that makes that practical:
 | **Operations** | React/TypeScript operator console (policy studio, simulator, fleet topology, audit stream, emergency quarantine/revoke) on a CSRF-protected, role-gated `/control/v1` REST API; Prometheus metrics; SRE runbooks. |
 | **Distribution** | 3 gateway replicas behind HAProxy with convergence tracking, graceful drain, and jittered reconnect backoff; chaos and DR drills in the test suite. |
 
+## Operator console
+
+The console is served by the control plane at `http://localhost:8084/dashboard/`. It is a React and TypeScript app that is built once and embedded in the Go binary, so it needs no separate web server. It is designed for an on-call operator who needs to know within seconds whether enforcement is healthy.
+
+The design follows the high-performance HMI guidance used for control rooms (ISA-101):
+- The base is neutral.
+- Colour appears only for abnormal state, and always comes with a word and a mark shape.
+- Each page states how fresh its data is before showing anything else.
+
+The design system is documented in [DESIGN.md](DESIGN.md).
+
+| Page | What it is for |
+|---|---|
+| **Overview** | Data freshness, a status board (gateways in service, live policy version, denials in the last hour, active quarantines), and the live request path drawn as a line diagram. A gateway that is late or behind on its snapshot is drawn as an open ring; one that is failing closed is drawn as a red square. |
+| **Policy** | A Rego editor with validation against the policy tests, signed publish, and version history with rollback. |
+| **Simulator** | Evaluates a request against the live policy or the unpublished draft, using the same OPA engine the gateways run. |
+| **Gateways** | Each replica's status, its snapshot version, and its heartbeat age measured against the 60-second lease. |
+| **Audit log** | Decision and completion records with filters and a detail drawer for each event. |
+| **Quarantine** | Blocks a principal or revokes a token on every gateway within about 5 seconds. A typed confirmation is required. |
+
+<table>
+  <tr>
+    <td width="50%"><img src="docs/images/console-audit.png" alt="Audit log with decision and completion records and service route bullets"><br><sub><b>Audit log</b>: every decision and completion record, filterable by decision, service, principal and time range.</sub></td>
+    <td width="50%"><img src="docs/images/console-policy.png" alt="Policy editor with Rego source, validation and version history"><br><sub><b>Policy</b>: edit Rego, validate against the policy tests, publish a signed snapshot, roll back.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/console-simulator.png" alt="Policy simulator showing a denied decision with its reason code"><br><sub><b>Simulator</b>: a developer opening the admin service is denied with <code>DENIED_DEVELOPER_ADMIN_FORBIDDEN</code>.</sub></td>
+    <td><img src="docs/images/console-gateways.png" alt="Gateway replicas with status, snapshot version and heartbeat bars"><br><sub><b>Gateways</b>: replicas, snapshot convergence and heartbeat age against the fail-closed lease.</sub></td>
+  </tr>
+  <tr>
+    <td><img src="docs/images/console-quarantine.png" alt="Quarantine form with typed confirmation"><br><sub><b>Quarantine</b>: block a principal or revoke a token, with a typed confirmation.</sub></td>
+    <td align="center"><img src="docs/images/console-mobile.png" alt="Overview on a phone, with the request path as a vertical line" width="200"><br><sub><b>Phone</b>: the request path becomes a vertical line.</sub></td>
+  </tr>
+</table>
+
+The screenshots come from the local `distributed` profile with real traffic sent through HAProxy. Sign in with `admin` / `admin-secret`, which is a development credential only.
+
 ## Architecture
 
 ```mermaid
@@ -87,6 +128,47 @@ flowchart LR
 **Request path** (user listener): canonicalize path → verify JWT → check revocation/quarantine in one Redis round trip → evaluate Rego against the active snapshot → append audit record to the WAL spool (fsync) → mint a backend assertion → forward over mTLS. Any failure along the way returns a structured `application/problem+json` denial with a reason code.
 
 Design decisions are recorded as ADRs in [`docs/adr/`](docs/adr) — reverse-proxy architecture, in-memory OPA, dual-listener identity separation, signed freshness leases, Redis fail-closed semantics, and the pre-forward WAL audit spool.
+
+## Policy rules
+
+Authorization is a single Rego module, [`policies/rego/authz.rego`](policies/rego/authz.rego). It evaluates in memory on every gateway against the active signed snapshot. Each decision returns `allow`, a `reason_code` (written to the audit log) and the `snapshot_version` it was made under. Anything that matches no rule is denied.
+
+| # | Rule | Principal | Service | Methods | Reason code |
+|---|---|---|---|---|---|
+| 0 | Default deny | anyone | any | any | `DENIED_DEFAULT` |
+| 1 | Developer reads orders | user with role `developer` | orders | GET | `ALLOWED_DEVELOPER_ORDERS` |
+| 2 | Developer reads payments | user with role `developer` | payments | GET | `ALLOWED_DEVELOPER_PAYMENTS` |
+| 3 | Finance reads and creates payments | user with role `finance` | payments | GET, POST | `ALLOWED_FINANCE_PAYMENTS` |
+| 4 | Application admin manages users | user with role `application-admin` | admin | any | `ALLOWED_ADMIN_USERS` |
+| 5 | Orders workload creates payments | workload `spiffe://aegis.local/workload/orders` | payments | POST | `ALLOWED_WORKLOAD_ORDERS_PAYMENTS` |
+
+Some denials are labelled explicitly so the audit log says why a request was refused:
+- a developer calling admin gets `DENIED_DEVELOPER_ADMIN_FORBIDDEN`;
+- the orders workload calling admin gets `DENIED_WORKLOAD_ADMIN_FORBIDDEN`;
+- a request with no principal ID gets `DENIED_INVALID_PRINCIPAL`.
+
+Before policy runs, the gateway also refuses requests:
+- with a missing or invalid identity (`401`);
+- from a quarantined principal or with a revoked token (`403 PRINCIPAL_QUARANTINED` / revoked `jti`);
+- on a path that matches no route.
+
+**Routes** ([`policies/data/routes.json`](policies/data/routes.json)) bind one method and path to exactly one upstream. Clients can never choose where a request goes.
+
+| Route | Method | Path | Upstream | Rate limit (rps / burst) |
+|---|---|---|---|---|
+| `orders.list` | GET | `/api/orders` | `https://orders:8081` | 100 / 20 |
+| `payments.get` | GET | `/api/payments` | `https://payments:8082` | 50 / 10 |
+| `payments.create` | POST | `/api/payments` | `https://payments:8082` | 20 / 5 |
+| `admin.users.list` | GET | `/api/admin/users` | `https://admin:8083` | 10 / 2 |
+| `admin.users.manage` | POST | `/api/admin/users` | `https://admin:8083` | 5 / 1 |
+
+Policy changes go through the console or the `/control/v1/policies` API:
+1. Validate. The draft is compiled and [`policies/tests`](policies/tests) is run.
+2. Simulate.
+3. Publish. Publishing signs a new snapshot (Ed25519) and streams it to every gateway.
+4. Roll back to any earlier version if needed.
+
+Run the policy tests locally with `opa test policies/rego policies/tests`.
 
 ## Security invariants
 
@@ -172,7 +254,7 @@ curl -s localhost:8084/readyz && echo   # control plane
 curl -s localhost:8080/readyz && echo   # gateways via HAProxy
 ```
 
-Open the operator console at **http://localhost:8084/dashboard/** and sign in with `admin` / `admin-secret`.
+Open the operator console at **http://localhost:8084/dashboard/** and sign in with `admin` / `admin-secret`. It opens on the Overview; see [Operator console](#operator-console).
 
 Tear everything down (including volumes) with `make distributed-down`.
 
@@ -284,6 +366,7 @@ make lint                          # gofmt check + go vet (what CI runs)
 make generate                      # regenerate pkg/api from api/proto and api/openapi
 make manifest-build                # render the kustomize base and production overlay
 cd web/dashboard && npm ci && npm run build   # rebuild the console (output is embedded via go:embed)
+cd web/dashboard && npm run dev               # console dev server on :5173, proxies /control/v1 to :8084
 ```
 
 Conventions: Go code is `gofmt`/`go vet` clean; generated code under `pkg/api` is never edited by hand; every behaviour change ships with tests, including negative tests for security paths. See [CONTRIBUTING.md](CONTRIBUTING.md).
@@ -294,6 +377,7 @@ Conventions: Go code is `gofmt`/`go vet` clean; generated code under `pkg/api` i
 - [Architecture decisions](docs/adr) — ADR 0001–0006
 - [Security audit report](docs/audit/security-audit-report.md)
 - [Runbooks](docs/runbooks)
+- [DESIGN.md](DESIGN.md): operator console design system; [PRODUCT.md](PRODUCT.md): who the console is for
 - [CHANGELOG](CHANGELOG.md) — milestone history
 
 ## Known limitations
