@@ -117,10 +117,11 @@ Recent decisions affecting current work:
 - Phase 11 added: Close gap B8: wire key rotation and DR quarantine reconstruction (REV-03, AUTH-01, CTRL-02)
 - Phase 11 edited: B2 (Kubernetes manifests runnable) added to scope; full K8S-01 stays v2
 - Phase 12 added: Close gaps N1, DIST-01, DIST-02 from re-audit 3 (2026-11-16)
+- Phase 13 added: Close gap N2 (K8s Postgres credentials), W3 sidecar preStop, W5 runbook names from re-audit 4 (2026-11-17)
 
 ### Pending Todos
 
-See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 3 (2026-11-16). Phase 12 executed (6/6 plans); verification human_needed — live items in 12-HUMAN-UAT.md (disk freed 2026-11-17, live runs in progress). 4 todos in .planning/todos/pending (gateway-body-read-timeout added 2026-11-17).
+See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 4 (2026-11-17, gaps_found: N2 K8s only). Phase 12 UAT recorded (3 pass, K8s skipped). Phase 13 added to close N2/W3/W5. 4 todos in .planning/todos/pending (gateway-body-read-timeout added 2026-11-17).
 
 ### Quick Tasks Completed
 

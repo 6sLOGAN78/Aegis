@@ -398,6 +398,22 @@ Plans:
 - [x] 12-05-PLAN.md — gateway policy/ratelimit/spool metric wiring + recorder-callers guard
 - [x] 12-06-PLAN.md — K8s/compose grace periods, preStop, HAProxy track
 
+### Phase 13: Close gap N2: K8s Postgres credentials from aegis-db-credentials; audit sidecar preStop (W3); runbook names (W5)
+
+**Goal:** A Kubernetes bring-up with any operator-chosen AEGIS_DB_PASSWORD delivers audit and control-plane state to Postgres; the audit-worker sidecar keeps shipping through the gateway's drain; the spool-saturation runbook names real objects.
+**Requirements**: AUD-03, REV-03, CTRL-01, CTRL-02, CTRL-03, OPS-01, OPS-03 (K8s path; gap N2 from re-audit 4), DIST-01 (W3)
+**Depends on:** Phase 12
+**Success Criteria** (what must be TRUE):
+  1. base/postgres/statefulset.yaml takes POSTGRES_USER and POSTGRES_PASSWORD from aegis-db-credentials (secretKeyRef); no hardcoded DB password remains in deployments/kubernetes
+  2. tests/manifests fails if any Postgres client and the Postgres server read DB credentials from different Secrets/keys
+  3. The audit-worker sidecar outlives the gateway's preStop + propagation + drain + audit flush window, checked by a manifest test against terminationGracePeriodSeconds
+  4. docs/runbooks/spool-saturation-recovery.md references statefulset/aegis-gateway, container audit-worker and the AEGIS_AUDIT_* env names
+  5. go test -short ./... passes
+**Plans:** 0 plans
+
+Plans:
+- [ ] TBD (run /gsd-plan-phase 13 to break down)
+
 ---
 
 ## Progress
