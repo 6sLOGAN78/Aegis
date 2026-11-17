@@ -1,19 +1,7 @@
-import React, { useState } from 'react';
+import React, { useEffect, useRef, useState } from 'react';
 import { useQuery } from '@tanstack/react-query';
-import {
-  ScrollText,
-  Filter,
-  CheckCircle2,
-  XCircle,
-  Copy,
-  Check,
-  X,
-  ChevronLeft,
-  ChevronRight,
-  Shield,
-  Loader2,
-  Calendar,
-} from 'lucide-react';
+import { Filter, CheckCircle2, XCircle, Copy, Check, X, ChevronLeft, ChevronRight, Loader2 } from 'lucide-react';
+import { PageHeader } from './PageHeader';
 import { apiClient } from '../api/client';
 import type { AuditEvent, AuditEventListResponse } from '../api/types';
 
@@ -39,6 +27,18 @@ export const AuditStream: React.FC = () => {
   // Detail Drawer State
   const [selectedEvent, setSelectedEvent] = useState<AuditEvent | null>(null);
   const [copied, setCopied] = useState(false);
+  const closeRef = useRef<HTMLButtonElement>(null);
+
+  // The detail drawer takes focus when it opens and closes on Escape.
+  useEffect(() => {
+    if (!selectedEvent) return;
+    closeRef.current?.focus();
+    const onKey = (e: KeyboardEvent) => {
+      if (e.key === 'Escape') setSelectedEvent(null);
+    };
+    window.addEventListener('keydown', onKey);
+    return () => window.removeEventListener('keydown', onKey);
+  }, [selectedEvent]);
 
   // Compute from_timestamp based on applied time range
   const getFromTimestamp = (range: '1h' | '24h' | '7d'): string => {
@@ -135,215 +135,160 @@ export const AuditStream: React.FC = () => {
     }
   };
 
+  const fieldIds = { decision: 'audit-decision', service: 'audit-service', principal: 'audit-principal', range: 'audit-range' };
+
   return (
-    <div className="space-y-6">
-      {/* View Header */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-xl">
-        <div className="space-y-1">
-          <div className="flex items-center space-x-3">
-            <ScrollText className="w-6 h-6 text-cyan-400" />
-            <h1 className="text-xl font-semibold text-slate-100">Audit Stream & Authorization Logs</h1>
-          </div>
-          <p className="text-sm text-slate-400">
-            Durable, immutable pre-forward policy decisions and request completions indexed in partitioned PostgreSQL
-          </p>
+    <div>
+      <PageHeader
+        title="Audit log"
+        description="Every policy decision and request completion the gateways recorded, newest first."
+      />
+
+      <form
+        onSubmit={(e) => {
+          e.preventDefault();
+          handleApplyFilters();
+        }}
+        className="mb-4 grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-[repeat(4,minmax(0,1fr))_auto] gap-3 items-end"
+      >
+        <div>
+          <label htmlFor={fieldIds.decision} className="label">Decision</label>
+          <select id={fieldIds.decision} value={decision} onChange={(e) => setDecision(e.target.value)} className="field">
+            <option value="all">All decisions</option>
+            <option value="allow">Allowed</option>
+            <option value="deny">Denied</option>
+          </select>
         </div>
-      </div>
-
-      {/* Query Filter Toolbar */}
-      <div className="bg-slate-900 border border-slate-800 p-4 rounded-xl space-y-3">
-        <div className="grid grid-cols-1 sm:grid-cols-2 lg:grid-cols-5 gap-3">
-          {/* Decision Dropdown */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1">Decision</label>
-            <select
-              value={decision}
-              onChange={(e) => setDecision(e.target.value)}
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:ring-1 focus:ring-cyan-500 focus:outline-none"
-            >
-              <option value="all">All Decisions</option>
-              <option value="allow">Allow Only</option>
-              <option value="deny">Deny Only</option>
-            </select>
-          </div>
-
-          {/* Service ID Input */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1">Service ID</label>
-            <input
-              type="text"
-              value={serviceId}
-              onChange={(e) => setServiceId(e.target.value)}
-              placeholder="e.g. orders, payments"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:ring-1 focus:ring-cyan-500 focus:outline-none font-mono"
-            />
-          </div>
-
-          {/* Principal ID Input */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1">Principal ID</label>
-            <input
-              type="text"
-              value={principalId}
-              onChange={(e) => setPrincipalId(e.target.value)}
-              placeholder="e.g. usr_alice"
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:ring-1 focus:ring-cyan-500 focus:outline-none font-mono"
-            />
-          </div>
-
-          {/* Time Range Selector */}
-          <div>
-            <label className="block text-xs font-semibold text-slate-400 mb-1">Time Window</label>
-            <div className="relative">
-              <select
-                value={timeRange}
-                onChange={(e) => setTimeRange(e.target.value as '1h' | '24h' | '7d')}
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-2 text-xs text-slate-200 focus:ring-1 focus:ring-cyan-500 focus:outline-none appearance-none"
-              >
-                <option value="1h">Last 1 Hour</option>
-                <option value="24h">Last 24 Hours</option>
-                <option value="7d">Last 7 Days</option>
-              </select>
-              <Calendar className="w-3.5 h-3.5 text-slate-500 absolute right-3 top-2.5 pointer-events-none" />
-            </div>
-          </div>
-
-          {/* Filter Action Button */}
-          <div className="flex items-end space-x-2">
-            <button
-              onClick={handleApplyFilters}
-              disabled={isFetching}
-              className="flex-1 flex items-center justify-center space-x-1.5 bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-xs font-semibold transition disabled:opacity-50"
-            >
-              {isFetching ? (
-                <Loader2 className="w-3.5 h-3.5 animate-spin" />
-              ) : (
-                <Filter className="w-3.5 h-3.5" />
-              )}
-              <span>Filter Audit Events</span>
-            </button>
-            <button
-              onClick={handleResetFilters}
-              aria-label="Clear active query filters"
-              title="Clear active query filters"
-              className="bg-slate-800 hover:bg-slate-700 text-slate-300 px-3 py-2 rounded-lg text-xs font-semibold transition"
-            >
-              Reset
-            </button>
-          </div>
+        <div>
+          <label htmlFor={fieldIds.service} className="label">Service</label>
+          <input
+            id={fieldIds.service}
+            type="text"
+            value={serviceId}
+            onChange={(e) => setServiceId(e.target.value)}
+            placeholder="orders"
+            className="field"
+          />
         </div>
-      </div>
+        <div>
+          <label htmlFor={fieldIds.principal} className="label">Principal</label>
+          <input
+            id={fieldIds.principal}
+            type="text"
+            value={principalId}
+            onChange={(e) => setPrincipalId(e.target.value)}
+            placeholder="usr_alice"
+            className="field"
+          />
+        </div>
+        <div>
+          <label htmlFor={fieldIds.range} className="label">Time range</label>
+          <select
+            id={fieldIds.range}
+            value={timeRange}
+            onChange={(e) => setTimeRange(e.target.value as '1h' | '24h' | '7d')}
+            className="field"
+          >
+            <option value="1h">Last hour</option>
+            <option value="24h">Last 24 hours</option>
+            <option value="7d">Last 7 days</option>
+          </select>
+        </div>
+        <div className="flex gap-2">
+          <button type="submit" disabled={isFetching} className="btn btn-primary h-10">
+            {isFetching ? <Loader2 className="animate-spin" /> : <Filter />}
+            Apply filters
+          </button>
+          <button type="button" onClick={handleResetFilters} className="btn btn-ghost h-10">
+            Clear
+          </button>
+        </div>
+      </form>
 
-      {/* High-density Audit Table */}
-      <div className="bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
+      <section className="panel overflow-hidden">
         {isLoading ? (
-          <div className="flex flex-col items-center justify-center py-16 space-y-3 text-slate-400">
-            <Loader2 className="w-8 h-8 animate-spin text-cyan-400" />
-            <span className="text-xs">Querying partitioned PostgreSQL audit records...</span>
+          <div className="divide-y divide-mist" aria-busy="true" aria-label="Loading audit events">
+            {[1, 2, 3, 4, 5].map((n) => (
+              <div key={n} className="flex items-center gap-6 px-5 h-11 animate-pulse">
+                <div className="h-3.5 w-16 bg-linen rounded" />
+                <div className="h-3.5 w-36 bg-linen rounded" />
+                <div className="h-3.5 w-48 bg-linen rounded" />
+              </div>
+            ))}
           </div>
         ) : events.length === 0 ? (
-          /* Empty State conforming to Copy Contract */
-          <div className="flex flex-col items-center justify-center text-center p-12 space-y-4">
-            <div className="p-3 bg-slate-950 rounded-xl border border-slate-800">
-              <Shield className="w-8 h-8 text-cyan-400" />
-            </div>
-            <div className="space-y-1 max-w-md">
-              <h3 className="text-base font-semibold text-slate-200">
-                No Audit Events Recorded In Time Range
-              </h3>
-              <p className="text-xs text-slate-400 leading-relaxed">
-                No authorization decisions or gateway completions matched the active query filters. Adjust the time window or clear principal filters to inspect historical logs.
-              </p>
-            </div>
-            <button
-              onClick={handleResetFilters}
-              className="bg-slate-800 hover:bg-slate-700 text-slate-200 text-xs font-semibold px-4 py-2 rounded-lg transition"
-            >
-              Reset Query Filters
-            </button>
+          <div className="px-5 py-16 text-center">
+            <p className="text-sm text-slate-300">No events match these filters</p>
+            <p className="mt-1 text-sm text-slate-500 max-w-sm mx-auto">
+              Widen the time range or clear the filters. New events arrive every 15 seconds.
+            </p>
+            <button onClick={handleResetFilters} className="btn btn-secondary mt-4">Clear filters</button>
           </div>
         ) : (
           <div className="overflow-x-auto">
-            <table className="w-full text-left border-collapse text-xs">
+            <table className="w-full text-left text-[13px]">
               <thead>
-                <tr className="bg-slate-950/80 border-b border-slate-800 text-[11px] font-semibold uppercase tracking-wider text-slate-400">
-                  <th className="py-3 px-4">Decision</th>
-                  <th className="py-3 px-4">Timestamp (UTC)</th>
-                  <th className="py-3 px-4">Method & Path</th>
-                  <th className="py-3 px-4">Principal ID</th>
-                  <th className="py-3 px-4">Service</th>
-                  <th className="py-3 px-4">Reason Code</th>
-                  <th className="py-3 px-4">Status</th>
-                  <th className="py-3 px-4 text-right">Latency</th>
+                <tr className="text-xs text-slate-500 border-b border-mist">
+                  <th scope="col" className="font-medium px-4 h-10">Decision</th>
+                  <th scope="col" className="font-medium px-4 h-10">Time (UTC)</th>
+                  <th scope="col" className="font-medium px-4 h-10">Request</th>
+                  <th scope="col" className="font-medium px-4 h-10">Principal</th>
+                  <th scope="col" className="font-medium px-4 h-10">Service</th>
+                  <th scope="col" className="font-medium px-4 h-10">Reason</th>
+                  <th scope="col" className="font-medium px-4 h-10 text-right">Status</th>
+                  <th scope="col" className="font-medium px-4 h-10 text-right">Latency</th>
                 </tr>
               </thead>
-              <tbody className="divide-y divide-slate-800/60 font-mono">
+              <tbody className="divide-y divide-mist">
                 {events.map((evt) => (
                   <tr
                     key={evt.event_id}
                     onClick={() => setSelectedEvent(evt)}
-                    className="hover:bg-slate-800/40 cursor-pointer transition"
+                    onKeyDown={(e) => {
+                      if (e.key === 'Enter' || e.key === ' ') {
+                        e.preventDefault();
+                        setSelectedEvent(evt);
+                      }
+                    }}
+                    tabIndex={0}
+                    aria-label={`Open event ${evt.event_id}`}
+                    className="hover:bg-linen/70 focus-visible:bg-linen cursor-pointer"
                   >
-                    {/* Decision Badge */}
-                    <td className="py-3 px-4 whitespace-nowrap">
+                    <td className="px-4 h-11 whitespace-nowrap">
                       {evt.decision === 'allow' ? (
-                        <span className="inline-flex items-center space-x-1 font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                          <CheckCircle2 className="w-3 h-3" />
-                          <span>ALLOW</span>
-                        </span>
+                        <span className="badge badge-ok"><CheckCircle2 className="w-3 h-3" />Allowed</span>
                       ) : (
-                        <span className="inline-flex items-center space-x-1 font-semibold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30">
-                          <XCircle className="w-3 h-3" />
-                          <span>DENY</span>
-                        </span>
+                        <span className="badge badge-bad"><XCircle className="w-3 h-3" />Denied</span>
                       )}
                     </td>
-
-                    {/* Timestamp */}
-                    <td className="py-3 px-4 whitespace-nowrap text-slate-400 text-[11px]">
-                      {new Date(evt.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
+                    <td className="px-4 h-11 whitespace-nowrap text-slate-400 num">
+                      <time dateTime={evt.timestamp}>
+                        {new Date(evt.timestamp).toISOString().replace('T', ' ').substring(0, 19)}
+                      </time>
                     </td>
-
-                    {/* Method & Path */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span className="font-semibold text-cyan-400 mr-2">{evt.http_method || 'GET'}</span>
-                      <span className="text-slate-200">{evt.request_path || '/'}</span>
+                    <td className="px-4 h-11 whitespace-nowrap font-mono text-[12px]">
+                      <span className="text-slate-500 mr-2">{evt.http_method || 'GET'}</span>
+                      <span className="text-slate-100">{evt.request_path || '/'}</span>
                     </td>
-
-                    {/* Principal */}
-                    <td className="py-3 px-4 whitespace-nowrap text-slate-300 truncate max-w-[140px]">
+                    <td className="px-4 h-11 whitespace-nowrap font-mono text-[12px] text-slate-300 truncate max-w-[160px]" title={evt.principal_id}>
                       {evt.principal_id}
                     </td>
-
-                    {/* Service */}
-                    <td className="py-3 px-4 whitespace-nowrap text-slate-400 font-sans">
-                      {evt.service_id}
+                    <td className="px-4 h-11 whitespace-nowrap text-slate-300">{evt.service_id}</td>
+                    <td className="px-4 h-11 whitespace-nowrap font-mono text-[12px] text-slate-400">{evt.reason_code}</td>
+                    <td
+                      className={`px-4 h-11 whitespace-nowrap text-right num ${
+                        !evt.status_code
+                          ? 'text-slate-500'
+                          : evt.status_code < 400
+                          ? 'text-slate-300'
+                          : evt.status_code < 500
+                          ? 'text-amber-300'
+                          : 'text-rose-600'
+                      }`}
+                    >
+                      {evt.status_code || '—'}
                     </td>
-
-                    {/* Reason Code */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span className="bg-slate-950 px-2 py-0.5 rounded border border-slate-800 text-[11px] text-slate-300">
-                        {evt.reason_code}
-                      </span>
-                    </td>
-
-                    {/* HTTP Status */}
-                    <td className="py-3 px-4 whitespace-nowrap">
-                      <span
-                        className={`text-[11px] font-bold ${
-                          (evt.status_code || 200) < 400
-                            ? 'text-emerald-400'
-                            : (evt.status_code || 500) < 500
-                            ? 'text-amber-400'
-                            : 'text-rose-400'
-                        }`}
-                      >
-                        {evt.status_code || '—'}
-                      </span>
-                    </td>
-
-                    {/* Latency */}
-                    <td className="py-3 px-4 whitespace-nowrap text-right text-slate-400">
+                    <td className="px-4 h-11 whitespace-nowrap text-right text-slate-400 num">
                       {evt.duration_ms !== undefined ? `${evt.duration_ms} ms` : '—'}
                     </td>
                   </tr>
@@ -353,103 +298,83 @@ export const AuditStream: React.FC = () => {
           </div>
         )}
 
-        {/* Pagination Toolbar */}
-        <div className="flex items-center justify-between px-4 py-3 bg-slate-950/80 border-t border-slate-800 text-xs text-slate-400">
-          <div>
-            Showing <span className="font-semibold text-slate-200">{events.length}</span> records
-          </div>
-          <div className="flex items-center space-x-2">
-            <button
-              onClick={handlePreviousPage}
-              disabled={cursorStack.length === 0}
-              className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-slate-850 hover:bg-slate-800 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-800"
-            >
-              <ChevronLeft className="w-3.5 h-3.5" />
-              <span>Previous</span>
+        <div className="flex items-center justify-between px-4 h-12 border-t border-mist text-sm text-slate-500">
+          <span className="num">
+            {events.length} {events.length === 1 ? 'event' : 'events'} on this page
+          </span>
+          <div className="flex items-center gap-2">
+            <button onClick={handlePreviousPage} disabled={cursorStack.length === 0} className="btn btn-secondary btn-sm">
+              <ChevronLeft />
+              Previous
             </button>
-            <button
-              onClick={handleNextPage}
-              disabled={!nextCursor}
-              className="flex items-center space-x-1 px-3 py-1.5 rounded-lg bg-slate-850 hover:bg-slate-800 text-slate-300 disabled:opacity-40 disabled:cursor-not-allowed border border-slate-800"
-            >
-              <span>Next Page</span>
-              <ChevronRight className="w-3.5 h-3.5" />
+            <button onClick={handleNextPage} disabled={!nextCursor} className="btn btn-secondary btn-sm">
+              Next
+              <ChevronRight />
             </button>
           </div>
         </div>
-      </div>
+      </section>
 
-      {/* Slide-over Detail Drawer */}
       {selectedEvent && (
-        <div className="fixed inset-0 z-50 flex justify-end bg-black/60 backdrop-blur-xs">
-          <div className="w-full max-w-xl bg-slate-900 border-l border-slate-800 h-full shadow-2xl flex flex-col animate-in slide-in-from-right duration-200">
-            {/* Drawer Header */}
-            <div className="flex items-center justify-between p-6 border-b border-slate-800">
-              <div className="space-y-1">
-                <h3 className="text-lg font-semibold text-slate-100 flex items-center space-x-2">
-                  <span>Audit Record Inspection</span>
-                </h3>
-                <span className="text-xs font-mono text-cyan-400">{selectedEvent.event_id}</span>
+        <div className="fixed inset-0 z-50 flex justify-end bg-[#181717]/20" onClick={() => setSelectedEvent(null)}>
+          <aside
+            role="dialog"
+            aria-modal="true"
+            aria-labelledby="audit-drawer-title"
+            onClick={(e) => e.stopPropagation()}
+            className="w-full max-w-xl bg-paper border-l border-mist h-full shadow-xl flex flex-col"
+          >
+            <div className="flex items-start justify-between gap-4 px-6 py-5 border-b border-mist">
+              <div className="min-w-0">
+                <h2 id="audit-drawer-title" className="text-lg font-medium text-slate-100">Audit event</h2>
+                <p className="mt-0.5 font-mono text-xs text-slate-500 truncate">{selectedEvent.event_id}</p>
               </div>
               <button
+                ref={closeRef}
                 onClick={() => setSelectedEvent(null)}
-                aria-label="Close modal window"
-                title="Close modal window"
-                className="text-slate-400 hover:text-slate-200 p-1 rounded-lg hover:bg-slate-800"
+                aria-label="Close event details"
+                className="btn btn-ghost btn-sm -mr-2"
               >
-                <X className="w-5 h-5" />
+                <X />
               </button>
             </div>
 
-            {/* Drawer Body: Formatted Event Details */}
             <div className="p-6 flex-1 overflow-y-auto space-y-6">
-              <div className="grid grid-cols-2 gap-4 bg-slate-950 p-4 rounded-xl border border-slate-800 text-xs">
+              <dl className="grid grid-cols-2 gap-x-6 gap-y-4 text-sm">
                 <div>
-                  <span className="text-slate-500 uppercase font-semibold text-[10px]">Decision:</span>
-                  <div className="mt-1 font-semibold">
-                    {selectedEvent.decision === 'allow' ? (
-                      <span className="text-emerald-400">ALLOW (Granted)</span>
-                    ) : (
-                      <span className="text-rose-400">DENY (Blocked)</span>
-                    )}
-                  </div>
+                  <dt className="label">Decision</dt>
+                  <dd className={selectedEvent.decision === 'allow' ? 'text-emerald-400' : 'text-rose-600'}>
+                    {selectedEvent.decision === 'allow' ? 'Allowed' : 'Denied'}
+                  </dd>
                 </div>
                 <div>
-                  <span className="text-slate-500 uppercase font-semibold text-[10px]">Reason Code:</span>
-                  <div className="mt-1 font-mono text-slate-200">{selectedEvent.reason_code}</div>
+                  <dt className="label">Reason code</dt>
+                  <dd className="font-mono text-[13px] text-slate-100 break-all">{selectedEvent.reason_code}</dd>
                 </div>
                 <div>
-                  <span className="text-slate-500 uppercase font-semibold text-[10px]">Principal Kind:</span>
-                  <div className="mt-1 text-slate-200">{selectedEvent.principal_kind || 'user'}</div>
+                  <dt className="label">Principal kind</dt>
+                  <dd className="text-slate-100">{selectedEvent.principal_kind || 'user'}</dd>
                 </div>
                 <div>
-                  <span className="text-slate-500 uppercase font-semibold text-[10px]">Snapshot Version:</span>
-                  <div className="mt-1 font-mono text-slate-200">v{selectedEvent.snapshot_version}</div>
+                  <dt className="label">Policy snapshot</dt>
+                  <dd className="text-slate-100 num">v{selectedEvent.snapshot_version}</dd>
                 </div>
-              </div>
+              </dl>
 
-              {/* Raw JSON Payload */}
-              <div className="space-y-2">
-                <div className="flex items-center justify-between">
-                  <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                    Raw JSON Event Payload
-                  </span>
-                  <button
-                    onClick={handleCopyJSON}
-                    aria-label="Copy JSON payload to clipboard"
-                    title="Copy JSON payload to clipboard"
-                    className="flex items-center space-x-1 text-xs text-cyan-400 hover:text-cyan-300 bg-cyan-500/10 px-2.5 py-1 rounded border border-cyan-500/20 transition"
-                  >
-                    {copied ? <Check className="w-3.5 h-3.5 text-emerald-400" /> : <Copy className="w-3.5 h-3.5" />}
-                    <span>{copied ? 'Copied!' : 'Copy JSON'}</span>
+              <div>
+                <div className="flex items-center justify-between mb-2">
+                  <h3 className="text-sm font-medium text-slate-100">Raw event</h3>
+                  <button onClick={handleCopyJSON} className="btn btn-secondary btn-sm" aria-live="polite">
+                    {copied ? <Check /> : <Copy />}
+                    {copied ? 'Copied' : 'Copy JSON'}
                   </button>
                 </div>
-                <pre className="bg-slate-950 border border-slate-800 rounded-xl p-4 font-mono text-[11px] text-slate-300 overflow-x-auto leading-relaxed">
+                <pre className="bg-linen border border-mist rounded-lg p-4 font-mono text-xs text-slate-300 overflow-x-auto leading-relaxed">
                   {JSON.stringify(selectedEvent, null, 2)}
                 </pre>
               </div>
             </div>
-          </div>
+          </aside>
         </div>
       )}
     </div>

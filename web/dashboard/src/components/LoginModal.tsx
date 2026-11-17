@@ -1,5 +1,5 @@
 import React, { useState } from 'react';
-import { Shield, KeyRound, AlertCircle, Loader2 } from 'lucide-react';
+import { Shield, AlertCircle, Loader2 } from 'lucide-react';
 import { apiClient, ApiError } from '../api/client';
 import type { SessionInfo } from '../api/types';
 
@@ -8,9 +8,14 @@ interface LoginModalProps {
   onLoginSuccess: (session: SessionInfo) => void;
 }
 
+// The seeded demo operator is only offered by the Vite dev server; production
+// builds never ship credentials in the bundle.
+const DEV_USER = import.meta.env.DEV ? 'admin' : '';
+const DEV_PASSWORD = import.meta.env.DEV ? 'admin-secret' : '';
+
 export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }) => {
-  const [username, setUsername] = useState('admin');
-  const [password, setPassword] = useState('admin-secret');
+  const [username, setUsername] = useState(DEV_USER);
+  const [password, setPassword] = useState(DEV_PASSWORD);
   const [isLoading, setIsLoading] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
 
@@ -31,9 +36,9 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
       onLoginSuccess(response);
     } catch (err) {
       if (err instanceof ApiError) {
-        setErrorMessage(err.message || 'Authentication failed. Please verify credentials.');
+        setErrorMessage(err.message || 'Sign-in failed. Check the username and password.');
       } else {
-        setErrorMessage('Failed to connect to control plane management server.');
+        setErrorMessage('Cannot reach the control plane. Check it is running, then try again.');
       }
     } finally {
       setIsLoading(false);
@@ -41,80 +46,68 @@ export const LoginModal: React.FC<LoginModalProps> = ({ isOpen, onLoginSuccess }
   };
 
   return (
-    <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-      <div className="w-full max-w-md bg-slate-900 border border-slate-800 rounded-xl p-8 shadow-2xl space-y-6">
-        <div className="flex flex-col items-center text-center space-y-3">
-          <div className="p-3 bg-cyan-500/10 border border-cyan-500/20 rounded-xl">
-            <Shield className="w-10 h-10 text-cyan-400" />
-          </div>
-          <div>
-            <h2 className="text-2xl font-semibold text-slate-100">Aegis Security Console</h2>
-            <p className="text-sm text-slate-400 mt-1">Authenticate to access control plane management APIs</p>
-          </div>
+    <div className="fixed inset-0 z-50 overflow-y-auto bg-bone">
+      <div className="min-h-full flex flex-col items-center justify-center px-4 py-12">
+        <div className="flex items-center gap-2.5 mb-8">
+          <span className="grid place-items-center w-8 h-8 rounded-lg bg-ink">
+            <Shield className="w-4.5 h-4.5 text-white" />
+          </span>
+          <span className="text-base font-medium text-slate-100">Aegis</span>
         </div>
 
-        {errorMessage && (
-          <div className="flex items-start space-x-3 bg-rose-500/10 border border-rose-500/30 p-3 rounded-lg text-rose-300 text-xs">
-            <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
-            <span>{errorMessage}</span>
-          </div>
-        )}
+        <main className="w-full max-w-sm panel p-8">
+          <h1 className="text-2xl font-display text-slate-100">Sign in</h1>
+          <p className="mt-1 text-sm text-slate-500">Operator access to the Aegis control plane.</p>
 
-        <form onSubmit={handleSubmit} className="space-y-4">
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-              Operator Username
-            </label>
-            <input
-              type="text"
-              value={username}
-              onChange={(e) => setUsername(e.target.value)}
-              required
-              className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-slate-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none transition"
-              placeholder="e.g. admin"
-            />
-          </div>
-
-          <div>
-            <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-              Secret Password
-            </label>
-            <div className="relative">
+          <form onSubmit={handleSubmit} className="mt-6 space-y-4" noValidate={false}>
+            <div>
+              <label htmlFor="login-user" className="label">Username</label>
               <input
+                id="login-user"
+                type="text"
+                autoComplete="username"
+                autoFocus
+                value={username}
+                onChange={(e) => setUsername(e.target.value)}
+                required
+                className="field"
+              />
+            </div>
+
+            <div>
+              <label htmlFor="login-password" className="label">Password</label>
+              <input
+                id="login-password"
                 type="password"
+                autoComplete="current-password"
                 value={password}
                 onChange={(e) => setPassword(e.target.value)}
                 required
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2.5 text-sm text-slate-100 font-mono focus:ring-2 focus:ring-cyan-500 focus:outline-none transition pr-10"
-                placeholder="••••••••••••"
+                aria-invalid={errorMessage ? true : undefined}
+                aria-describedby={errorMessage ? 'login-error' : undefined}
+                className="field"
               />
-              <KeyRound className="w-4 h-4 text-slate-500 absolute right-3 top-3" />
             </div>
-          </div>
 
-          <div className="pt-2">
-            <button
-              type="submit"
-              disabled={isLoading}
-              className="w-full flex items-center justify-center space-x-2 bg-cyan-600 hover:bg-cyan-500 text-white font-semibold py-2.5 px-4 rounded-lg transition disabled:opacity-50"
-            >
-              {isLoading ? (
-                <>
-                  <Loader2 className="w-4 h-4 animate-spin" />
-                  <span>Authenticating...</span>
-                </>
-              ) : (
-                <span>Authenticate Operator Session</span>
-              )}
+            {errorMessage && (
+              <p id="login-error" role="alert" className="flex items-start gap-2 text-sm text-rose-600">
+                <AlertCircle className="w-4 h-4 mt-0.5 shrink-0" />
+                <span>{errorMessage}</span>
+              </p>
+            )}
+
+            <button type="submit" disabled={isLoading} className="btn btn-primary w-full h-10">
+              {isLoading && <Loader2 className="animate-spin" />}
+              {isLoading ? 'Signing in…' : 'Sign in'}
             </button>
-          </div>
-        </form>
+          </form>
+        </main>
 
-        <div className="border-t border-slate-800/80 pt-4 text-center">
-          <p className="text-xs text-slate-500">
-            Default credentials: <code className="text-cyan-400">admin</code> / <code className="text-cyan-400">admin-secret</code>
+        {import.meta.env.DEV && (
+          <p className="mt-6 text-xs text-slate-500">
+            Dev server: seeded operator <code>admin</code> / <code>admin-secret</code>
           </p>
-        </div>
+        )}
       </div>
     </div>
   );

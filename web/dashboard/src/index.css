@@ -1,14 +1,255 @@
+/* Aegis operator console theme — see /design.md.
+ *
+ * Fonts are self-hosted (the control-plane CSP allows font-src 'self' only).
+ * Space Grotesk 500 stands in for the reference's label font.
+ */
+@import "@fontsource/inter/latin-300.css";
+@import "@fontsource/inter/latin-400.css";
+@import "@fontsource/inter/latin-500.css";
+@import "@fontsource/inter/latin-600.css";
+@import "@fontsource/space-grotesk/latin-500.css";
 @import "tailwindcss";
 
-body {
-  margin: 0;
-  background-color: #020617; /* bg-slate-950 */
-  color: #f1f5f9; /* text-slate-100 */
-  font-family: Inter, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
-  -webkit-font-smoothing: antialiased;
-  -moz-osx-font-smoothing: grayscale;
+/*
+ * The components were written against a dark slate/cyan palette. Rather than
+ * fork every class, the palette is remapped here onto the paper system:
+ *   slate-950 → inset tint (Linen)    slate-900 → card surface (Paper)
+ *   slate-800/700 → hairlines (Mist)  slate-400/500 → muted text (Charcoal/Ash)
+ *   slate-100..300 → Ink/Graphite text
+ *   cyan → Ink (primary actions, focus, accents)
+ *   rose → Signal Red (danger, quarantine, active indicators)
+ *   emerald / amber / purple → muted status tones readable on paper
+ */
+@theme {
+  /* Design tokens */
+  --color-ink: #181717;
+  --color-bone: #eeebea;
+  --color-paper: #ffffff;
+  --color-graphite: #2e2d2d;
+  --color-charcoal: #575555;
+  --color-ash: #706e6d;
+  --color-linen: #f7f5f4;
+  --color-mist: #d5d3d2;
+  --color-signal-red: #d04841;
+
+  /* Neutral ramp (light-on-dark inverted to dark-on-paper) */
+  --color-slate-50: #181717;
+  --color-slate-100: #181717;
+  --color-slate-200: #232222;
+  --color-slate-300: #2e2d2d;
+  --color-slate-400: #575555;
+  --color-slate-500: #706e6d;
+  --color-slate-600: #a3a09f;
+  --color-slate-700: #d5d3d2;
+  --color-slate-800: #e4e1e0;
+  --color-slate-850: #efedec;
+  --color-slate-900: #ffffff;
+  --color-slate-950: #f7f5f4;
+
+  /* Primary accent → Ink */
+  --color-cyan-200: #2e2d2d;
+  --color-cyan-300: #181717;
+  --color-cyan-400: #181717;
+  --color-cyan-500: #2e2d2d;
+  --color-cyan-600: #181717;
+  --color-cyan-700: #2e2d2d;
+
+  /* Danger / emphasis → Signal Red */
+  --color-rose-100: #f6dad8;
+  --color-rose-200: #8f2c27;
+  --color-rose-300: #a8342e;
+  --color-rose-400: #b83c36;
+  --color-rose-500: #d04841;
+  --color-rose-600: #d04841;
+  --color-rose-700: #b83c36;
+  --color-rose-900: #d04841;
+  --color-rose-950: #d04841;
+
+  /* Status tones, desaturated for a warm light canvas */
+  --color-emerald-200: #1f5234;
+  --color-emerald-300: #24603d;
+  --color-emerald-400: #2c7149;
+  --color-emerald-500: #348356;
+  --color-emerald-600: #2c7149;
+  --color-amber-200: #6e4609;
+  --color-amber-300: #83540c;
+  --color-amber-400: #96610f;
+  --color-amber-500: #b07418;
+  --color-purple-400: #5f4a9e;
+  --color-purple-500: #6d56b3;
+
+  /* Typography */
+  --font-sans: "Inter", ui-sans-serif, system-ui, -apple-system, BlinkMacSystemFont, "Segoe UI", Roboto, sans-serif;
+  --font-label: "Space Grotesk", "Inter", ui-sans-serif, system-ui, sans-serif;
+  --font-mono: "JetBrains Mono", "SF Mono", ui-monospace, Menlo, Monaco, Consolas, monospace;
+
+  /* Shape: 16px cards, 8px controls */
+  --radius-md: 8px;
+  --radius-lg: 8px;
+  --radius-xl: 16px;
+  --radius-2xl: 16px;
+  --radius-3xl: 32px;
+
+  /* Near-invisible elevation */
+  --shadow-sm: 0 4px 8px 0 rgb(24 23 23 / 0.02);
+  --shadow: 0 4px 8px 0 rgb(24 23 23 / 0.02);
+  --shadow-md: 0 4px 16px 0 rgb(24 23 23 / 0.06);
+  --shadow-lg: 0 4px 8px 0 rgb(24 23 23 / 0.02);
+  --shadow-xl: 0 4px 16px 0 rgb(24 23 23 / 0.16);
+  --shadow-2xl: 0 4px 16px 0 rgb(24 23 23 / 0.16);
 }
 
-code, kbd, samp, pre {
-  font-family: "JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, monospace;
+@layer base {
+  html {
+    color-scheme: light;
+  }
+
+  body {
+    margin: 0;
+    background-color: var(--color-bone);
+    color: var(--color-ink);
+    font-family: var(--font-sans);
+    font-size: 14px;
+    letter-spacing: -0.3px;
+    -webkit-font-smoothing: antialiased;
+    -moz-osx-font-smoothing: grayscale;
+  }
+
+  code, kbd, samp, pre {
+    font-family: var(--font-mono);
+    letter-spacing: 0;
+  }
+
+  ::selection {
+    background: rgb(208 72 65 / 0.18);
+  }
+
+  :focus-visible {
+    outline: 2px solid var(--color-ink);
+    outline-offset: 2px;
+  }
+
+  input, select, textarea {
+    caret-color: var(--color-signal-red);
+  }
+
+  table, time, .num {
+    font-variant-numeric: tabular-nums;
+  }
+
+  * {
+    scrollbar-width: thin;
+    scrollbar-color: var(--color-mist) transparent;
+  }
+}
+
+/* One component vocabulary for every screen. */
+@layer components {
+  .panel {
+    background: var(--color-paper);
+    border: 1px solid var(--color-mist);
+    border-radius: var(--radius-xl);
+  }
+  .panel-head {
+    display: flex;
+    align-items: center;
+    justify-content: space-between;
+    gap: 0.75rem;
+    min-height: 3rem;
+    padding: 0.75rem 1.25rem;
+    border-bottom: 1px solid var(--color-mist);
+  }
+  .panel-title {
+    font-size: 0.875rem;
+    font-weight: 500;
+    color: var(--color-ink);
+  }
+
+  .btn {
+    display: inline-flex;
+    align-items: center;
+    justify-content: center;
+    gap: 0.5rem;
+    height: 2.25rem;
+    padding: 0 0.875rem;
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    font-weight: 500;
+    white-space: nowrap;
+    border: 1px solid transparent;
+    transition: background-color 150ms ease-out, border-color 150ms ease-out, color 150ms ease-out, transform 100ms ease-out;
+  }
+  .btn:active:not(:disabled) { transform: translateY(1px); }
+  .btn:disabled { opacity: 0.45; cursor: not-allowed; }
+  .btn svg { width: 1rem; height: 1rem; flex-shrink: 0; }
+  .btn-sm { height: 2rem; padding: 0 0.625rem; font-size: 0.8125rem; }
+
+  .btn-primary { background: var(--color-ink); color: #fff; }
+  .btn-primary:hover:not(:disabled) { background: var(--color-graphite); }
+  .btn-secondary { background: var(--color-paper); color: var(--color-ink); border-color: var(--color-mist); }
+  .btn-secondary:hover:not(:disabled) { background: var(--color-linen); border-color: #c4c1c0; }
+  .btn-danger { background: var(--color-signal-red); color: #fff; }
+  .btn-danger:hover:not(:disabled) { background: #b83c36; }
+  .btn-ghost { background: transparent; color: var(--color-charcoal); }
+  .btn-ghost:hover:not(:disabled) { background: var(--color-linen); color: var(--color-ink); }
+
+  .field {
+    width: 100%;
+    height: 2.5rem;
+    padding: 0 0.75rem;
+    background: var(--color-paper);
+    border: 1px solid var(--color-mist);
+    border-radius: var(--radius-md);
+    font-size: 0.875rem;
+    color: var(--color-ink);
+    transition: border-color 150ms ease-out, box-shadow 150ms ease-out;
+  }
+  textarea.field { height: auto; padding: 0.75rem; }
+  .field::placeholder { color: var(--color-ash); }
+  .field:hover { border-color: #c4c1c0; }
+  .field:focus { outline: none; border-color: var(--color-ink); box-shadow: 0 0 0 3px rgb(24 23 23 / 0.08); }
+  .field[aria-invalid="true"] { border-color: var(--color-signal-red); }
+
+  .label {
+    display: block;
+    margin-bottom: 0.375rem;
+    font-size: 0.8125rem;
+    font-weight: 500;
+    color: var(--color-graphite);
+  }
+  .hint { margin-top: 0.375rem; font-size: 0.75rem; color: var(--color-ash); }
+
+  .badge {
+    display: inline-flex;
+    align-items: center;
+    gap: 0.375rem;
+    height: 1.375rem;
+    padding: 0 0.5rem;
+    border-radius: 9999px;
+    font-size: 0.75rem;
+    font-weight: 500;
+    background: var(--color-linen);
+    color: var(--color-charcoal);
+    border: 1px solid var(--color-mist);
+  }
+  .badge-ok { background: #e6f0ea; color: #24603d; border-color: #c9ddd0; }
+  .badge-warn { background: #f6ecdc; color: #83540c; border-color: #ead6b4; }
+  .badge-bad { background: #f6dad8; color: #8f2c27; border-color: #ecc3bf; }
+  .dot { width: 0.375rem; height: 0.375rem; border-radius: 9999px; background: currentColor; }
+}
+
+@layer utilities {
+  /* Small uppercase labels read as technical insignia. */
+  .uppercase {
+    font-family: var(--font-label);
+    font-weight: 500;
+    letter-spacing: 0.05em;
+  }
+
+  /* Headlines whisper: Inter 300 with tight tracking. */
+  .font-display {
+    font-weight: 300;
+    letter-spacing: -0.02em;
+    line-height: 1.2;
+  }
 }

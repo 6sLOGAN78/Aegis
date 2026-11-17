@@ -2,20 +2,9 @@ import React, { useEffect, useRef, useState } from 'react';
 import '../utils/monaco-setup';
 import Editor, { type BeforeMount } from '@monaco-editor/react';
 import { useQuery, useMutation, useQueryClient } from '@tanstack/react-query';
-import {
-  CheckCircle2,
-  XCircle,
-  AlertTriangle,
-  RotateCcw,
-  Upload,
-  PlayCircle,
-  Clock,
-  User,
-  Tag,
-  Loader2,
-  X,
-  FileCode,
-} from 'lucide-react';
+import { CheckCircle2, XCircle, AlertTriangle, RotateCcw, Upload, PlayCircle, Loader2, X } from 'lucide-react';
+import { PageHeader } from './PageHeader';
+import { Dialog } from './Dialog';
 import { apiClient, ApiError } from '../api/client';
 import { newIdempotencyKey } from '../api/idempotency';
 import { registerRegoLanguage, regoLanguageId } from '../utils/rego-monarch';
@@ -112,15 +101,46 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   const versions = versionsData?.versions || [];
   const latestVersion = versions.length > 0 ? versions[0].snapshot_version : 1;
   // Live latest ETag (display only; refreshed by the 10s refetch).
-  const currentETag = `"${latestVersion}"`;
   // ETag sent on publish: the version this edit session is based on. Falls back
   // to the live value only before any versions have loaded.
   const editBaseVersion = baseVersion ?? latestVersion;
   const editETag = `"${editBaseVersion}"`;
   const hasNewerVersion = baseVersion !== undefined && latestVersion > baseVersion;
+  // Dirty means the editor differs from the published source it was based on.
+  const baseSource = versionsData?.versions?.find((v) => v.snapshot_version === editBaseVersion)?.source_rego;
+  const isDirty = baseSource !== undefined && regoCode !== baseSource;
 
   const handleEditorBeforeMount: BeforeMount = (monaco) => {
     registerRegoLanguage(monaco);
+    // Editor theme drawn from the console palette (index.css @theme).
+    monaco.editor.defineTheme('aegis-paper', {
+      base: 'vs',
+      inherit: true,
+      rules: [
+        { token: 'comment', foreground: '8a8786', fontStyle: 'italic' },
+        { token: 'keyword', foreground: 'b83c36' },
+        { token: 'string', foreground: '2c7149' },
+        { token: 'string.raw', foreground: '2c7149' },
+        { token: 'number', foreground: '96610f' },
+        { token: 'operator', foreground: '575555' },
+        { token: 'identifier', foreground: '181717' },
+      ],
+      colors: {
+        'editor.background': '#ffffff',
+        'editor.foreground': '#181717',
+        'editorLineNumber.foreground': '#b3b0af',
+        'editorLineNumber.activeForeground': '#181717',
+        'editor.lineHighlightBackground': '#f7f5f4',
+        'editor.lineHighlightBorder': '#00000000',
+        'editor.selectionBackground': '#d0484126',
+        'editorCursor.foreground': '#d04841',
+        'editorIndentGuide.background1': '#efedec',
+        'editorWidget.background': '#ffffff',
+        'editorWidget.border': '#d5d3d2',
+        'scrollbarSlider.background': '#d5d3d299',
+        'scrollbarSlider.hoverBackground': '#c4c1c0',
+      },
+    });
   };
 
   // Hydrate the editor from the latest stored policy source, once per policy ID.
@@ -288,254 +308,185 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
   });
 
   return (
-    <div className="space-y-6">
-      {/* Top Banner Notifications */}
+    <div>
+      <PageHeader
+        title="Policy"
+        description="Edit the Rego policy every gateway enforces. Publishing signs a new snapshot and streams it to all gateways."
+        meta={<span className="badge num">Live v{latestVersion}</span>}
+        actions={
+          <>
+            <button
+              onClick={() => validateMutation.mutate()}
+              disabled={validateMutation.isPending}
+              className="btn btn-secondary"
+            >
+              {validateMutation.isPending ? <Loader2 className="animate-spin" /> : <PlayCircle />}
+              Validate
+            </button>
+            <button
+              onClick={() => {
+                setPublishError(null);
+                setIsPublishModalOpen(true);
+              }}
+              disabled={!isSecOps}
+              title={!isSecOps ? 'Publishing needs the sec-ops role' : undefined}
+              className="btn btn-primary"
+            >
+              <Upload />
+              Publish
+            </button>
+          </>
+        }
+      />
+
       {successBanner && (
-        <div className="flex items-center justify-between bg-emerald-500/10 border border-emerald-500/30 px-4 py-3 rounded-xl text-emerald-300 text-sm">
-          <div className="flex items-center space-x-2">
-            <CheckCircle2 className="w-5 h-5 shrink-0 text-emerald-400" />
-            <span>{successBanner}</span>
-          </div>
-          <button
-            onClick={() => setSuccessBanner(null)}
-            className="text-emerald-400 hover:text-emerald-200"
-            aria-label="Dismiss banner"
-          >
-            <X className="w-4 h-4" />
+        <div role="status" className="mb-4 panel px-4 py-3 flex items-center justify-between gap-3 text-sm">
+          <span className="flex items-center gap-2 text-slate-100">
+            <CheckCircle2 className="w-4 h-4 shrink-0 text-emerald-500" />
+            {successBanner}
+          </span>
+          <button onClick={() => setSuccessBanner(null)} aria-label="Dismiss message" className="btn btn-ghost btn-sm">
+            <X />
           </button>
         </div>
       )}
 
-      {/* Header and Action Controls */}
-      <div className="flex flex-col lg:flex-row lg:items-center justify-between gap-4 bg-slate-900 border border-slate-800 p-6 rounded-xl">
-        <div className="space-y-1">
-          <div className="flex items-center space-x-3">
-            <FileCode className="w-6 h-6 text-cyan-400" />
-            <h1 className="text-xl font-semibold text-slate-100">Policy Studio & Rego Authoring</h1>
-          </div>
-          <p className="text-sm text-slate-400">
-            Author declarative authorization rules with real-time in-browser syntax highlighting and monotonic fleet publication
-          </p>
+      {hasNewerVersion && (
+        <div role="alert" className="mb-4 panel px-4 py-3 flex flex-wrap items-center justify-between gap-3 text-sm">
+          <span className="flex items-center gap-2 text-amber-300">
+            <AlertTriangle className="w-4 h-4 shrink-0" />
+            v{latestVersion} was published after you started editing v{baseVersion}. Load it before publishing.
+          </span>
+          <button onClick={handleReloadLatest} className="btn btn-secondary btn-sm">Load v{latestVersion}</button>
         </div>
+      )}
 
-        <div className="flex items-center space-x-3">
-          <button
-            onClick={() => validateMutation.mutate()}
-            disabled={validateMutation.isPending}
-            className="flex items-center space-x-2 bg-slate-800 hover:bg-slate-700 text-slate-200 px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-          >
-            {validateMutation.isPending ? (
-              <Loader2 className="w-4 h-4 animate-spin text-cyan-400" />
-            ) : (
-              <PlayCircle className="w-4 h-4 text-cyan-400" />
-            )}
-            <span>Validate Rego Syntax</span>
-          </button>
-
-          <button
-            onClick={() => {
-              setPublishError(null);
-              setIsPublishModalOpen(true);
-            }}
-            disabled={!isSecOps}
-            title={!isSecOps ? 'Publishing snapshots requires sec-ops role' : undefined}
-            className="flex items-center space-x-2 bg-cyan-600 hover:bg-cyan-500 text-white px-4 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-40 disabled:cursor-not-allowed"
-          >
-            <Upload className="w-4 h-4" />
-            <span>Publish Policy Snapshot</span>
-          </button>
-        </div>
-      </div>
-
-      {/* Main Split Authoring Workspace */}
-      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
-        {/* Left Pane (60% ~ 7 cols): Monaco Rego Editor */}
-        <div className="lg:col-span-7 flex flex-col bg-slate-900 border border-slate-800 rounded-xl overflow-hidden shadow-lg">
-          <div className="flex items-center justify-between px-4 py-3 bg-slate-950/80 border-b border-slate-800">
-            <div className="flex items-center space-x-3">
-              <span className="text-xs font-semibold uppercase tracking-wider text-slate-400">
-                Rego v1 Policy Source
-              </span>
-              <span className="text-xs font-mono text-cyan-400 bg-cyan-500/10 px-2 py-0.5 rounded border border-cyan-500/20">
-                package aegis.authz
-              </span>
-            </div>
-            <div className="text-xs text-slate-500 font-mono">Monarch Tokenizer Active</div>
+      <div className="grid grid-cols-1 lg:grid-cols-12 gap-6 items-start">
+        <section className="lg:col-span-8 panel overflow-hidden">
+          <div className="panel-head">
+            <h2 className="panel-title">
+              authz.rego <span className="ml-2 font-mono text-xs font-normal text-slate-500">package aegis.authz</span>
+            </h2>
+            {isDirty && <span className="badge badge-warn">Unpublished changes</span>}
           </div>
-
-          <div className="h-[560px] w-full">
+          <div className="h-[600px] w-full">
             <Editor
               height="100%"
               defaultLanguage={regoLanguageId}
               language={regoLanguageId}
-              theme="vs-dark"
+              theme="aegis-paper"
               value={regoCode}
               onChange={handleCodeChange}
               beforeMount={handleEditorBeforeMount}
               options={{
                 fontSize: 13,
+                lineHeight: 20,
                 fontFamily: '"JetBrains Mono", "SF Mono", Menlo, Monaco, Consolas, monospace',
                 tabSize: 2,
-                minimap: { enabled: true },
+                minimap: { enabled: false },
                 lineNumbers: 'on',
+                renderLineHighlight: 'line',
                 scrollBeyondLastLine: false,
                 wordWrap: 'on',
                 automaticLayout: true,
                 padding: { top: 12, bottom: 12 },
+                overviewRulerLanes: 0,
+                hideCursorInOverviewRuler: true,
               }}
             />
           </div>
-        </div>
+        </section>
 
-        {/* Right Pane (40% ~ 5 cols): Validation Status & Version History */}
-        <div className="lg:col-span-5 flex flex-col space-y-6">
-          {/* Policy Metadata Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-            <h3 className="text-base font-semibold text-slate-100 flex items-center space-x-2">
-              <Tag className="w-4 h-4 text-cyan-400" />
-              <span>Policy Metadata</span>
-            </h3>
+        <div className="lg:col-span-4 space-y-6">
+          <section className="panel" aria-live="polite">
+            <div className="panel-head">
+              <h2 className="panel-title">Validation</h2>
+              {validationResult?.valid && <span className="badge badge-ok"><CheckCircle2 className="w-3 h-3" />Compiles</span>}
+              {validationResult && !validationResult.valid && (
+                <span className="badge badge-bad"><XCircle className="w-3 h-3" />Fails</span>
+              )}
+            </div>
+            <div className="p-5 text-sm">
+              {validationError ? (
+                <pre className="font-mono text-xs whitespace-pre-wrap text-rose-600 overflow-x-auto">{validationError}</pre>
+              ) : validationResult?.valid ? (
+                <p className="text-slate-300">
+                  {validationResult.test_count > 0
+                    ? `${validationResult.passed_count} of ${validationResult.test_count} policy tests passed.`
+                    : 'The policy compiles. It has no embedded tests.'}
+                </p>
+              ) : (
+                <p className="text-slate-500">Validate to compile the draft and run its policy tests.</p>
+              )}
+            </div>
+          </section>
 
-            <div className="grid grid-cols-2 gap-4 text-sm">
+          <section className="panel">
+            <div className="panel-head">
+              <h2 className="panel-title">Details</h2>
+            </div>
+            <div className="p-5 space-y-4">
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Policy Identifier</label>
+                <label htmlFor="policy-id" className="label">Policy ID</label>
                 <input
+                  id="policy-id"
                   type="text"
                   value={policyId}
                   onChange={(e) => setPolicyId(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 font-mono focus:ring-1 focus:ring-cyan-500 focus:outline-none"
+                  className="field font-mono text-[13px]"
                 />
               </div>
               <div>
-                <label className="block text-xs font-semibold text-slate-400 mb-1">Policy Name</label>
+                <label htmlFor="policy-name" className="label">Name</label>
                 <input
+                  id="policy-name"
                   type="text"
                   value={policyName}
                   onChange={(e) => setPolicyName(e.target.value)}
-                  className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3 py-1.5 text-xs text-slate-200 focus:ring-1 focus:ring-cyan-500 focus:outline-none"
+                  className="field"
                 />
               </div>
+              <p className="text-xs text-slate-500 num">Editing from v{editBaseVersion}.</p>
             </div>
+          </section>
 
-            <div className="flex items-center justify-between pt-2 border-t border-slate-800/80 text-xs text-slate-400">
-              <span>Active Snapshot ETag:</span>
-              <span className="font-mono text-cyan-400">{currentETag}</span>
+          <section className="panel overflow-hidden">
+            <div className="panel-head">
+              <h2 className="panel-title">
+                History <span className="ml-1 text-slate-500 num">{versions.length}</span>
+              </h2>
             </div>
-            <div className="flex items-center justify-between text-xs text-slate-400">
-              <span>Editing Based On ETag:</span>
-              <span className="font-mono text-slate-200">{editETag}</span>
-            </div>
-            {hasNewerVersion && (
-              <div className="flex items-center justify-between gap-2 bg-amber-500/10 border border-amber-500/30 px-3 py-2 rounded-lg text-amber-300 text-xs">
-                <span className="flex items-center space-x-1">
-                  <AlertTriangle className="w-3.5 h-3.5 shrink-0" />
-                  <span>
-                    Newer version v{latestVersion} was published after your edit began (base v{baseVersion}).
-                    Publishing will be rejected until you reload.
-                  </span>
-                </span>
-                <button
-                  onClick={handleReloadLatest}
-                  className="shrink-0 text-amber-200 hover:text-white underline"
-                >
-                  Load latest
-                </button>
-              </div>
-            )}
-          </div>
-
-          {/* Syntax Validation Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-100">Rego AST Validation</h3>
-              {validationResult?.valid && (
-                <span className="flex items-center space-x-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-emerald-500/10 text-emerald-400 border border-emerald-500/30">
-                  <CheckCircle2 className="w-3.5 h-3.5" />
-                  <span>Valid Rego AST</span>
-                </span>
-              )}
-              {validationResult && !validationResult.valid && (
-                <span className="flex items-center space-x-1 text-xs font-semibold px-2 py-0.5 rounded-full bg-rose-500/10 text-rose-400 border border-rose-500/30">
-                  <XCircle className="w-3.5 h-3.5" />
-                  <span>Compilation Failed</span>
-                </span>
-              )}
-            </div>
-
-            {validationError ? (
-              <div className="bg-rose-500/10 border border-rose-500/30 p-3 rounded-lg text-rose-300 text-xs space-y-1">
-                <div className="font-semibold flex items-center space-x-1.5">
-                  <AlertTriangle className="w-4 h-4 text-rose-400 shrink-0" />
-                  <span>Syntax / Compilation Error Details</span>
-                </div>
-                <pre className="font-mono whitespace-pre-wrap text-[11px] mt-1 text-rose-200 overflow-x-auto">
-                  {validationError}
-                </pre>
-              </div>
-            ) : validationResult?.valid ? (
-              <div className="bg-emerald-500/10 border border-emerald-500/20 p-3 rounded-lg text-emerald-300 text-xs space-y-1">
-                <div className="font-semibold flex items-center space-x-1.5">
-                  <CheckCircle2 className="w-4 h-4 text-emerald-400" />
-                  <span>In-Memory OPA AST Checks Passed</span>
-                </div>
-                <p className="text-[11px] text-emerald-200/80">
-                  {validationResult.test_count > 0
-                    ? `Passed ${validationResult.passed_count} of ${validationResult.test_count} embedded unit tests.`
-                    : 'Rego AST compiled cleanly with Rego v1 grammar specifications.'}
-                </p>
-              </div>
-            ) : (
-              <div className="text-xs text-slate-400 py-3 text-center border border-dashed border-slate-800 rounded-lg">
-                Click "Validate Rego Syntax" to compile candidate AST and execute embedded policy tests.
-              </div>
-            )}
-          </div>
-
-          {/* Historical Snapshot Versions Card */}
-          <div className="bg-slate-900 border border-slate-800 rounded-xl p-5 space-y-4 flex-1">
-            <div className="flex items-center justify-between">
-              <h3 className="text-base font-semibold text-slate-100 flex items-center space-x-2">
-                <Clock className="w-4 h-4 text-cyan-400" />
-                <span>Published Versions Log</span>
-              </h3>
-              <span className="text-xs font-mono text-slate-400">
-                {versions.length} published
-              </span>
-            </div>
-
             {isLoadingVersions ? (
-              <div className="flex justify-center py-8">
-                <Loader2 className="w-6 h-6 animate-spin text-cyan-400" />
+              <div className="divide-y divide-mist" aria-busy="true" aria-label="Loading versions">
+                {[1, 2].map((n) => (
+                  <div key={n} className="px-5 h-14 flex items-center animate-pulse">
+                    <div className="h-3.5 w-40 bg-linen rounded" />
+                  </div>
+                ))}
               </div>
             ) : versions.length === 0 ? (
-              <div className="text-center py-6 border border-dashed border-slate-800 rounded-lg text-slate-500 text-xs">
-                No Historical Versions Logged. Validate the Rego syntax and publish the initial version.
-              </div>
+              <p className="px-5 py-8 text-sm text-slate-500 text-center">Nothing published yet.</p>
             ) : (
-              <div className="space-y-2.5 max-h-60 overflow-y-auto pr-1">
+              <ol className="divide-y divide-mist max-h-72 overflow-y-auto">
                 {versions.map((ver) => (
-                  <div
-                    key={ver.version_id}
-                    className="flex items-center justify-between p-3 bg-slate-950 border border-slate-800 rounded-lg hover:border-slate-700 transition"
-                  >
-                    <div className="space-y-1">
-                      <div className="flex items-center space-x-2">
-                        <span className="text-xs font-mono font-semibold px-2 py-0.5 rounded bg-cyan-500/10 text-cyan-400 border border-cyan-500/20">
-                          v{ver.snapshot_version}
-                        </span>
-                        <span className="text-xs text-slate-300 font-medium truncate max-w-[120px]">
-                          {ver.policy_id}
-                        </span>
+                  <li key={ver.version_id} className="flex items-center justify-between gap-3 px-5 py-3">
+                    <div className="min-w-0">
+                      <div className="flex items-center gap-2 text-sm">
+                        <span className="font-medium text-slate-100 num">v{ver.snapshot_version}</span>
+                        {ver.snapshot_version === latestVersion && <span className="badge badge-ok">Live</span>}
                       </div>
-                      <div className="flex items-center space-x-3 text-[11px] text-slate-400">
-                        <span className="flex items-center space-x-1">
-                          <User className="w-3 h-3 text-slate-500" />
-                          <span>{ver.published_by || 'sec-ops'}</span>
-                        </span>
-                        <span>{new Date(ver.published_at).toLocaleTimeString()}</span>
-                      </div>
+                      <p className="mt-0.5 text-xs text-slate-500 truncate">
+                        {ver.published_by || 'sec-ops'} ·{' '}
+                        <time dateTime={ver.published_at} className="num">
+                          {new Date(ver.published_at).toLocaleString(undefined, {
+                            month: 'short',
+                            day: 'numeric',
+                            hour: '2-digit',
+                            minute: '2-digit',
+                          })}
+                        </time>
+                      </p>
                     </div>
-
                     {isSecOps && ver.snapshot_version < latestVersion && (
                       <button
                         onClick={() => {
@@ -544,185 +495,83 @@ export const PolicyStudio: React.FC<PolicyStudioProps> = ({
                           setRollbackError(null);
                           setIsRollbackModalOpen(true);
                         }}
-                        className="flex items-center space-x-1 text-xs text-rose-400 hover:text-rose-300 bg-rose-500/10 hover:bg-rose-500/20 px-2.5 py-1 rounded border border-rose-500/30 transition"
+                        aria-label={`Roll back to v${ver.snapshot_version}`}
+                        className="btn btn-secondary btn-sm"
                       >
-                        <RotateCcw className="w-3 h-3" />
-                        <span>Rollback</span>
+                        <RotateCcw />
+                        Roll back
                       </button>
                     )}
-                  </div>
+                  </li>
                 ))}
-              </div>
+              </ol>
             )}
-          </div>
+          </section>
         </div>
       </div>
 
-      {/* Monotonic Publish Confirmation Modal */}
       {isPublishModalOpen && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-          <div className="w-full max-w-lg bg-slate-900 border border-slate-800 rounded-xl p-6 shadow-2xl space-y-6">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-100">
-                  Monotonic Snapshot Publication
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Enforces forward-only monotonic progression ($N \to N+1$) across connected gateway replicas
-                </p>
-              </div>
-              <button
-                onClick={() => setIsPublishModalOpen(false)}
-                className="text-slate-400 hover:text-slate-200"
-                aria-label="Close modal window"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            {/* Version Progression Badge */}
-            <div className="flex items-center justify-between bg-slate-950 p-4 rounded-xl border border-slate-800 font-mono text-sm">
-              <div className="flex flex-col">
-                <span className="text-[10px] uppercase font-semibold text-slate-500 tracking-wider">
-                  Current Version
-                </span>
-                <span className="text-base text-slate-300 font-bold">v{editBaseVersion}</span>
-              </div>
-              <div className="text-cyan-400 font-bold text-lg">→</div>
-              <div className="flex flex-col text-right">
-                <span className="text-[10px] uppercase font-semibold text-cyan-400 tracking-wider">
-                  Next Monotonic Version
-                </span>
-                <span className="text-base text-cyan-300 font-bold">v{editBaseVersion + 1}</span>
-              </div>
-            </div>
-
-            <div className="text-xs text-slate-400 space-y-2">
-              <div className="flex justify-between">
-                <span>Optimistic Concurrency ETag:</span>
-                <span className="font-mono text-slate-200">{editETag}</span>
-              </div>
-              <p className="text-slate-500 text-[11px]">
-                Upon confirmation, this configuration is digitally signed with the control plane Ed25519 key and broadcast to all gateway replicas over gRPC snapshot streams.
-              </p>
-            </div>
-
-            {publishError && (
-              <div className="bg-rose-500/10 border border-rose-500/30 p-3 rounded-lg text-rose-300 text-xs">
-                {publishError}
-              </div>
-            )}
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Publication Intent / Comment (Optional)
-              </label>
-              <input
-                type="text"
-                value={publishComment}
-                onChange={(e) => setPublishComment(e.target.value)}
-                placeholder="e.g. Add strict route check for orders API"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-cyan-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setIsPublishModalOpen(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-slate-200"
-              >
-                Dismiss
-              </button>
-              <button
-                onClick={() => publishMutation.mutate()}
-                disabled={publishMutation.isPending}
-                className="flex items-center space-x-2 bg-cyan-600 hover:bg-cyan-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-              >
-                {publishMutation.isPending ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Broadcasting Snapshot...</span>
-                  </>
-                ) : (
-                  <span>Publish Policy Snapshot</span>
-                )}
-              </button>
-            </div>
+        <Dialog title="Publish policy" onClose={() => setIsPublishModalOpen(false)}>
+          <p className="text-sm text-slate-400">
+            Publishes <strong className="font-medium text-slate-100 num">v{editBaseVersion + 1}</strong>, replacing
+            v{editBaseVersion} on every gateway. The snapshot is signed with the control-plane key before it is sent.
+          </p>
+          {publishError && (
+            <p role="alert" className="mt-4 text-sm text-rose-600">{publishError}</p>
+          )}
+          <div className="mt-5">
+            <label htmlFor="publish-comment" className="label">
+              Change note <span className="font-normal text-slate-500">(optional)</span>
+            </label>
+            <input
+              id="publish-comment"
+              type="text"
+              value={publishComment}
+              onChange={(e) => setPublishComment(e.target.value)}
+              placeholder="Require GET for the orders read rule"
+              className="field"
+            />
           </div>
-        </div>
+          <div className="mt-6 flex justify-end gap-2">
+            <button onClick={() => setIsPublishModalOpen(false)} className="btn btn-ghost">Cancel</button>
+            <button onClick={() => publishMutation.mutate()} disabled={publishMutation.isPending} className="btn btn-primary">
+              {publishMutation.isPending && <Loader2 className="animate-spin" />}
+              {publishMutation.isPending ? 'Publishing…' : `Publish v${editBaseVersion + 1}`}
+            </button>
+          </div>
+        </Dialog>
       )}
 
-      {/* Monotonic Rollback Confirmation Modal */}
       {isRollbackModalOpen && selectedRollbackVersion && (
-        <div className="fixed inset-0 z-50 flex items-center justify-center bg-black/80 backdrop-blur-md p-4">
-          <div className="w-full max-w-lg bg-slate-900 border border-rose-500/40 rounded-xl p-6 shadow-2xl space-y-6">
-            <div className="flex justify-between items-start">
-              <div>
-                <h3 className="text-lg font-semibold text-slate-100 flex items-center space-x-2 text-rose-400">
-                  <AlertTriangle className="w-5 h-5 shrink-0" />
-                  <span>Monotonic Policy Rollback Confirmation</span>
-                </h3>
-                <p className="text-xs text-slate-400 mt-1">
-                  Revert to historical configuration from Snapshot v{selectedRollbackVersion.snapshot_version}
-                </p>
-              </div>
-              <button
-                onClick={() => setIsRollbackModalOpen(false)}
-                className="text-slate-400 hover:text-slate-200"
-                aria-label="Close modal window"
-              >
-                <X className="w-5 h-5" />
-              </button>
-            </div>
-
-            <div className="bg-rose-500/10 border border-rose-500/30 p-3 rounded-lg text-rose-300 text-xs">
-              <span className="font-semibold">Invariant 9 Monotonicity Guard:</span> To ensure replicas never reject decreasing versions, this action will NOT decrement the version number. Historical configuration will be signed and published as monotonic version{' '}
-              <span className="font-mono font-bold text-rose-200">v{(rollbackBaseVersion ?? latestVersion) + 1}</span>.
-            </div>
-
-            {rollbackError && (
-              <div className="bg-rose-500/10 border border-rose-500/30 p-3 rounded-lg text-rose-300 text-xs">
-                {rollbackError}
-              </div>
-            )}
-
-            <div>
-              <label className="block text-xs font-semibold text-slate-300 uppercase tracking-wider mb-1.5">
-                Rollback Justification
-              </label>
-              <input
-                type="text"
-                value={rollbackComment}
-                onChange={(e) => setRollbackComment(e.target.value)}
-                placeholder="e.g. Incident response: bad role definition"
-                className="w-full bg-slate-950 border border-slate-800 rounded-lg px-3.5 py-2 text-sm text-slate-100 focus:ring-2 focus:ring-rose-500 focus:outline-none"
-              />
-            </div>
-
-            <div className="flex justify-end space-x-3 pt-2">
-              <button
-                onClick={() => setIsRollbackModalOpen(false)}
-                className="px-4 py-2 text-sm font-medium text-slate-400 hover:text-slate-200"
-              >
-                Keep Active Policy
-              </button>
-              <button
-                onClick={() => rollbackMutation.mutate()}
-                disabled={rollbackMutation.isPending}
-                className="flex items-center space-x-2 bg-rose-600 hover:bg-rose-500 text-white px-5 py-2 rounded-lg text-sm font-semibold transition disabled:opacity-50"
-              >
-                {rollbackMutation.isPending ? (
-                  <>
-                    <Loader2 className="w-4 h-4 animate-spin" />
-                    <span>Rolling Back...</span>
-                  </>
-                ) : (
-                  <span>Execute Version Rollback</span>
-                )}
-              </button>
-            </div>
+        <Dialog
+          title={`Roll back to v${selectedRollbackVersion.snapshot_version}`}
+          onClose={() => setIsRollbackModalOpen(false)}
+        >
+          <p className="text-sm text-slate-400">
+            The v{selectedRollbackVersion.snapshot_version} policy is republished as{' '}
+            <strong className="font-medium text-slate-100 num">v{(rollbackBaseVersion ?? latestVersion) + 1}</strong>.
+            Version numbers only move forward, so gateways never see a lower version.
+          </p>
+          {rollbackError && <p role="alert" className="mt-4 text-sm text-rose-600">{rollbackError}</p>}
+          <div className="mt-5">
+            <label htmlFor="rollback-comment" className="label">Reason</label>
+            <input
+              id="rollback-comment"
+              type="text"
+              value={rollbackComment}
+              onChange={(e) => setRollbackComment(e.target.value)}
+              placeholder="v3 denied finance users on payments"
+              className="field"
+            />
           </div>
-        </div>
+          <div className="mt-6 flex justify-end gap-2">
+            <button onClick={() => setIsRollbackModalOpen(false)} className="btn btn-ghost">Cancel</button>
+            <button onClick={() => rollbackMutation.mutate()} disabled={rollbackMutation.isPending} className="btn btn-danger">
+              {rollbackMutation.isPending && <Loader2 className="animate-spin" />}
+              {rollbackMutation.isPending ? 'Rolling back…' : 'Roll back'}
+            </button>
+          </div>
+        </Dialog>
       )}
     </div>
   );
