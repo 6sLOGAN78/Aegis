@@ -212,6 +212,12 @@ func wrapOutboundBody(pr *httputil.ProxyRequest) {
 // MaxBytesReader; an over-limit body yields *http.MaxBytesError, which the
 // ErrorHandler maps to 413 so oversize chunked bodies never surface as 2xx.
 func modifyResponseEnforceLimit(resp *http.Response) error {
+	// Protocol upgrades are never proxied: a 101 would turn the connection
+	// into a raw tunnel that later requests cross without policy checks.
+	// ReverseProxy runs ModifyResponse before it hijacks for an upgrade.
+	if resp.StatusCode == http.StatusSwitchingProtocols {
+		return errUpgradeRefused
+	}
 	if resp.Request == nil {
 		return nil
 	}
@@ -248,6 +254,8 @@ func modifyResponseEnforceLimit(resp *http.Response) error {
 var bodyDrainTimeout = 5 * time.Second
 
 var errBodyDrainTimeout = errors.New("proxy: timed out draining request body")
+
+var errUpgradeRefused = errors.New("proxy: upstream protocol upgrade refused")
 
 // writeDrainTimeout maps errBodyDrainTimeout to 408 problem+json.
 // It also expires the connection's read deadline so the blocked drain read
