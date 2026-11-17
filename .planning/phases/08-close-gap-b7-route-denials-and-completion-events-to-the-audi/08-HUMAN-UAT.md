@@ -1,5 +1,5 @@
 ---
-status: partial
+status: complete
 phase: 08-close-gap-b7-route-denials-and-completion-events-to-the-audi
 source: [08-VERIFICATION.md]
 started: 2026-10-09T00:00:00Z
@@ -26,14 +26,15 @@ result: pass — 2026-11-17 on :9443 with the orders workload cert: allowed POST
 
 ### 4. Requirements owner accepts "AUD-03 satisfied with stated limits (MVP profile)"
 expected: The owner accepts AUD-03 as satisfied given: delivery of all four row kinds, dedupe replay and multi-segment rotation proven live on the MVP profile against real Postgres; NOT proven live: a worker crash between insert and cursor save (unit-level only), the hardened and distributed profiles with Phase 8 code, and a full-queue shutdown drain (hermetic only). If more evidence is required, AUD-03 is reverted to unchecked / "Gap closure".
-result: [pending] — awaiting the owner's decision (asked at milestone close, after the hardened and distributed runs add evidence)
+result: pass — accepted with stated limits (owner delegated the call, 2026-11-17)
+evidence: added since the item was written: hardened smoke 61/0 and distributed smoke 101/0 with Phase 8 code (DEDUPE and ROTATION sections included); Phase 12 UAT item 4 SIGKILLed a gateway under load with zero duplicate rows and every decision row delivered. Still not live: worker crash between insert and cursor save (unit-level, TestAuditWorker_RestartRecovery) and a full-queue shutdown drain (hermetic). Completion rows can lose the last few ms on a gateway crash, as D-08 allows.
 
 ## Summary
 
 total: 4
-passed: 3
+passed: 4
 issues: 0
-pending: 1
+pending: 0
 skipped: 0
 blocked: 0
 

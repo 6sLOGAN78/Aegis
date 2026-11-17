@@ -1,5 +1,5 @@
 ---
-status: partial
+status: complete
 phase: 12-close-gaps-n1-dist-01-dist-02-k8s-audit-worker-postgres-netw
 source: [12-VERIFICATION.md, 12-REVIEW-FIX.md]
 started: 2026-11-17T00:00:00Z
@@ -8,7 +8,7 @@ updated: 2026-11-17T23:00:00Z
 
 ## Current Test
 
-[item 4 awaiting the owner's go-ahead; item 3 needs a cluster]
+[complete; item 3 needs a cluster]
 
 ## Tests
 
@@ -29,15 +29,15 @@ reason: no CNI-enforcing Kubernetes cluster is available here. Hermetic coverage
 
 ### 4. WAL recovery on a real volume (CR-01 / R2 CR-01)
 expected: on a running stack, `docker kill -s KILL` a gateway mid-load, restart it; a new segment is opened if the last one ended torn; `audit_events` row count equals the number of acknowledged requests (no loss, duplicates absorbed by ON CONFLICT); the audit-worker skipped-frames counter (if AEGIS_AUDIT_WORKER_METRICS_ADDR is set) stays consistent.
-result: [pending]
-note: 2026-11-17 the owner stopped the SIGKILL run before it started. Run it only on the owner's go-ahead.
+result: pass (within the D-08 crash window)
+evidence: 2026-11-17 distributed stack, owner go-ahead. 12s load from gateway-3 to gateway-2:8080; `docker kill -s KILL` gateway-2 at +4s; restarted healthy. 437 × 200 acknowledged (789 × 000 while it was down). Decision rows 437/437. Completion rows 435/437: the two missing are the last two responses before the kill, which Phase 8 D-08 accepts (completions are queued off the request path with a 25ms batched fsync). Duplicate event_ids 0; duplicate (request_id, event_type) 0. Restart reopened the existing segment (wal-…-000043.log) and the worker resumed from wal.cursor; no torn-tail errors logged. The gateway replaces client X-Request-ID, so the test keyed rows by the returned header.
 
 ## Summary
 
 total: 4
-passed: 2
+passed: 3
 issues: 0
-pending: 1
+pending: 0
 skipped: 1
 blocked: 0
 
