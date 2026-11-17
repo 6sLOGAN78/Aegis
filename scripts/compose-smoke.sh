@@ -55,7 +55,9 @@
 #      AEGIS_KEYS_DIR (default deployments/keys) must be the same directory the stack was started with
 #        (compose mounts ${AEGIS_KEYS_DIR:-../keys}); the KEYROT sections rewrite files in it.
 #      Compose variables read at stack start (not by this script): AEGIS_SPOOL_SEGMENT_BYTES
-#        (default 16777216) and AEGIS_AUDIT_SUPPRESS_WINDOW (default 60s).
+#        (default 16777216) and AEGIS_AUDIT_SUPPRESS_WINDOW (default 60s). Only the mvp
+#        profile exposes them (T-08-42); on hardened and distributed leave
+#        SMOKE_SUPPRESS_WINDOW_SECS at 60 and SMOKE_ROTATION_REQUESTS at 0.
 # Credentials, session ids and CSRF tokens are never printed.
 set -euo pipefail
 

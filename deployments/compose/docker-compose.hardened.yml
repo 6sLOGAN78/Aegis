@@ -104,8 +104,6 @@ services:
       - AEGIS_CONTROL_PLANE_GRPC_ADDR=control-plane:9090
       - AEGIS_REDIS_ADDR=redis:6379
       - AEGIS_SPOOL_DIR=/var/log/aegis/wal
-      - AEGIS_SPOOL_SEGMENT_BYTES=${AEGIS_SPOOL_SEGMENT_BYTES:-16777216}
-      - AEGIS_AUDIT_SUPPRESS_WINDOW=${AEGIS_AUDIT_SUPPRESS_WINDOW:-60s}
       - AEGIS_TLS_CERT_PATH=/certs/gateway-server.crt
       - AEGIS_TLS_KEY_PATH=/certs/gateway-server.key
       - AEGIS_CLIENT_CERT_PATH=/certs/gateway-client.crt
