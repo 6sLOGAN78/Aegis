@@ -42,6 +42,42 @@
 
 ---
 
+## Milestone: v1.0 (re-completion) — gap closure, phases 7–13
+
+**Shipped:** 2026-11-18
+**Phases:** 14 total (7 added after the first close) | **Plans:** 85
+
+### What Was Built
+- Compose profiles aligned with the real binaries (Ph 7), and denials and completions routed to the durable spool (Ph 8).
+- jti revocation and SPIFFE quarantine keys (Ph 9), dashboard and control-plane publishing flows (Ph 10), and key rotation, DR reconstruct and an mTLS-bound gRPC stream (Ph 11).
+- Two-phase drain, metric callers and latency histogram, and WAL worker hardening (Ph 12). K8s DB Secret, sidecar drain and pruning, and runbooks checked by tests (Ph 13).
+- Quick task 261117-rvo: the 1 MiB body limit is actually enforced, the drain timeout is bounded, and upstream 101 upgrades are refused.
+
+### What Worked
+- Re-auditing with an integration checker after every gap batch: each round found real wiring breaks that phase-level verification had passed (N1, N2).
+- Red-first manifest tests: `tests/manifests` now guards NetworkPolicy peers, DB Secret refs, drain budgets, pruning and runbook names.
+- Live UAT on real Docker stacks caught what hermetic tests could not, including the GW-01 body limit, simulator snapshot_version, and the compose knob passthrough.
+
+### What Was Inefficient
+- The first close (2026-10-07) claimed 38/38 on unit evidence; four re-audits and seven phases followed.
+- Disk pressure on the dev machine blocked live runs for a day.
+- A session fix (7d72f65) broke T-08-42 and was caught only by the next full hermetic run. Running the full suite before committing would have caught it.
+
+### Patterns Established
+- Every Phase N review is followed by a fix report and red-first tests per finding.
+- Gaps that need a live Kubernetes cluster are recorded as skipped with D-19 and carried as one v2 todo, not left pending.
+
+### Key Lessons
+1. "Wired in production" means a caller from `main()` *and* the deployment config, such as env, Secret refs and NetworkPolicy. K8s gaps hid in YAML, not Go.
+2. Compose and Kubernetes drift. Each env var compose sets for a service should have a K8s counterpart, or a test that explains why not (CR-01: `AEGIS_PRUNE_ARCHIVED`).
+3. Docs are code: runbooks named metrics that never existed until a test checked them.
+
+### Cost Observations
+- Model mix: orchestration on Opus; planner, checker, executors and verifiers on Sonnet.
+- Notable: small gap phases (2 plans) ran in about an hour end to end, including review and verification.
+
+---
+
 ## Cross-Milestone Trends
 
 ### Process Evolution
@@ -49,6 +85,7 @@
 | Milestone | Sessions | Phases | Key Change |
 |---|---|---|---|
 | v1.0 | 7 | 7 | Established zero-trust architecture, contract-first design, in-memory OPA, and complete automated verification suites |
+| v1.0 (re-completion) | many | +7 (7–13) | Integration re-audits, live UAT on real stacks, red-first manifest and doc tests |
 
 ### Cumulative Quality
 
