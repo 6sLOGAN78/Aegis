@@ -38,8 +38,18 @@ file, never on the command line.
 | `aegis-gateway-cp-clients` | Secret | gateway per-pod control-plane client cert (ordinals 0..2) |
 | `aegis-control-plane-tls` | Secret | control plane gRPC server cert |
 | `aegis-control-plane-signing-key` | Secret | control plane snapshot signing key |
-| `aegis-db-credentials` | Secret | control plane and audit-worker sidecar (`AEGIS_DB_USER`, `AEGIS_DB_PASSWORD`) |
+| `aegis-db-credentials` | Secret | Postgres, control plane and audit-worker sidecar (`AEGIS_DB_USER`, `AEGIS_DB_PASSWORD`) |
 | `aegis-backend-{orders,payments,admin}-tls` | Secret (aegis-apps) | one per backend (`tls.crt`, `tls.key`) |
+
+## Database credentials (single Secret)
+
+Postgres, the control plane and the gateway audit-worker all read credentials from the same Secret,
+`aegis-db-credentials` (keys `AEGIS_DB_USER`, `AEGIS_DB_PASSWORD`). Postgres maps them to
+`POSTGRES_USER` / `POSTGRES_PASSWORD` via `secretKeyRef`; no password is committed in any manifest.
+
+Caveat: the official Postgres image applies `POSTGRES_USER` / `POSTGRES_PASSWORD` only on first
+initialisation of an empty `PGDATA`. Changing `AEGIS_DB_PASSWORD` on an existing PVC therefore requires
+`ALTER ROLE` inside Postgres (then updating the Secret) or starting from a fresh volume.
 
 ## JWT key rotation
 

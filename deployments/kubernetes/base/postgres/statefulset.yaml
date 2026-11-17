@@ -37,9 +37,15 @@ spec:
             - name: POSTGRES_DB
               value: aegis
             - name: POSTGRES_USER
-              value: aegis
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-db-credentials
+                  key: AEGIS_DB_USER
             - name: POSTGRES_PASSWORD
-              value: aegis-secret-pw
+              valueFrom:
+                secretKeyRef:
+                  name: aegis-db-credentials
+                  key: AEGIS_DB_PASSWORD
             - name: PGDATA
               value: /var/lib/postgresql/data/pgdata
           ports:

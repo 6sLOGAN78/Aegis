@@ -122,6 +122,8 @@ kubectl -n "$NS" create secret generic aegis-control-plane-signing-key \
   --from-file=snapshot-current.key="$KEYS/snapshot-current.key" --dry-run=client -o yaml | kubectl apply -f -
 
 # --- Secret: database credentials (control plane and audit-worker sidecar) ---
+# Postgres reads this same Secret; note it only applies on first init of an empty PGDATA
+# (existing PVC: ALTER ROLE inside Postgres or a fresh volume).
 # The password never appears in any argv (ps, /proc/<pid>/cmdline, exec
 # audit logs): it is written with the printf builtin into a 0600 file in a
 # 0700 temp dir and passed with --from-file, then removed on exit.
