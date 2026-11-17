@@ -29,10 +29,13 @@ Default-deny, fail-closed authorization and workload authentication where invali
 - [x] Production hardening manifests (K8s PSS Restricted), zero-downtime key rotation drills, DR restore verification, and SRE runbooks — *Validated in Phase 6*
 - [x] Production wiring of key rotation and DR: gateway hot-reloads JWT/snapshot keysets from mounted dirs (no restart); quarantines and jti revocations are durable in Postgres, restored to Redis before readiness, with fail-closed `SECURITY_STATE_MISSING` while the marker is absent — *Validated in Phase 11 (REV-03, AUTH-01, CTRL-02, CTRL-03, CTRL-05; live compose + browser UAT)*
 - [x] Authenticated gateway↔control-plane gRPC stream: mTLS with client-cert verification, GatewayId bound to the cert SPIFFE `/gw/<id>`, non-gateway certs denied on every RPC — *Validated in Phase 11 (closes AR-01 / CR-02)*
+- [x] Two-phase drain behind a load balancer, metric callers and latency histogram with no PII labels — *Validated in Phase 12 (DIST-01, DIST-02; live HAProxy drain 2026-11-17)*
+- [x] Audit delivery survives a gateway SIGKILL with no duplicates; completion rows lose at most the last few ms (D-08) — *Validated live 2026-11-17 (AUD-03 accepted with stated limits)*
+- [x] Kubernetes manifests: one DB Secret for Postgres and its clients, audit sidecar drains and prunes the WAL, runbooks name real objects — *Validated statically in Phase 13 (live K8s deferred, D-19)*
 
 ### Active
 
-*(All Milestone v1.0 core requirements validated; ready for milestone completion and v2 roadmap scoping)*
+*(None. v1.0 shipped 2026-11-18. v2 requirements are defined by `/gsd:new-milestone`.)*
 
 ### Out of Scope
 
@@ -48,6 +51,18 @@ Default-deny, fail-closed authorization and workload authentication where invali
 - Stack: Go (`net/http`, `httputil.ReverseProxy`, gRPC/Protobuf), embedded OPA/Rego, React/TypeScript (Vite), PostgreSQL 16+, Redis 7+, Prometheus, OpenTelemetry, Docker Compose, Kubernetes.
 - Threat model: Default-deny across external boundary and internal network. Attackers can send arbitrary requests, spoof headers, replay stolen tokens until revoked, compromise an individual demo service, or interrupt dependencies. Privileged trust boundaries include gateway hosts, signing keys, and PKI admins.
 - Delivery profiles: MVP (vertical slice) → Hardened local (mTLS, bypass prevention, control plane, audit spool) → Distributed (3 replicas, LB, convergence, benchmarks) → Production target (OIDC, Kubernetes, HA).
+
+## Current State
+
+**v1.0 shipped 2026-11-18** (re-completed after gap-closure phases 07–13). 38/38 v1 requirements are satisfied; the final audit status is `tech_debt` with no blockers. About 44.8k LOC Go and 2.7k LOC TypeScript. All three compose profiles (mvp, hardened, distributed) pass their live smoke runs. Kubernetes manifests are proven only by static tests: no live cluster run yet.
+
+## Next Milestone Goals
+
+Candidates for v2, from the deferred list in STATE.md and `.planning/todos/pending`:
+- Live Kubernetes UAT, with the audit worker as a native sidecar (k8s-live-uat-and-sidecar-drain)
+- Postgres TLS in cluster; multi-replica quarantine race; distributed dedupe flake; gateway body read timeout
+- Previously deferred v2 scope: external OIDC (ID-01), SPIRE attestation (PKI-01), K8S-01, risk scoring (RISK-01), egress proxy (EGRS-01)
+- Audit and observability debt: error codes for 408/413/502 paths, error_code in the dashboard, shipped Prometheus and alert rules
 
 ## Constraints
 
@@ -69,6 +84,9 @@ Default-deny, fail-closed authorization and workload authentication where invali
 | Redis for rate limiting and revocation only (not policy truth) | Retains high-speed shared counters while keeping authoritative policy versioning in PostgreSQL snapshots | Validated in Phase 3 & 6 |
 | Pod Security Standards Restricted for Gateway and Control Plane | Enforces least-privilege container execution in Kubernetes environments | Validated in Phase 6 |
 | Dynamic multi-key rotation with overlap window | Enables zero-downtime rotation for JWT, Ed25519, and mTLS CA keys under live traffic | Validated in Phase 6 |
+| Completion audit rows written off the request path (D-08) | A response must never wait on a completion fsync; a crash may lose the last few ms | Validated live (2/437 lost on SIGKILL, decisions 437/437) |
+| Audit worker as a sidecar in the gateway pod with a preStop sleep | Shares the PVC-backed WAL; a native sidecar would need K8s >= 1.29 | Accepted for v1; native sidecar is a v2 todo |
+| Demo-only audit knobs exist only in the mvp compose profile (T-08-42) | Keeps test values out of hardened and distributed | Enforced by TestGatewayAuditKnobsDefaultSafe |
 
 ## Evolution
 
@@ -88,4 +106,4 @@ This document evolves at phase transitions and milestone boundaries.
 4. Update Context with current state
 
 ---
-*Last updated: 2026-10-12 after Phase 11 completion (last v1.0 phase; live Kubernetes bring-up still pending in 11-HUMAN-UAT.md)*
+*Last updated: 2026-11-18 at v1.0 milestone completion*

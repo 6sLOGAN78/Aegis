@@ -2,10 +2,10 @@
 gsd_state_version: 1.0
 milestone: v1.0
 milestone_name: milestone
-status: verifying
-stopped_at: Phase 13 complete; milestone v1.0 ready to complete
-last_updated: "2026-11-18T00:00:00.000Z"
-last_activity: 2026-11-18 -- Phase 13 executed, reviewed and verified (live K8s skipped, D-19)
+status: Awaiting next milestone
+stopped_at: Phase 11 context gathered
+last_updated: "2026-11-17T19:22:15.282Z"
+last_activity: 2026-11-17 — Milestone v1.0 completed and archived
 progress:
   total_phases: 14
   completed_phases: 14
@@ -25,10 +25,10 @@ See: .planning/PROJECT.md (updated 2026-10-06)
 
 ## Current Position
 
-Phase: 13 (Close gap N2) — COMPLETE
-Plan: 2 of 2
-Status: All phases complete; ready for /gsd:complete-milestone v1.0
-Last activity: 2026-11-16 -- Phase 12 execution started
+Phase: Milestone v1.0 complete
+Plan: —
+Status: Awaiting next milestone
+Last activity: 2026-11-17 — Milestone v1.0 completed and archived
 
 ## Performance Metrics
 
@@ -144,6 +144,18 @@ Items acknowledged and carried forward from previous milestone close:
 | Infrastructure | Kubernetes NetworkPolicies (K8S-01) | Deferred to Phase 6 / v2 | 2026-10-06 |
 | Security | Deterministic Risk Scoring (RISK-01) | Deferred to v2 | 2026-10-06 |
 | Egress | Forward Egress Proxy (EGRS-01) | Deferred to v2 | 2026-10-06 |
+| quick_task | 261117-rvo GW-01 body limit | complete (SUMMARY status complete; scanner reports missing) | 2026-11-18 |
+| todo | distributed-dedupe-flake | pending, v2 | 2026-11-18 |
+| todo | gateway-body-read-timeout | pending, v2 | 2026-11-18 |
+| todo | k8s-live-uat-and-sidecar-drain | pending, v2 | 2026-11-18 |
+| todo | multi-replica-quarantine-race | pending, v2 | 2026-11-18 |
+| todo | postgres-tls-in-cluster | pending, v2 | 2026-11-18 |
+| uat_gap | 11-HUMAN-UAT live Kubernetes bring-up | skipped, D-19 | 2026-11-18 |
+| verification_gap | 08-VERIFICATION | human_needed; 08-HUMAN-UAT 4/4 pass | 2026-11-18 |
+| verification_gap | 09-VERIFICATION | human_needed; live hardened/distributed smokes 2026-11-17 | 2026-11-18 |
+| verification_gap | 11-VERIFICATION | human_needed; live K8s only (D-19) | 2026-11-18 |
+| verification_gap | 12-VERIFICATION | human_needed; 12-HUMAN-UAT 3 pass, K8s skipped | 2026-11-18 |
+| verification_gap | 13-VERIFICATION | human_needed; live K8s only (D-19) | 2026-11-18 |
 
 ## Session Continuity
 
@@ -153,4 +165,4 @@ Resume file: .planning/phases/11-close-gap-b8-wire-key-rotation-and-dr-quarantin
 
 ## Operator Next Steps
 
-- Add gap-closure phases (7+) from .planning/v1.0-MILESTONE-AUDIT.md, then re-run /gsd-audit-milestone v1
+- Start the next milestone with /gsd-new-milestone
