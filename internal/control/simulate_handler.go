@@ -34,6 +34,13 @@ func (s *APIServer) HandleSimulatePolicy(w http.ResponseWriter, r *http.Request)
 		}
 	}
 
+	var activeVersion int64
+	if s.distServer != nil {
+		if active := s.distServer.GetActiveSnapshotInternal(); active != nil {
+			activeVersion = active.Version
+		}
+	}
+
 	if regoSource == "" && s.distServer != nil {
 		active := s.distServer.GetActiveSnapshotInternal()
 		if active != nil {
@@ -49,6 +56,17 @@ func (s *APIServer) HandleSimulatePolicy(w http.ResponseWriter, r *http.Request)
 
 	if regoSource == "" {
 		regoSource = "package aegis.authz\n\ndefault decision := {\"allow\": false, \"reason_code\": \"DENIED_DEFAULT\"}\n"
+	}
+
+	// The gateway always sends snapshot_version (policy.Input). The shipped
+	// policy's decision object references it, so without it the rule is
+	// undefined and every simulation reads as DENIED_DEFAULT. Fill it in the
+	// way the gateway would when the operator's input leaves it out.
+	if req.InputContext == nil {
+		req.InputContext = map[string]interface{}{}
+	}
+	if _, ok := req.InputContext["snapshot_version"]; !ok {
+		req.InputContext["snapshot_version"] = activeVersion
 	}
 
 	start := time.Now()
