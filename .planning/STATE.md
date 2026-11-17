@@ -120,7 +120,13 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 3 (2026-11-16). Phase 12 executed (6/6 plans, 2 review-fix rounds, all hermetic tests green); verification human_needed — live items in 12-HUMAN-UAT.md, blocked on Docker disk headroom. 3 todos in .planning/todos/pending.
+See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 3 (2026-11-16). Phase 12 executed (6/6 plans); verification human_needed — live items in 12-HUMAN-UAT.md (disk freed 2026-11-17, live runs in progress). 4 todos in .planning/todos/pending (gateway-body-read-timeout added 2026-11-17).
+
+### Quick Tasks Completed
+
+| Date | Slug | Summary | Commits |
+|------|------|---------|---------|
+| 2026-11-17 | 261117-rvo | GW-01: 1 MiB body limit enforced (413 on Content-Length and chunked); post-reply drain bounded (408) and reaches the real conn; upstream 101 upgrades refused | 054fe69, 03491f5, 46d6629, d7116f1 |
 
 ### Blockers/Concerns
 

@@ -63,6 +63,7 @@ result: pass (updated mechanics) — since Phase 8 completion/denial records go 
 ### 13. Oversized Request Rejected
 expected: A request with a body over 1 MiB (`head -c 2000000 /dev/zero | curl -i -X POST http://localhost:8080/api/payments -H "Authorization: Bearer $FINANCE_TOKEN" --data-binary @-`) is rejected with HTTP 413 and is not forwarded. A request with more than 16 KiB of headers is rejected with HTTP 431.
 result: issue — 16 KiB+ headers → 431 (pass), but bodies over 1 MiB are NOT rejected: 1,048,577 and 2,000,000-byte POST /api/payments with a finance token both returned 200 from the payments backend. MaxBytesReader only trips if the upstream reads past the limit; the mock backend replies first, so the oversized request is forwarded.
+re-test (2026-11-17, after quick task 261117-rvo): pass — 2,000,000-byte bodies get 413 problem+json with Content-Length and chunked; normal requests 200.
 
 ### 14. Login Throttling
 expected: Sending more than 20 login requests within a minute from one machine (`for i in $(seq 1 25); do curl -s -o /dev/null -w "%{http_code}\n" -X POST http://localhost:8085/login -H 'Content-Type: application/json' -d '{"role":"developer"}'; done`) starts returning HTTP 429 after roughly the 20th.
@@ -75,8 +76,8 @@ result: pass — `make test-security`: 24 tests, 0 failures (race on).
 ## Summary
 
 total: 15
-passed: 14
-issues: 1
+passed: 15
+issues: 0
 pending: 0
 skipped: 0
 blocked: 0
@@ -84,7 +85,9 @@ blocked: 0
 ## Gaps
 
 - truth: "A request body over 1 MiB is rejected with HTTP 413 and is not forwarded (GW-01)"
-  status: failed
+  status: resolved
+  resolved_by: "quick task 261117-rvo (054fe69, 03491f5, 46d6629, d7116f1)"
+  retest: "2026-11-17 hardened stack, rebuilt gateway: 2,000,000-byte body → 413 problem+json (body-too-large) with Content-Length and with chunked transfer; normal GET → 200."
   reason: "Live: 2,000,000-byte POST /api/payments returned 200 from the backend. http.MaxBytesReader only errors when the upstream reads past the limit; there is no Content-Length pre-check and the proxy does not map *http.MaxBytesError to 413."
   severity: major
   test: 13
