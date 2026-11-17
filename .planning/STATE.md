@@ -120,7 +120,7 @@ Recent decisions affecting current work:
 
 ### Pending Todos
 
-See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 3 (2026-11-16) — B1-B10 and CR-02 closed; open: N1, DIST-01, DIST-02 (Phase 12). 3 todos in .planning/todos/pending.
+See .planning/v1.0-MILESTONE-AUDIT.md — re-audit 3 (2026-11-16). Phase 12 executed (6/6 plans, 2 review-fix rounds, all hermetic tests green); verification human_needed — live items in 12-HUMAN-UAT.md, blocked on Docker disk headroom. 3 todos in .planning/todos/pending.
 
 ### Blockers/Concerns
 
